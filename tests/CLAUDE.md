@@ -1,7 +1,7 @@
 # tests
-Rodar (na pasta RPA): `.\.venv\Scripts\python.exe -m unittest discover -s tests` (~25 s; sem Citrix nem SRP).
+Rodar (na pasta RPA): `.\.venv\Scripts\python.exe -m unittest discover -s tests` (27 testes, ~30 s; sem Citrix nem SRP).
 - `simulador.py` — SRP falso (`SRP`: campos travados por linha, `recusar` = Tab que nao avanca, como um aviso) e `ambiente()`, que troca teclado/tela/OCR do `core` por falsos e manda logs e `aprendizado.json` para uma pasta temporaria.
 - `test_fluxo.py` — campos travados (4 combinacoes, linhas mistas, sem cabecalho), pausa por aviso (corrige+Tab, esquece o Tab, linha feita a mao, sem Continuar), leitura do aviso e conta aprendida, pausa por quantidade divergente.
 - `test_ocr.py` — OCR em celulas reais (`imagens/`, so numeros) e numa bateria sintetica; leitura de aviso desenhado. Pulados se nao houver `vendor/tesseract`.
-- `test_planilha_tela.py` — leitura/validacao da planilha, itens repetidos, bloco ciano, coluna do foco, regra da Conta pelo vao.
+- `test_planilha_tela.py` — leitura/validacao da planilha, itens repetidos, bloco ciano, coluna do foco, regra da Conta pelo vao, andamento salvo (`progresso.json`), limpeza de logs antigos.
 Ao mudar o `core`, rode a suite antes de recompilar. Nao use imagens com dados da empresa alem de numeros soltos.

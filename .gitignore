@@ -3,6 +3,9 @@ __pycache__/
 .env
 build/
 dist/
+release/
+RPA-SRP.exe
+progresso.json
 planilhas/*
 !planilhas/CLAUDE.md
 !planilhas/BASE PADRAO.xlsx

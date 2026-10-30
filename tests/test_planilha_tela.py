@@ -66,5 +66,41 @@ class Tela(unittest.TestCase):
         self.assertFalse(core.conta_editavel(custo, (656, 503, 740, 514)))
 
 
+class Progresso(unittest.TestCase):
+    def test_salva_e_so_vale_para_a_mesma_planilha(self):
+        from unittest import mock
+        arquivo = pathlib.Path(tempfile.mkdtemp()) / "progresso.json"
+        regs = [{"linha": i, "item": f"10{i}", "custo": "7300", "conta": "301", "quantidade": "1"} for i in (2, 3, 4)]
+        with mock.patch.object(core, "arquivo_progresso", lambda: arquivo):
+            self.assertEqual(core.ler_progresso(regs), (set(), None))
+            core.gravar_progresso(regs, {2, 3})
+            feitas, quando = core.ler_progresso(regs)
+            self.assertEqual(feitas, {2, 3})
+            self.assertTrue(quando)
+            outra = [dict(r) for r in regs]
+            outra[2]["quantidade"] = "9"  # mudou uma celula: o andamento nao vale
+            self.assertEqual(core.ler_progresso(outra), (set(), None))
+            core.gravar_progresso(regs, set())
+            self.assertFalse(arquivo.exists())
+
+
+class Logs(unittest.TestCase):
+    def test_apaga_so_os_antigos(self):
+        import os
+        import time
+        from unittest import mock
+        pasta = pathlib.Path(tempfile.mkdtemp())
+        (pasta / "ocr").mkdir()
+        velho, novo, recorte = pasta / "velho.log", pasta / "novo.log", pasta / "ocr" / "velho.png"
+        for arquivo in (velho, novo, recorte):
+            arquivo.write_text("x")
+        antigo = time.time() - 31 * 86400
+        os.utime(velho, (antigo, antigo))
+        os.utime(recorte, (antigo, antigo))
+        with mock.patch.object(core, "pasta_logs", lambda: pasta):
+            self.assertEqual(core.limpar_logs(30), 2)
+        self.assertEqual([p.name for p in pasta.rglob("*.*")], ["novo.log"])
+
+
 if __name__ == "__main__":
     unittest.main()

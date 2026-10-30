@@ -4,6 +4,7 @@ Sequencia por linha: Item, Tab, C/Custo, Tab, [Conta, Tab se o campo estiver edi
 A tela do Citrix e so imagem: o campo em foco e o bloco ciano; a Conta e editavel se o foco cai logo apos o C/Custo.
 """
 import ctypes
+import hashlib
 import json
 import re
 from collections import Counter
@@ -422,6 +423,55 @@ def pasta_logs():
     return pasta
 
 
+def arquivo_progresso():
+    return pasta_base() / "progresso.json"
+
+
+def assinatura_planilha(registros):
+    """Identifica a planilha pelo conteudo (nao pelo caminho): mudou uma celula, o andamento salvo nao vale mais."""
+    texto = json.dumps([[r["linha"], r["item"], r["custo"], r["conta"], r["quantidade"]] for r in registros])
+    return hashlib.sha1(texto.encode("utf-8")).hexdigest()
+
+
+def gravar_progresso(registros, linhas_ok):
+    """Guarda as linhas concluidas da planilha atual (so a ultima planilha; sem linhas, apaga o andamento)."""
+    try:
+        if linhas_ok:
+            dados = {"assinatura": assinatura_planilha(registros), "ok": sorted(linhas_ok),
+                     "em": datetime.now().strftime("%d/%m/%Y %H:%M")}
+            arquivo_progresso().write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        else:
+            arquivo_progresso().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def ler_progresso(registros):
+    """(linhas concluidas, quando) salvas para esta mesma planilha, ou (set(), None)."""
+    try:
+        dados = json.loads(arquivo_progresso().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), None
+    if dados.get("assinatura") != assinatura_planilha(registros):
+        return set(), None
+    validas = {r["linha"] for r in registros}
+    return {l for l in dados.get("ok", []) if l in validas}, dados.get("em")
+
+
+def limpar_logs(dias=30):
+    """Apaga logs (e recortes de OCR em logs/ocr) com mais de `dias` dias; devolve quantos apagou."""
+    limite = time.time() - dias * 86400
+    apagados = 0
+    for arquivo in [*pasta_logs().glob("*.log"), *pasta_logs().glob("ocr/*.png")]:
+        try:
+            if arquivo.stat().st_mtime < limite:
+                arquivo.unlink()
+                apagados += 1
+        except OSError:
+            pass
+    return apagados
+
+
 ORDEM = ("item", "custo", "conta", "quantidade")
 NOME_CAMPO = {"item": "Item", "custo": "C/Custo", "conta": "Conta", "quantidade": "Quantidade"}
 
@@ -448,6 +498,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
     `retomar` (threading.Event, opcional): se o SRP nao avancar (aviso na tela), o robo PAUSA e espera esse
     evento (botao Continuar) em vez de interromper. Sem ele, interrompe como antes. Devolve 0 se concluiu."""
     tesseract = caminho_tesseract() if conferir else None
+    limpar_logs()
     log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
     atual = None
 

@@ -11,8 +11,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar, itens_repetidos, ler_planilha, pasta_base,
-                  pasta_logs, validar)
+from core import (caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar, gravar_progresso, itens_repetidos,
+                  ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
 
@@ -462,6 +462,8 @@ class App(RaizTk):
             self._status(f"{self.concluidas} de {len(self.registros)} concluídas", "ok")
         elif nome == "erro":
             self._status(f"Interrompido na linha {linha}", "erro")
+        if (anterior == "ok") != (nome == "ok") and self.registros:  # guarda o andamento para o app reabrir dali
+            gravar_progresso(self.registros, {l for l, e in self.estados.items() if e == "ok"})
 
     def _proxima_linha(self):
         for r in self.registros:
@@ -513,6 +515,8 @@ class App(RaizTk):
         if self.concluidas and not messagebox.askokcancel(
                 "Recarregar", f"Recarregar apaga o andamento ({self.concluidas} linha(s) concluída(s)).\nContinuar?"):
             return
+        if self.registros:
+            gravar_progresso(self.registros, set())
         self.carregar(self.caminho_atual)
 
     def carregar(self, caminho):
@@ -550,6 +554,17 @@ class App(RaizTk):
             self.registros = registros
             self.barra.configure(maximum=len(registros))
             self._status("Pronta para preencher", "ok")
+            feitas, quando = ler_progresso(registros)
+            if feitas:
+                for linha in sorted(feitas):
+                    self._estado_linha(linha, "ok")
+                if len(feitas) < len(registros):
+                    self.escrever(f"Andamento salvo em {quando}: {len(feitas)} de {len(registros)} linha(s) ja concluidas nesta "
+                                  f"planilha. Use 'Continuar da linha {self._proxima_linha()}' ou 'Iniciar' para comecar do zero.")
+                    self._status(f"Andamento anterior: continuar da linha {self._proxima_linha()}", "aviso")
+                else:
+                    self.escrever(f"Esta planilha ja foi preenchida inteira em {quando}. 'Iniciar' preenche tudo de novo.")
+                    self._status("Planilha ja concluida antes", "aviso")
             repetidos = itens_repetidos(registros)
             if repetidos:
                 lista = "; ".join(f"{item} (linhas {', '.join(map(str, linhas))})" for item, linhas in list(repetidos.items())[:5])
@@ -616,6 +631,7 @@ class App(RaizTk):
         if not retomar:
             self.concluidas = 0
             self.estados = {}
+            gravar_progresso(self.registros, set())
             for iid in self.iids.values():
                 self.tabela.set(iid, "status", ESTADOS["pendente"])
                 self.tabela.item(iid, tags=("pendente",))
