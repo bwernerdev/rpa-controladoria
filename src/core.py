@@ -127,11 +127,11 @@ def caminho_tesseract():
     return exe if exe.exists() else None
 
 
-def preparar_ocr(imagem, escala=6):
-    """Cinza, contraste maximo, ampliacao e margem branca para o Tesseract."""
-    cinza = ImageOps.autocontrast(imagem.convert("L"), cutoff=2)
-    cinza = cinza.resize((cinza.width * escala, cinza.height * escala), Image.LANCZOS)
-    return ImageOps.expand(cinza, border=30, fill=255)
+def preparar_ocr(imagem, escala=6, limiar=160):
+    """Preto e branco (descarta a moldura clara da celula e o fundo ciano), ampliacao e margem branca para o Tesseract."""
+    pb = imagem.convert("L").point(lambda v: 0 if v < limiar else 255)
+    pb = pb.resize((pb.width * escala, pb.height * escala), Image.LANCZOS)
+    return ImageOps.expand(pb, border=30, fill=255)
 
 
 def ocr_numero(imagem, tesseract, psm=7, escala=6):
