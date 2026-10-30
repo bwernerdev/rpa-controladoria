@@ -30,18 +30,24 @@ PALETAS = {
         "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
         "ok": "#1a7f37", "ok_fundo": "#f0f7f2", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
         "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
+        "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb",
     },
     "escuro": {
         "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
         "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
         "ok": "#57c27a", "ok_fundo": "#1c2a21", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
         "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
+        "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730",
     },
 }
+TEMAS = {"auto": "Automático (igual ao Windows)", "claro": "Claro", "escuro": "Escuro"}
+FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
+           ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
+MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
 COR = dict(PALETAS["claro"])
 FONTE = "Segoe UI"
 FONTE_FORTE = "Segoe UI Semibold"
-ESTADOS = {"pendente": "Pendente", "executando": "Em andamento", "pausado": "Pausada", "ok": "Concluída", "erro": "Erro"}
+ESTADOS = {"pendente": "○  Pendente", "executando": "●  Em andamento", "pausado": "●  Pausada", "ok": "●  Concluída", "erro": "●  Erro"}
 ARQUIVO_CONFIG = pasta_base() / "config.json"
 ESCALA = 1.0  # DPI do monitor / 96; tamanhos em pixels passam por px()
 
@@ -79,6 +85,43 @@ def dpi_da_janela(janela):
         return ctypes.windll.user32.GetDpiForWindow(int(janela.wm_frame(), 16)) or 96
     except (AttributeError, OSError, ValueError):
         return 96
+
+
+def area_util():
+    """(esq, topo, dir, base) da area de trabalho do monitor principal, sem a barra de tarefas."""
+    try:
+        import ctypes.wintypes
+        ret = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(ret), 0)  # SPI_GETWORKAREA
+        return ret.left, ret.top, ret.right, ret.bottom
+    except (AttributeError, OSError):
+        return 0, 0, 1366, 728
+
+
+def tema_do_windows():
+    """'claro' ou 'escuro' conforme o modo de cor dos apps no Windows (claro se nao der para ler)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as chave:
+            return "claro" if winreg.QueryValueEx(chave, "AppsUseLightTheme")[0] else "escuro"
+    except OSError:
+        return "claro"
+
+
+def tipo_mensagem(texto):
+    """Cor da mensagem no console: 'erro', 'aviso', 'srp' ou None."""
+    if re.search(r"Interrompido|Nao iniciei|^Erro|falhou|nao encontrad", texto):
+        return "erro"
+    if ": SRP: " in texto:
+        return "srp"
+    if re.search(r"AVISO|ATENCAO|PAUSADO|Pausado|Ainda pausado|^Aviso|^F9", texto):
+        return "aviso"
+    return None
+
+
+def duracao(segundos):
+    segundos = int(segundos)
+    return f"{segundos // 3600}:{segundos // 60 % 60:02d}:{segundos % 60:02d}" if segundos >= 3600 else f"{segundos // 60:02d}:{segundos % 60:02d}"
 
 
 def ler_config():
@@ -132,15 +175,27 @@ class App(RaizTk):
         self.dpi = 96
         self._aplicar_escala(self.winfo_fpixels("1i"))
         self.config_usuario = ler_config()
-        self.tema = self.config_usuario.get("tema", "claro") if self.config_usuario.get("tema") in PALETAS else "claro"
+        self.tema_escolhido = self.config_usuario.get("tema") if self.config_usuario.get("tema") in TEMAS else "auto"
+        self.tema = tema_do_windows() if self.tema_escolhido == "auto" else self.tema_escolhido
         COR.update(PALETAS[self.tema])
         self.title(f"{NOME} v{VERSAO}")
-        self.geometry(f"{px(880)}x{px(700)}")
+        # cabe na area util do monitor (sem a barra de tarefas) mesmo a 150% ou em notebook, centralizada
+        esq, topo, dir_, base = area_util()
+        largura, altura = min(px(880), dir_ - esq - px(20)), min(px(700), base - topo - px(50))
+        self.geometry(f"{largura}x{altura}+{esq + (dir_ - esq - largura) // 2}+{topo + max((base - topo - altura) // 2 - px(15), 0)}")
         self.minsize(px(800), px(600))
         self._icone = ImageTk.PhotoImage(desenhar(64))
         self.iconphoto(True, self._icone)
         self.registros, self.iids, self.estados = [], {}, {}
         self.originais = []  # registros como estao no Excel: o andamento e salvo por eles, mesmo com contas sugeridas aceitas
+        self.trocas = {}  # linha -> conta da planilha, nas linhas em que o usuario aceitou a conta sugerida
+        self.zebra = {}  # linha -> "par"/"impar" (fundo alternado na tabela)
+        self.filtro = "todas"
+        self.console_aberto = bool(self.config_usuario.get("console_aberto", False))
+        self.execucao = None  # andamento da execucao em curso (painel, estimativa e resumo do fim)
+        self.ultima_mensagem, self.ultimo_erro, self.srp_por_linha = "", "", {}
+        self.dica = None
+        self.pulso = False
         self.caminho_atual = None
         self.historico = []
         self.resumo = None  # (linhas, com_conta, erros)
@@ -165,6 +220,7 @@ class App(RaizTk):
         self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
+        self.after(1000, self._tique)
         self.atualizacao_pendente = None
         if getattr(sys, "frozen", False):  # so no exe; rodando pelo codigo-fonte nao se atualiza
             self.after(2000, lambda: threading.Thread(
@@ -251,7 +307,7 @@ class App(RaizTk):
         estilo = ttk.Style(self)
         estilo.theme_use("clam")
         estilo.configure(".", font=fonte(10), background=COR["fundo"], foreground=COR["texto"])
-        base = dict(padding=(px(14), px(6)), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
+        base = dict(padding=(px(16), px(8)), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
                     darkcolor=COR["cartao"])
         estilo.configure("Primario.TButton", **{**base, "lightcolor": COR["destaque"], "darkcolor": COR["destaque"]},
                          font=fonte(10, forte=True), background=COR["destaque"], foreground=COR["no_destaque"],
@@ -295,15 +351,22 @@ class App(RaizTk):
                          upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
         estilo.map("TCheckbutton", background=[("active", COR["fundo"])],
                    indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
+        estilo.configure("TRadiobutton", background=COR["fundo"], foreground=COR["texto"], font=fonte(9),
+                         indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
+                         upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
+        estilo.map("TRadiobutton", background=[("active", COR["fundo"])],
+                   indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
 
     def _cartao(self, pai):
         return tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda"], highlightcolor=COR["borda"],
                         highlightthickness=1)
 
-    def _chip(self, pai):
-        """Indicador de resumo: so texto colorido (sem pilula)."""
-        rotulo = tk.Label(pai, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
-        rotulo.pack(side="left", padx=(0, 14))
+    def _link(self, pai, texto, comando, cor="destaque", bg=None):
+        """Texto clicavel (sem borda de botao)."""
+        rotulo = tk.Label(pai, text=texto, bg=bg or COR["fundo"], fg=COR[cor], font=fonte(9), cursor="hand2")
+        rotulo.bind("<Button-1>", lambda _e: comando())
+        rotulo.bind("<Enter>", lambda _e: rotulo.configure(fg=COR["destaque_hover"] if cor == "destaque" else COR["texto"]))
+        rotulo.bind("<Leave>", lambda _e: rotulo.configure(fg=COR[cor]))
         return rotulo
 
     def _montar(self):
@@ -317,65 +380,89 @@ class App(RaizTk):
         tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").pack(fill="x")
         tk.Label(titulos, text="Preenchimento de requisições do SRP a partir da planilha", bg=COR["fundo"],
                  fg=COR["suave"], font=fonte(9), anchor="w").pack(fill="x")
-        ttk.Button(lado, text="Tema claro" if self.tema == "escuro" else "Tema escuro", style="Link.TButton",
-                   command=self.alternar_tema).pack(side="right")
+        self.b_opcoes = self._link(lado, "⚙  Opções", self.abrir_opcoes, cor="suave")
+        self.b_opcoes.pack(side="right")
         self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
-        self.chip_citrix.pack(side="right", padx=(0, 10))
+        self.chip_citrix.pack(side="right", padx=(0, 16))
         tk.Frame(self, bg=COR["borda"], height=1).pack(fill="x")
 
         corpo = tk.Frame(self, bg=COR["fundo"])
         corpo.pack(fill="both", expand=True, padx=margem, pady=(14, 12))
 
+        # planilha: area grande de arrastar ate carregar; depois, cartao compacto
         self.zona = tk.Frame(corpo, bg=COR["cartao"], highlightbackground=COR["borda_forte"], highlightcolor=COR["borda_forte"],
-                             highlightthickness=1, cursor="hand2")
+                             highlightthickness=1)
         self.zona.pack(fill="x")
-        self.titulo_zona = tk.Label(self.zona, text="Arraste a planilha aqui", bg=COR["cartao"], fg=COR["texto"],
-                                    font=fonte(11, forte=True), cursor="hand2")
-        self.titulo_zona.pack(pady=(px(9), 0))
-        self.sub_zona = tk.Label(self.zona, text="ou clique para escolher o arquivo (.xlsx)", bg=COR["cartao"],
-                                 fg=COR["suave"], font=fonte(9), cursor="hand2")
-        self.sub_zona.pack(pady=(0, px(9)))
-        for parte in (self.zona, self.titulo_zona, self.sub_zona):
-            parte.bind("<Button-1>", lambda _e: self.escolher())
-            parte.bind("<Enter>", lambda _e: self.zona.configure(highlightbackground=COR["destaque"]))
-            parte.bind("<Leave>", lambda _e: self.zona.configure(highlightbackground=COR["borda_forte"]))
         if DND_FILES:
             self.zona.drop_target_register(DND_FILES)
             self.zona.dnd_bind("<<Drop>>", self._soltou)
 
-        chips = tk.Frame(corpo, bg=COR["fundo"])
-        chips.pack(fill="x", pady=(10, 8))
-        opcoes = tk.Frame(chips, bg=COR["fundo"])
-        opcoes.pack(side="right")
-        ttk.Checkbutton(opcoes, text="Conferir quantidade", variable=self.conferir).pack(side="left", padx=(0, 14))
-        tk.Label(opcoes, text="Limite", bg=COR["fundo"], fg=COR["suave"], font=fonte(9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center", font=fonte(10)).pack(side="left", padx=(6, 12))
-        tk.Label(opcoes, text="Pausa (s)", bg=COR["fundo"], fg=COR["suave"], font=fonte(9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center", font=fonte(10)).pack(side="left", padx=(6, 0))
-        self.chip_linhas, self.chip_conta, self.chip_erros = self._chip(chips), self._chip(chips), self._chip(chips)
+        # faixa de pausa e painel da execucao (aparecem so quando servem)
+        self.area_avisos = tk.Frame(corpo, bg=COR["fundo"])
+        self.area_avisos.pack(fill="x")
+        self.faixa_pausa = tk.Frame(self.area_avisos, bg=COR["aviso_fundo"], highlightbackground=COR["aviso_borda"],
+                                    highlightcolor=COR["aviso_borda"], highlightthickness=1)
+        textos = tk.Frame(self.faixa_pausa, bg=COR["aviso_fundo"])
+        textos.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(10))
+        self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"], font=fonte(11, forte=True), anchor="w")
+        self.pausa_titulo.pack(fill="x")
+        self.pausa_srp = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["texto"], font=fonte(10), anchor="w",
+                                  justify="left", wraplength=px(560))
+        self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte(9), anchor="w",
+                                        justify="left", wraplength=px(560))
+        self.pausa_instrucao.pack(fill="x", pady=(px(2), 0))
+        self.b_continuar_faixa = ttk.Button(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar)
+        self.b_continuar_faixa.pack(side="right", padx=px(14))
+
+        self.painel = self._cartao(self.area_avisos)
+        direita = tk.Frame(self.painel, bg=COR["cartao"])
+        direita.pack(side="right", padx=px(14), pady=px(10))
+        self.painel_tempo = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte(13, forte=True), anchor="e")
+        self.painel_tempo.pack(fill="x")
+        self.painel_resta = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="e")
+        self.painel_resta.pack(fill="x")
+        esquerda = tk.Frame(self.painel, bg=COR["cartao"])
+        esquerda.pack(side="left", fill="x", expand=True, padx=px(14), pady=px(10))
+        self.painel_linha = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w")
+        self.painel_linha.pack(fill="x")
+        self.painel_detalhe = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="w")
+        self.painel_detalhe.pack(fill="x")
+
+        # filtros da tabela (com a contagem de cada estado)
+        filtros = tk.Frame(corpo, bg=COR["fundo"])
+        filtros.pack(fill="x", pady=(10, 6))
+        self.botoes_filtro = {}
+        for chave, titulo, _ in FILTROS:
+            rotulo = tk.Label(filtros, text=titulo, bg=COR["fundo"], fg=COR["suave"], font=fonte(9), cursor="hand2",
+                              padx=px(10), pady=px(3))
+            rotulo.pack(side="left", padx=(0, px(4)))
+            rotulo.bind("<Button-1>", lambda _e, c=chave: self.filtrar(c))
+            self.botoes_filtro[chave] = (rotulo, titulo)
 
         rodape = tk.Frame(corpo, bg=COR["fundo"])
         rodape.pack(side="bottom", fill="x", pady=(6, 0))
-        self.b_recarregar = ttk.Button(rodape, text="Recarregar planilha", style="Link.TButton", command=self.recarregar)
-        self.b_recarregar.pack(side="left")
-        ttk.Button(rodape, text="Abrir pasta de logs", style="Link.TButton", command=lambda: os.startfile(pasta_logs())).pack(side="left")
+        self.b_console = self._link(rodape, "", self.alternar_console)
+        self.b_console.pack(side="left")
+        self.b_copiar = self._link(rodape, "Copiar", self.copiar_console)
+        self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(px(14), 0))
         tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
-        caixa_saida = self._cartao(corpo)
-        caixa_saida.pack(side="bottom", fill="x")
-        self.saida = tk.Text(caixa_saida, height=3, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
+        self.caixa_saida = self._cartao(corpo)
+        self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
                              font=fonte(9, mono=True), relief="flat", borderwidth=0, padx=px(10), pady=px(6),
                              insertbackground=COR["texto"], highlightthickness=0)
         self.saida.pack(fill="x")
+        for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
+            self.saida.tag_configure(tipo, foreground=COR[cor])
 
-        botoes = tk.Frame(corpo, bg=COR["fundo"])
-        botoes.pack(side="bottom", fill="x", pady=(12, 10))
-        self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
+        self.botoes = tk.Frame(corpo, bg=COR["fundo"])
+        self.botoes.pack(side="bottom", fill="x", pady=(12, 10))
+        self.b_iniciar = ttk.Button(self.botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
         self.b_iniciar.pack(side="left")
-        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
+        self.b_continuar = ttk.Button(self.botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
         self.b_continuar.pack(side="left", padx=(8, 0))
-        self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
+        self.b_simular = ttk.Button(self.botoes, text="Simular", style="Secundario.TButton", command=self.simular)
         self.b_simular.pack(side="left", padx=(8, 0))
-        self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_parar = ttk.Button(self.botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.b_parar.pack(side="right")
 
         progresso = tk.Frame(corpo, bg=COR["fundo"])
@@ -390,73 +477,377 @@ class App(RaizTk):
         colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
         self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
         for coluna, titulo, largura, ancora in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
-                                                   tuple(px(v) for v in (56, 120, 100, 90, 100, 130)), ("center", "w", "w", "w", "center", "w")):
+                                                   tuple(px(v) for v in (56, 120, 100, 90, 100, 140)), ("center", "w", "w", "w", "center", "w")):
             self.tabela.heading(coluna, text=titulo, anchor=ancora)
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
         rolagem = ttk.Scrollbar(cartao, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y")
         self.tabela.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        # ordem importa: tags configuradas depois tem prioridade (o fundo do estado vence o da zebra)
+        self.tabela.tag_configure("par", background=COR["zebra"])
+        self.tabela.tag_configure("impar", background=COR["cartao"])
         self.tabela.tag_configure("ok", foreground=COR["ok"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
         self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
-        self.tabela.tag_configure("pausado", foreground=COR["aviso"])
+        self.tabela.tag_configure("pausado", background=COR["aviso_fundo"], foreground=COR["aviso"])
         self.tabela.tag_configure("pendente", foreground=COR["texto"])
+        self.tabela.bind("<Motion>", self._dica_conta)
+        self.tabela.bind("<Leave>", lambda _e: self._esconder_dica())
 
-    def _repovoar(self):
-        """Redesenha o estado atual (usado ao trocar de tema)."""
-        for r in self.registros:
-            iid = self.tabela.insert("", "end", values=(r["linha"], r["item"], r["custo"], r["conta"] or "—", r["quantidade"],
-                                                         ESTADOS[self.estados.get(r["linha"], "pendente")]),
-                                     tags=(self.estados.get(r["linha"], "pendente"),))
-            self.iids[r["linha"]] = iid
-        if self.caminho_atual:
-            self.titulo_zona.configure(text=Path(self.caminho_atual).name)
-            self.sub_zona.configure(text="clique ou arraste outra planilha para trocar")
+    def _pintar_zona(self):
+        """Antes da planilha: area grande de arrastar. Depois: cartao com nome, resumo e acoes."""
+        for filho in self.zona.winfo_children():
+            filho.destroy()
+        self.b_recarregar = None
+        if not self.caminho_atual:
+            self.zona.configure(cursor="hand2", highlightbackground=COR["borda_forte"])
+            titulo = tk.Label(self.zona, text="Arraste a planilha aqui", bg=COR["cartao"], fg=COR["texto"],
+                              font=fonte(11, forte=True), cursor="hand2")
+            titulo.pack(pady=(px(16), 0))
+            sub = tk.Label(self.zona, text="ou clique para escolher o arquivo (.xlsx)", bg=COR["cartao"],
+                           fg=COR["suave"], font=fonte(9), cursor="hand2")
+            sub.pack(pady=(0, px(16)))
+            for parte in (self.zona, titulo, sub):
+                parte.bind("<Button-1>", lambda _e: self.escolher())
+                parte.bind("<Enter>", lambda _e: self.zona.configure(highlightbackground=COR["destaque"]))
+                parte.bind("<Leave>", lambda _e: self.zona.configure(highlightbackground=COR["borda_forte"]))
+            return
+        self.zona.configure(cursor="", highlightbackground=COR["borda"])
+        self.zona.unbind("<Button-1>")
+        self.zona.unbind("<Enter>")
+        self.zona.unbind("<Leave>")
+        acoes = tk.Frame(self.zona, bg=COR["cartao"])
+        acoes.pack(side="right", padx=px(14))
+        self.b_recarregar = self._link(acoes, "Recarregar", self.recarregar, bg=COR["cartao"])
+        self.b_recarregar.pack(side="right")
+        self._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, px(14)))
+        tk.Label(self.zona, text="▦", bg=COR["cartao"], fg=COR["ok"], font=fonte(20)).pack(side="left", padx=(px(14), px(8)))
+        textos = tk.Frame(self.zona, bg=COR["cartao"])
+        textos.pack(side="left", fill="x", expand=True, pady=px(8))
+        caminho = Path(self.caminho_atual)
+        tk.Label(textos, text=caminho.name, bg=COR["cartao"], fg=COR["texto"], font=fonte(10, forte=True),
+                 anchor="w").pack(fill="x")
+        linha = tk.Frame(textos, bg=COR["cartao"])
+        linha.pack(fill="x")
+        partes = []
+        try:
+            partes.append(f"salva em {time.strftime('%d/%m %H:%M', time.localtime(caminho.stat().st_mtime))}")
+        except OSError:
+            pass
         if self.resumo:
             linhas, com_conta, erros = self.resumo
-            self._pintar(self.chip_linhas, f"{linhas} linhas", "azul")
-            self._pintar(self.chip_conta, f"{com_conta} com conta", "azul")
-            self._pintar(self.chip_erros, f"{erros} erros", "vermelho" if erros else "verde")
-        else:
-            for chip, texto in ((self.chip_linhas, "0 linhas"), (self.chip_conta, "0 com conta"), (self.chip_erros, "0 erros")):
-                self._pintar(chip, texto, "neutro")
+            partes[:0] = [f"{linhas} linhas", f"{com_conta} com conta"]
+        tk.Label(linha, text="  ·  ".join(partes), bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="w").pack(side="left")
+        if self.resumo and self.resumo[2]:
+            tk.Label(linha, text=f"  ·  {self.resumo[2]} erro(s) na planilha", bg=COR["cartao"], fg=COR["erro"],
+                     font=fonte(9)).pack(side="left")
+
+    def _tags(self, linha, nome):
+        """Zebra so nas linhas sem fundo proprio: no Treeview a cor de fundo da zebra venceria a do estado."""
+        return (nome,) if nome in ("erro", "executando", "pausado") else (self.zebra.get(linha, "impar"), nome)
+
+    def _valores(self, r):
+        conta = (r["conta"] or "—") + (MARCA_TROCADA if r["linha"] in self.trocas else "")
+        return (r["linha"], r["item"], r["custo"], conta, r["quantidade"], ESTADOS[self.estados.get(r["linha"], "pendente")])
+
+    def _repovoar(self):
+        """Redesenha o estado atual (usado ao trocar de tema ou de monitor)."""
+        for indice, r in enumerate(self.registros):
+            self.zebra[r["linha"]] = "par" if indice % 2 else "impar"
+            self.iids[r["linha"]] = self.tabela.insert("", "end", values=self._valores(r),
+                                                       tags=self._tags(r["linha"], self.estados.get(r["linha"], "pendente")))
+        self._pintar_zona()
         self.barra.configure(maximum=max(len(self.registros), 1), value=self.concluidas)
         self._status(*self.status_atual)
         self._pintar_citrix()
         self.saida.configure(state="normal")
-        self.saida.insert("end", "\n".join(self.historico[-200:]) + ("\n" if self.historico else ""))
+        for texto in self.historico[-200:]:
+            self.saida.insert("end", texto + "\n", tipo_mensagem(texto) or ())
         self.saida.see("end")
         self.saida.configure(state="disabled")
+        self._mostrar_console()
+        self.filtrar(self.filtro)
+        self._mostrar_avisos()
         self._atualizar_botoes()
-
-    def _pintar(self, chip, texto, tipo):
-        cor = {"azul": COR["texto"], "verde": COR["suave"], "vermelho": COR["erro"], "neutro": COR["suave"]}[tipo]
-        chip.configure(text=texto, fg=cor)
 
     def _pintar_citrix(self):
         if self.citrix is None:
-            self.chip_citrix.configure(text="Citrix: verificando…", fg=COR["suave"])
+            self.chip_citrix.configure(text="● Procurando o Citrix…", fg=COR["destaque"] if self.pulso else COR["borda_forte"])
         elif self.citrix:
             self.chip_citrix.configure(text="● Citrix conectado", fg=COR["ok"])
         else:
-            self.chip_citrix.configure(text="● Citrix não encontrado", fg=COR["erro"])
+            self.chip_citrix.configure(text="● Citrix não encontrado, procurando…", fg=COR["erro"] if self.pulso else COR["borda_forte"])
 
-    def alternar_tema(self):
-        self.tema = "claro" if self.tema == "escuro" else "escuro"
-        COR.update(PALETAS[self.tema])
-        self.config_usuario["tema"] = self.tema
+    # ---------- tabela: filtro e dica da conta trocada ----------
+    def filtrar(self, chave):
+        self.filtro = chave
+        alvo = dict((c, estados) for c, _, estados in FILTROS)[chave]
+        posicao = 0
+        for r in self.registros:
+            iid = self.iids.get(r["linha"])
+            if not iid:
+                continue
+            if alvo is None or self.estados.get(r["linha"], "pendente") in alvo:
+                self.tabela.move(iid, "", posicao)
+                posicao += 1
+            else:
+                self.tabela.detach(iid)
+        self._contar_filtros()
+
+    def _contar_filtros(self):
+        for chave, estados in ((c, e) for c, _, e in FILTROS):
+            rotulo, titulo = self.botoes_filtro[chave]
+            total = len(self.registros) if estados is None else sum(
+                1 for r in self.registros if self.estados.get(r["linha"], "pendente") in estados)
+            ativo = chave == self.filtro
+            rotulo.configure(text=f"{titulo}  {total}", bg=COR["azul_fundo"] if ativo else COR["fundo"],
+                             fg=COR["destaque"] if ativo else (COR["erro"] if chave == "erros" and total else COR["suave"]),
+                             font=fonte(9, forte=ativo))
+
+    def _dica_conta(self, evento):
+        """Ao passar o mouse na Conta trocada, mostra a conta que estava na planilha."""
+        iid = self.tabela.identify_row(evento.y)
+        linha = next((l for l, i in self.iids.items() if i == iid), None) if iid else None
+        if not linha or linha not in self.trocas or self.tabela.identify_column(evento.x) != "#4":
+            self._esconder_dica()
+            return
+        texto = f"Na planilha: {self.trocas[linha]}. Trocada pela conta que o SRP informou como correta."
+        if self.dica and self.dica.texto == texto:
+            self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
+            return
+        self._esconder_dica()
+        self.dica = tk.Toplevel(self)
+        self.dica.texto = texto
+        self.dica.overrideredirect(True)
+        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=fonte(9), padx=px(8), pady=px(4)).pack()
+        self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
+
+    def _esconder_dica(self):
+        if self.dica:
+            self.dica.destroy()
+            self.dica = None
+
+    # ---------- console ----------
+    def alternar_console(self):
+        self.console_aberto = not self.console_aberto
+        self.config_usuario["console_aberto"] = self.console_aberto
         gravar_config(self.config_usuario)
+        self._mostrar_console()
+
+    def _mostrar_console(self):
+        if self.console_aberto:
+            self.caixa_saida.pack(side="bottom", fill="x", before=self.botoes)
+            self.b_copiar.pack(side="left", padx=(px(14), 0), after=self.b_console)
+            self.saida.see("end")
+        else:
+            self.caixa_saida.pack_forget()
+            self.b_copiar.pack_forget()
+        self.b_console.configure(text=("Detalhes ▾" if self.console_aberto else "Detalhes ▸"))
+
+    def copiar_console(self):
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(self.historico))
+        self._status("Detalhes copiados", "ok")
+
+    # ---------- opcoes ----------
+    def abrir_opcoes(self):
+        janela = tk.Toplevel(self)
+        janela.title("Opções")
+        janela.configure(bg=COR["fundo"])
+        janela.transient(self)
+        janela.resizable(False, False)
+        janela.iconphoto(False, self._icone)
+        margem = px(16)
+        corpo = tk.Frame(janela, bg=COR["fundo"])
+        corpo.pack(fill="both", padx=margem, pady=margem)
+        tk.Label(corpo, text="Preenchimento", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True), anchor="w").pack(fill="x")
+        ttk.Checkbutton(corpo, text="Conferir a quantidade na tela (OCR)", variable=self.conferir).pack(anchor="w", pady=(px(6), 0))
+        for rotulo, variavel, ajuda in (("Limite de linhas", self.limite, "0 = todas"),
+                                        ("Pausa entre teclas (s)", self.pausa, "padrão 0.25")):
+            linha = tk.Frame(corpo, bg=COR["fundo"])
+            linha.pack(fill="x", pady=(px(8), 0))
+            tk.Label(linha, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte(9), width=22, anchor="w").pack(side="left")
+            ttk.Entry(linha, textvariable=variavel, width=6, justify="center", font=fonte(10)).pack(side="left")
+            tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="left", padx=(px(8), 0))
+        tk.Label(corpo, text="Tema", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
+                 anchor="w").pack(fill="x", pady=(px(16), 0))
+        escolha = tk.StringVar(value=self.tema_escolhido)
+
+        def mudar_tema():
+            janela.destroy()  # a janela principal e refeita no tema novo
+            self.escolher_tema(escolha.get())
+        for chave, titulo in TEMAS.items():
+            ttk.Radiobutton(corpo, text=titulo, value=chave, variable=escolha, command=mudar_tema).pack(anchor="w", pady=(px(4), 0))
+        ttk.Button(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
+        janela.update_idletasks()
+        janela.geometry(f"+{self.b_opcoes.winfo_rootx() + self.b_opcoes.winfo_width() - janela.winfo_width()}"
+                        f"+{self.b_opcoes.winfo_rooty() + self.b_opcoes.winfo_height() + px(6)}")
+        janela.grab_set()
+
+    # ---------- execucao: painel, faixa de pausa e resumo ----------
+    def _mostrar_avisos(self):
+        pausa = self.ocupado and self.pausado and self.execucao
+        if pausa:
+            self.faixa_pausa.pack(fill="x", pady=(px(10), 0))
+        else:
+            self.faixa_pausa.pack_forget()
+        if self.ocupado and self.execucao and not pausa:  # na pausa a faixa ocupa o lugar do painel (sobra espaco para a tabela)
+            self.painel.pack(fill="x", pady=(px(10), 0))
+        else:
+            self.painel.pack_forget()
+        if pausa:
+            linha = self.execucao.get("linha")
+            r = next((r for r in self.registros if r["linha"] == linha), None)
+            self.pausa_titulo.configure(text=f"Pausado na linha {linha}" + (f"  ·  item {r['item']}" if r else ""))
+            srp = self.srp_por_linha.get(linha)
+            if srp:
+                self.pausa_srp.configure(text=f"SRP: “{srp}”")
+                self.pausa_srp.pack(fill="x", pady=(px(4), 0), before=self.pausa_instrucao)
+            else:
+                self.pausa_srp.pack_forget()
+            instrucao = re.sub(r"^Linha \d+: ", "", self.execucao.get("instrucao", ""))
+            self.pausa_instrucao.configure(text=instrucao[:1].upper() + instrucao[1:])
+        self._atualizar_painel()
+
+    def _atualizar_painel(self):
+        e = self.execucao
+        if not (e and self.ocupado):
+            return
+        agora = time.time()
+        pausado = e["tempo_pausado"] + (agora - e["pausado_desde"] if e["pausado_desde"] else 0)
+        decorrido = agora - e["inicio"]
+        linha = e.get("linha")
+        r = next((r for r in self.registros if r["linha"] == linha), None)
+        if r:
+            self.painel_linha.configure(text=f"Linha {linha}   ·   {e['feitas'] + 1 if e['feitas'] < e['total'] else e['total']} de {e['total']}")
+            self.painel_detalhe.configure(text=f"Item {r['item']}  ·  C/Custo {r['custo']}  ·  Conta {r['conta'] or '—'}  ·  "
+                                               f"Quantidade {r['quantidade']}")
+        else:
+            self.painel_linha.configure(text="Preparando…")
+            self.painel_detalhe.configure(text="Clique no campo Item da primeira linha livre no SRP")
+        self.painel_tempo.configure(text=duracao(decorrido))
+        faltam = e["total"] - e["feitas"]
+        if e["feitas"] >= 2 and faltam > 0:
+            resta = (decorrido - pausado) / e["feitas"] * faltam
+            texto = f"~{max(1, round(resta / 60))} min restantes" if resta >= 90 else f"~{max(5, round(resta / 5) * 5)} s restantes"
+        else:
+            texto = "calculando o tempo restante…" if faltam else "terminando…"
+        self.painel_resta.configure(text=texto + (f"  ·  {e['pausas']} pausa(s)" if e["pausas"] else ""))
+
+    def _registrar_estado_execucao(self, linha, nome, anterior):
+        e = self.execucao
+        if not e:
+            return
+        if anterior == "pausado" and nome != "pausado" and e["pausado_desde"]:
+            e["tempo_pausado"] += time.time() - e["pausado_desde"]
+            e["pausado_desde"] = None
+        if nome == "executando":
+            e["linha"] = linha
+        elif nome == "pausado":
+            e["linha"] = linha
+            e["instrucao"] = self.ultima_mensagem
+            if anterior != "pausado":
+                e["pausas"] += 1
+                e["pausado_desde"] = time.time()
+        elif nome == "ok" and anterior != "ok":
+            e["feitas"] += 1
+        elif nome == "erro":
+            e["erros"] += 1
+
+    def _resumo_final(self):
+        e, self.execucao = self.execucao, None
+        self._mostrar_avisos()
+        if not e:
+            return
+        completo = e["feitas"] >= e["total"]
+        janela = tk.Toplevel(self)
+        janela.title("Resumo")
+        janela.configure(bg=COR["fundo"])
+        janela.transient(self)
+        janela.resizable(False, False)
+        janela.iconphoto(False, self._icone)
+        margem = px(18)
+        tk.Label(janela, text="Preenchimento concluído" if completo else "Preenchimento interrompido", bg=COR["fundo"],
+                 fg=COR["ok"] if completo else COR["erro"], font=fonte(13, forte=True), anchor="w").pack(fill="x", padx=margem,
+                                                                                                       pady=(margem, 0))
+        if not completo and self.ultimo_erro:
+            tk.Label(janela, text=self.ultimo_erro, bg=COR["fundo"], fg=COR["texto"], font=fonte(9), anchor="w", justify="left",
+                     wraplength=px(440)).pack(fill="x", padx=margem, pady=(px(4), 0))
+        numeros = tk.Frame(janela, bg=COR["fundo"])
+        numeros.pack(fill="x", padx=margem, pady=(px(14), 0))
+        for valor, legenda, cor in ((f"{e['feitas']}/{e['total']}", "linhas concluídas", "texto"),
+                                    (str(e["erros"]), "com erro", "erro" if e["erros"] else "texto"),
+                                    (str(e["pausas"]), "pausas", "aviso" if e["pausas"] else "texto"),
+                                    (duracao(time.time() - e["inicio"]), "tempo total", "texto")):
+            caixa = self._cartao(numeros)
+            caixa.pack(side="left", fill="x", expand=True, padx=(0, px(8)))
+            tk.Label(caixa, text=valor, bg=COR["cartao"], fg=COR[cor], font=fonte(15, forte=True)).pack(padx=px(14), pady=(px(8), 0))
+            tk.Label(caixa, text=legenda, bg=COR["cartao"], fg=COR["suave"], font=fonte(8)).pack(padx=px(14), pady=(0, px(8)))
+        botoes = tk.Frame(janela, bg=COR["fundo"])
+        botoes.pack(fill="x", padx=margem, pady=margem)
+
+        def nova():
+            janela.destroy()
+            self.escolher()
+        ttk.Button(botoes, text="Fechar", style="Primario.TButton", command=janela.destroy).pack(side="right")
+        ttk.Button(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, px(8)))
+        ttk.Button(botoes, text="Abrir log", style="Secundario.TButton", command=self.abrir_ultimo_log).pack(side="right",
+                                                                                                       padx=(0, px(8)))
+        janela.update_idletasks()
+        janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
+                        f"+{self.winfo_rooty() + px(120)}")
+        janela.lift()
+
+    def abrir_ultimo_log(self):
+        logs = sorted((p for p in pasta_logs().glob("*.log") if p.stem[:8].isdigit()), key=lambda p: p.stat().st_mtime)
+        os.startfile(logs[-1] if logs else pasta_logs())
+
+    def escolher_tema(self, escolha):
+        self.tema_escolhido = escolha
+        self.config_usuario["tema"] = escolha
+        gravar_config(self.config_usuario)
+        self._aplicar_tema(tema_do_windows() if escolha == "auto" else escolha)
+
+    def _aplicar_tema(self, tema):
+        if tema == self.tema:
+            return
+        self.tema = tema
+        COR.update(PALETAS[tema])
         self.iids = {}
         self._construir()
+
+    def _tique(self):
+        """A cada segundo: relogio e estimativa do painel, pulso do Citrix procurado e tema automatico."""
+        try:
+            self._atualizar_painel()
+            if self.citrix is not True:
+                self.pulso = not self.pulso
+                self._pintar_citrix()
+            if self.tema_escolhido == "auto" and not self.ocupado and int(time.time()) % 5 == 0:
+                self._aplicar_tema(tema_do_windows())
+        finally:
+            self.after(1000, self._tique)
 
     # ---------- comportamento ----------
     def escrever(self, texto):
         self.historico.append(texto)
+        tipo = tipo_mensagem(texto)
         self.saida.configure(state="normal")
-        self.saida.insert("end", texto + "\n")
+        self.saida.insert("end", texto + "\n", tipo or ())
         self.saida.see("end")
         self.saida.configure(state="disabled")
+        if texto.startswith("Continuando"):
+            return
+        self.ultima_mensagem = texto
+        srp = re.match(r'Linha (\d+): SRP: "(.*)"$', texto)
+        if srp:  # texto do aviso lido em segundo plano: entra na faixa de pausa
+            self.srp_por_linha[int(srp.group(1))] = srp.group(2)
+            self._mostrar_avisos()
+        elif tipo == "erro":
+            self.ultimo_erro = texto
+            if not self.console_aberto:  # com o console fechado, o motivo aparece no status
+                self._status(texto if len(texto) <= 140 else texto[:137] + "...", "erro")
 
     def _status(self, texto, cor="suave"):
         self.status_atual = (texto, cor)
@@ -481,6 +872,7 @@ class App(RaizTk):
                     self.pausar.clear()
                     self._atualizar_botoes()
                     self._fim_da_execucao()
+                    self._resumo_final()
                     if self.atualizacao_pendente:
                         self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
                 elif isinstance(item, tuple) and item[0] in ("atualizacao", "baixando", "baixado", "falha_atualizacao"):
@@ -505,19 +897,27 @@ class App(RaizTk):
         if anterior == "ok" and nome != "ok":  # conferencia em segundo plano reprovou uma linha ja marcada como concluida
             self.concluidas = max(self.concluidas - 1, 0)
             self.barra["value"] = self.concluidas
+        self._registrar_estado_execucao(linha, nome, anterior)
         iid = self.iids.get(linha)
         if not iid:
             return
         self.tabela.set(iid, "status", ESTADOS[nome])
-        self.tabela.item(iid, tags=(nome,))
+        self.tabela.item(iid, tags=self._tags(linha, nome))
+        if self.filtro == "todas":
+            self._contar_filtros()
+        else:
+            self.filtrar(self.filtro)
         if nome in ("executando", "pausado"):
             self.pausado = nome == "pausado"
             self._atualizar_botoes()
+            self._mostrar_avisos()
+            try:
+                self.tabela.see(iid)
+            except tk.TclError:  # linha escondida pelo filtro
+                pass
         if nome == "executando":
-            self.tabela.see(iid)
             self._status(f"Preenchendo linha {linha}...", "destaque")
         elif nome == "pausado":
-            self.tabela.see(iid)
             self._status(f"Pausado na linha {linha}: corrija no SRP e clique em Continuar", "aviso")
             self.bell()
             self.deiconify()
@@ -549,7 +949,9 @@ class App(RaizTk):
         else:
             self.b_continuar.configure(state="normal" if retomar else "disabled",
                                        text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar")
-        self.b_recarregar.configure(state="normal" if self.caminho_atual and not self.ocupado else "disabled")
+        self.b_continuar_faixa.configure(text="Continuar (corrigido no SRP)")
+        if self.b_recarregar:
+            self.b_recarregar.configure(state="disabled" if self.ocupado else "normal", disabledforeground=COR["borda_forte"])
 
     def continuar(self):
         """Durante uma pausa, libera o robo; depois de uma interrupcao, retoma pelas linhas nao concluidas."""
@@ -603,7 +1005,11 @@ class App(RaizTk):
         if self.ocupado:
             return
         self.tabela.delete(*self.tabela.get_children())
+        for iid in self.iids.values():  # as escondidas pelo filtro nao aparecem em get_children
+            if self.tabela.exists(iid):
+                self.tabela.delete(iid)
         self.registros, self.iids, self.estados, self.concluidas, self.resumo = [], {}, {}, 0, None
+        self.trocas, self.zebra, self.filtro = {}, {}, "todas"
         self.caminho_atual = caminho
         self.barra.configure(value=0, maximum=1)
         try:
@@ -613,21 +1019,16 @@ class App(RaizTk):
             self._atualizar_botoes()
             return
         erros = validar(registros)
-        for r in registros:
-            self.iids[r["linha"]] = self.tabela.insert(
-                "", "end", values=(r["linha"], r["item"], r["custo"], r["conta"] or "—", r["quantidade"], ESTADOS["pendente"]),
-                tags=("pendente",))
-        self.titulo_zona.configure(text=Path(caminho).name)
-        self.sub_zona.configure(text="clique ou arraste outra planilha para trocar")
+        for indice, r in enumerate(registros):
+            self.zebra[r["linha"]] = "par" if indice % 2 else "impar"
+            self.iids[r["linha"]] = self.tabela.insert("", "end", values=self._valores(r), tags=self._tags(r["linha"], "pendente"))
         self.resumo = (len(registros), sum(1 for r in registros if r["conta"]), len(erros))
-        self._pintar(self.chip_linhas, f"{self.resumo[0]} linhas", "azul")
-        self._pintar(self.chip_conta, f"{self.resumo[1]} com conta", "azul")
-        self._pintar(self.chip_erros, f"{self.resumo[2]} erros", "vermelho" if erros else "verde")
+        self._pintar_zona()
         self.escrever(f"{len(registros)} linha(s) lidas de {caminho}")
         if erros:
             self._status("Corrija a planilha e clique em Recarregar", "erro")
             self.escrever("Planilha invalida, corrija no Excel, salve e clique em Recarregar:\n  " + "\n  ".join(erros))
-            messagebox.showerror("Planilha inválida", "\n".join(erros[:10]) + "\n\nCorrija no Excel, salve e clique em 'Recarregar planilha'.")
+            messagebox.showerror("Planilha inválida", "\n".join(erros[:10]) + "\n\nCorrija no Excel, salve e clique em 'Recarregar'.")
         elif not registros:
             self._status("Planilha vazia", "aviso")
         else:
@@ -651,13 +1052,14 @@ class App(RaizTk):
                 lista = "; ".join(f"{item} (linhas {', '.join(map(str, linhas))})" for item, linhas in list(repetidos.items())[:5])
                 self.escrever(f"AVISO: {len(repetidos)} item(ns) repetido(s): {lista}{' ...' if len(repetidos) > 5 else ''}. "
                               "O SRP soma as quantidades de itens iguais na mesma linha, entao a conferencia da quantidade "
-                              "vai interromper. Para esta planilha, desmarque 'Conferir quantidade na tela'.")
+                              "vai interromper. Para esta planilha, desmarque 'Conferir a quantidade' em Opcoes.")
                 self._status("Itens repetidos: veja o aviso", "aviso")
             suspeitas = contas_suspeitas(registros)
             if suspeitas:
                 aceitas = self._sugerir_contas(suspeitas)
                 for linha, antes, depois in aplicar_sugestoes(registros, aceitas):
-                    self.tabela.set(self.iids[linha], "conta", depois)
+                    self.trocas[linha] = antes
+                    self.tabela.set(self.iids[linha], "conta", depois + MARCA_TROCADA)
                     self.escrever(f"Linha {linha}: Conta {antes} trocada por {depois} (sugestao do SRP aceita; a planilha no "
                                   "Excel nao muda).")
                 recusadas = [s for s in suspeitas if s[0] not in aceitas]
@@ -668,6 +1070,7 @@ class App(RaizTk):
                     self._status(f"{len(recusadas)} conta(s) que o SRP ja recusou: veja o aviso", "aviso")
                 else:
                     self._status(f"Pronta para preencher ({len(aceitas)} conta(s) sugerida(s) aceita(s))", "ok")
+        self.filtrar("todas")
         self._atualizar_botoes()
 
     def _sugerir_contas(self, suspeitas):
@@ -774,13 +1177,17 @@ class App(RaizTk):
         if not messagebox.askokcancel("Iniciar", aviso):
             return
         self.parar.clear()
+        self.execucao = {"inicio": time.time(), "total": len(registros), "feitas": 0, "erros": 0, "pausas": 0,
+                         "tempo_pausado": 0.0, "pausado_desde": None, "linha": None, "instrucao": ""}
+        self.srp_por_linha, self.ultimo_erro = {}, ""
         if not retomar:
             self.concluidas = 0
             self.estados = {}
             gravar_progresso(self.originais, set())
-            for iid in self.iids.values():
+            for linha, iid in self.iids.items():
                 self.tabela.set(iid, "status", ESTADOS["pendente"])
-                self.tabela.item(iid, tags=("pendente",))
+                self.tabela.item(iid, tags=self._tags(linha, "pendente"))
+            self.filtrar(self.filtro)
         else:
             for r in registros:
                 self._estado_linha(r["linha"], "pendente")
@@ -789,6 +1196,7 @@ class App(RaizTk):
         self.ocupado = True
         self.pausar.clear()
         self._atualizar_botoes()
+        self._mostrar_avisos()
         self.soltar_atalhos, falhas = atalhos_globais({VK_F9: lambda: self.fila.put(("tecla", "pausa")),
                                                        VK_F8: lambda: self.fila.put(("tecla", "parar"))})
         if falhas:
