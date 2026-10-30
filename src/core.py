@@ -4,7 +4,9 @@ Sequencia por linha: Item, Tab, C/Custo, Tab, [Conta, Tab se o campo estiver edi
 A tela do Citrix e so imagem: o campo em foco e o bloco ciano; a Conta e editavel se o foco cai logo apos o C/Custo.
 """
 import ctypes
+import json
 import re
+from collections import Counter
 import subprocess
 import sys
 import tempfile
@@ -94,11 +96,18 @@ def descrever(r):
     return " ".join("TAB" if v is None else f"'{v}'" for _, v in passos(r))
 
 
-def _mascara_ciano(imagem):
+CORES = {
+    "ciano": (lambda v: v < 40, lambda v: v > 215, lambda v: v > 215),     # campo em foco
+    "vermelho": (lambda v: v > 215, lambda v: v < 40, lambda v: v < 40),  # icone dos avisos do SRP
+}
+
+
+def _mascara_cor(imagem, cor="ciano"):
     r, g, b = imagem.convert("RGB").split()
-    mascara = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if v < 40 else 0),
-                                                      g.point(lambda v: 255 if v > 215 else 0)),
-                                  b.point(lambda v: 255 if v > 215 else 0))
+    tr, tg, tb = CORES[cor]
+    mascara = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if tr(v) else 0),
+                                                      g.point(lambda v: 255 if tg(v) else 0)),
+                                  b.point(lambda v: 255 if tb(v) else 0))
     return mascara.filter(ImageFilter.MinFilter(5))
 
 
@@ -117,9 +126,13 @@ def _trechos(valores):
 
 
 def maior_caixa_ciano(imagem):
+    return maior_caixa_cor(imagem, "ciano")
+
+
+def maior_caixa_cor(imagem, cor):
     """Retangulo (esq, topo, dir, base) do maior bloco ciano puro; ignora pixels ciano soltos.
     Trabalha por faixas (getbbox/resize em C): ~100x mais rapido que percorrer pixel a pixel, e nao trava a janela."""
-    mascara = _mascara_ciano(imagem)
+    mascara = _mascara_cor(imagem, cor)
     caixa_total = mascara.getbbox()
     if not caixa_total:
         return None
@@ -130,7 +143,7 @@ def maior_caixa_ciano(imagem):
     melhor = None
     for y_ini, y_fim in _trechos(linhas):
         faixa = regiao.crop((0, y_ini, largura, y_fim))
-        colunas = list(faixa.resize((largura, 1), Image.BOX).getdata())
+        colunas = list(faixa.resize((largura, 1), Image.BOX).tobytes())
         for x_ini, x_fim in _trechos(colunas):
             bloco = faixa.crop((x_ini, 0, x_fim, y_fim - y_ini)).getbbox()
             if not bloco:
@@ -240,6 +253,73 @@ def palavras_tela(imagem, tesseract, escala=2):
             esq, topo, larg, alt = (int(v) // escala for v in campos[6:10])
             palavras.append((campos[11].strip(), esq, topo, larg, alt))
     return palavras
+
+
+def ler_aviso(imagem, tesseract):
+    """Le a janela de aviso do SRP (localizada pelo icone vermelho). Devolve {'texto', 'item', 'custo', 'conta_correta'}
+    ou None. O OCR erra digitos de vez em quando (8712 -> 3712): le de 5 jeitos e so aceita a conta da maioria."""
+    icone = maior_caixa_cor(imagem, "vermelho")
+    if not icone:
+        return None
+    esq, topo, dir_, base = icone
+    f = max(dir_ - esq, 10) / 19  # o icone detectado tem ~19 px a 100% de escala; a janela de aviso tem ~380 x 110
+    recorte = imagem.crop((max(0, esq - int(40 * f)), max(0, topo - int(60 * f)),
+                           min(imagem.width, esq + int(420 * f)), min(imagem.height, base + int(60 * f))))
+    r, g, b = recorte.convert("RGB").split()
+    escuro = ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 0 if v < 120 else 255).convert("RGB")
+    leituras = []
+    for img, escala in ((recorte, 2), (recorte, 4), (recorte, 5), (escuro, 4), (escuro, 5)):
+        palavras = palavras_tela(img, tesseract, escala)
+        linhas = {}
+        for texto, x, y, _, _ in palavras:
+            linhas.setdefault(round(y / 6), []).append((x, texto))
+        leituras.append(" ".join(" ".join(t for _, t in sorted(l)) for _, l in sorted(linhas.items())))
+    def votar(padrao):
+        achados = [m.group(1) for m in (re.search(padrao, t, re.I | re.S) for t in leituras) if m]
+        if not achados:
+            return None
+        valor, votos = Counter(achados).most_common(1)[0]
+        return valor if votos >= 3 else None
+    texto = max(leituras, key=len)
+    texto = re.sub(r"^.*?(?=conta|o saldo|saldo)", "", texto, count=1, flags=re.I | re.S) or texto
+    palavras_texto = texto.split()
+    com_numero = [i for i, w in enumerate(palavras_texto) if re.search(r"\d", w)]
+    if com_numero:  # depois do ultimo numero vem o botao OK lido como letras soltas
+        texto = " ".join(palavras_texto[:com_numero[-1] + 1])
+    return {"texto": texto.strip(), "item": votar(r"item\s*(\d{3,})"), "custo": votar(r"c\W?\s*custo\s*(\d{2,})"),
+            "conta_correta": votar(r"correta\s*=?\s*(\d{2,})")}
+
+
+def arquivo_aprendizado():
+    return pasta_base() / "aprendizado.json"
+
+
+def ler_aprendizado():
+    try:
+        return json.loads(arquivo_aprendizado().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"contas": {}}
+
+
+def aprender_conta(item, custo, conta):
+    """Guarda a conta que o SRP informou como correta para item + C/Custo (so um aviso futuro; nada e corrigido sozinho)."""
+    dados = ler_aprendizado()
+    dados.setdefault("contas", {})[f"{item}|{custo}"] = {"conta": conta, "em": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    try:
+        arquivo_aprendizado().write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def contas_suspeitas(registros):
+    """[(linha, item, conta_da_planilha, conta_correta)] das linhas cuja conta o SRP ja recusou para o mesmo item + C/Custo."""
+    contas = ler_aprendizado().get("contas", {})
+    suspeitas = []
+    for r in registros:
+        certo = contas.get(f"{r['item']}|{r['custo']}")
+        if certo and r["conta"] and r["conta"] != certo["conta"]:
+            suspeitas.append((r["linha"], r["item"], r["conta"], certo["conta"]))
+    return suspeitas
 
 
 def localizar_colunas(imagem, tesseract):
@@ -381,10 +461,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     pasta_ocr = pasta_logs() / "ocr"
                     pasta_ocr.mkdir(exist_ok=True)
                     recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{linha}.png")
-                    registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
-                              "A linha ja foi confirmada no SRP: corrija-a (as seguintes, ate aqui, tambem podem estar afetadas). "
-                              "Imagem lida em logs/ocr.")
-                    falha = linha
+                    falha = (linha, lidas, esperada)
             else:
                 restantes.append((linha, esperada, futuro, recorte))
         pendentes[:] = restantes
@@ -400,20 +477,72 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         elif esperar:
             time.sleep(pausa)
 
+    def esperar_continuar():
+        retomar.clear()
+        while not retomar.is_set():
+            if parar.is_set():
+                raise KeyboardInterrupt
+            time.sleep(0.2)
+
+    def tratar_divergencia(falha, no_fim=False):
+        """Quantidade lida diferente da planilha: pausa (se houver Continuar) ou interrompe. True = seguir."""
+        linha, lidas, esperada = falha
+        if retomar is None:
+            registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
+                      "A linha ja foi confirmada no SRP: corrija-a (as seguintes, ate aqui, tambem podem estar afetadas). "
+                      "Imagem lida em logs/ocr.")
+            if estado:
+                estado(linha, "erro")
+            return False
+        registrar(f"Linha {linha}: a quantidade lida na tela {lidas} difere da planilha ({esperada}). PAUSADO. "
+                  f"Confira a linha {linha} no SRP (imagem lida em logs/ocr). Se estiver certa, clique em Continuar. "
+                  "Se nao, corrija-a" + ("." if no_fim else ", volte o cursor para o Item da proxima linha livre") +
+                  " e clique em Continuar.")
+        if estado:
+            estado(linha, "pausado")
+        while True:
+            esperar_continuar()
+            if no_fim:
+                break
+            janela.set_focus()
+            aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(janela)
+            if caixa and (not colunas or qual_coluna(caixa, colunas) == "item"):
+                break
+            registrar("Ainda pausado: deixe o cursor no Item da proxima linha livre e clique em Continuar.")
+            if estado:
+                estado(linha, "pausado")
+        registrar(f"  linha {linha}: quantidade conferida pelo usuario apos a pausa", mostrar=False)
+        if estado:
+            estado(linha, "ok")
+        return True
+
     def esperar_correcao(r, campo_erro):
         """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
         'fim' quando o cursor ja esta no Item (linha completada a mao)."""
-        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo_erro]} (aviso na tela?). PAUSADO. "
+        info = None
+        if exe_tesseract:
+            try:
+                info = ler_aviso(capturar(janela), exe_tesseract)
+            except Exception as erro:
+                registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
+        if info:
+            registrar(f'Linha {r["linha"]}: SRP: "{info["texto"]}"')
+            if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
+                aprender_conta(r["item"], r["custo"], info["conta_correta"])
+                registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item {r['item']} "
+                          f"(C/Custo {r['custo']}); guardada para avisar nas proximas planilhas.")
+        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
                   f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
                   "e clique em Continuar. Se completou a linha a mao, deixe o cursor no Item da linha seguinte.")
         if estado:
             estado(r["linha"], "pausado")
         while True:
-            retomar.clear()
-            while not retomar.is_set():
-                if parar.is_set():
-                    raise KeyboardInterrupt
-                time.sleep(0.2)
+            esperar_continuar()
             janela.set_focus()
             aviso("Continuando em 2 s...")
             for _ in range(20):
@@ -469,10 +598,10 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
                 return 1
             falha = revisar()
-            if falha:
-                if estado:
-                    estado(falha, "erro")
-                return 1
+            while falha:
+                if not tratar_divergencia(falha):
+                    return 1
+                falha = revisar()
             marcar(r, "executando")
             t0 = time.time()
             inicial = proximo or caixa_foco(janela)
@@ -523,10 +652,10 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                       + (" (ajustada a mao)" if manual else ""))
             marcar(r, "ok")
         falha = revisar(aguardar=True)
-        if falha:
-            if estado:
-                estado(falha, "erro")
-            return 1
+        while falha:
+            if not tratar_divergencia(falha, no_fim=True):
+                return 1
+            falha = revisar(aguardar=True)
         registrar("Concluido.")
         return 0
     except KeyboardInterrupt:

@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (caminho_tesseract, citrix_aberto, descrever, executar, itens_repetidos, ler_planilha, pasta_base,
+from core import (caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar, itens_repetidos, ler_planilha, pasta_base,
                   pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
@@ -557,6 +557,12 @@ class App(RaizTk):
                               "O SRP soma as quantidades de itens iguais na mesma linha, entao a conferencia da quantidade "
                               "vai interromper. Para esta planilha, desmarque 'Conferir quantidade na tela'.")
                 self._status("Itens repetidos: veja o aviso", "aviso")
+            suspeitas = contas_suspeitas(registros)
+            if suspeitas:
+                for linha, item, conta, correta in suspeitas:
+                    self.escrever(f"AVISO: linha {linha}: item {item} com Conta {conta}, mas o SRP ja informou que a correta e {correta}. "
+                                  "Corrija na planilha e clique em Recarregar, ou corrija no SRP quando o robo pausar.")
+                self._status(f"{len(suspeitas)} conta(s) que o SRP ja recusou: veja o aviso", "aviso")
         self._atualizar_botoes()
 
     def selecionadas(self, retomar=False):
@@ -597,6 +603,10 @@ class App(RaizTk):
         else:
             aviso = (f"Preencher {len(registros)} linha(s) no SRP?\n\n"
                      "Depois do OK você terá 5 segundos para clicar no campo Item da primeira linha livre.")
+        suspeitas = contas_suspeitas(registros)
+        if suspeitas:
+            aviso += (f"\n\nATENÇÃO: {len(suspeitas)} linha(s) com Conta que o SRP já recusou (linhas "
+                      + ", ".join(str(l) for l, *_ in suspeitas[:8]) + "). O robô vai pausar nelas.")
         if self.conferir.get() and itens_repetidos(self.registros):
             aviso += ("\n\nATENÇÃO: a planilha tem itens repetidos e a conferência da quantidade está ligada. "
                       "Como o SRP soma itens iguais, a conferência vai interromper nesses itens.")
