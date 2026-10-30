@@ -23,20 +23,21 @@ except Exception:  # sem arrastar e soltar: o botao de escolher continua funcion
 
 PALETAS = {
     "claro": {
-        "fundo": "#f3f5f9", "cartao": "#ffffff", "borda": "#dfe4ec", "texto": "#1b2433", "suave": "#667085",
-        "topo": "#0f172a", "destaque": "#2563eb", "destaque_hover": "#1d4ed8", "ok": "#15803d", "ok_fundo": "#dcfce7",
-        "erro": "#b91c1c", "erro_fundo": "#fee2e2", "aviso": "#b45309", "aviso_fundo": "#fef3c7",
-        "azul_fundo": "#dbeafe", "cinza_fundo": "#eef1f6", "console": "#0f172a", "console_texto": "#e2e8f0",
+        "fundo": "#f6f7f9", "cartao": "#ffffff", "borda": "#e2e5ea", "borda_forte": "#c9ced6", "texto": "#1f2328",
+        "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
+        "ok": "#1a7f37", "ok_fundo": "#f0f7f2", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
+        "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
     },
     "escuro": {
-        "fundo": "#0b1220", "cartao": "#111a2e", "borda": "#223049", "texto": "#e5e9f2", "suave": "#8b97ad",
-        "topo": "#050a14", "destaque": "#3b82f6", "destaque_hover": "#2563eb", "ok": "#4ade80", "ok_fundo": "#10331f",
-        "erro": "#f87171", "erro_fundo": "#3a1517", "aviso": "#fbbf24", "aviso_fundo": "#3a2a0a",
-        "azul_fundo": "#14264a", "cinza_fundo": "#18233a", "console": "#050a14", "console_texto": "#cbd5e1",
+        "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
+        "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
+        "ok": "#57c27a", "ok_fundo": "#1c2a21", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
+        "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
     },
 }
 COR = dict(PALETAS["claro"])
 FONTE = "Segoe UI"
+FONTE_FORTE = "Segoe UI Semibold"
 ESTADOS = {"pendente": "Pendente", "executando": "Em andamento", "ok": "Concluída", "erro": "Erro"}
 ARQUIVO_CONFIG = pasta_base() / "config.json"
 
@@ -55,6 +56,36 @@ def gravar_config(dados):
         pass
 
 
+class BarraFina(tk.Frame):
+    """Barra de progresso de 4 px; aceita configure(value=, maximum=) e barra["value"] como a ttk.Progressbar."""
+
+    def __init__(self, pai):
+        super().__init__(pai, bg=COR["borda"], height=4)
+        self.preenchido = tk.Frame(self, bg=COR["destaque"], height=4)
+        self._valor, self._maximo = 0, 1
+        self._desenhar()
+
+    def _desenhar(self):
+        fracao = max(0.0, min(1.0, self._valor / self._maximo)) if self._maximo else 0.0
+        self.preenchido.place(x=0, y=0, relheight=1, relwidth=fracao)
+
+    def configure(self, cnf=None, **opcoes):
+        if "value" in opcoes:
+            self._valor = opcoes.pop("value")
+        if "maximum" in opcoes:
+            self._maximo = opcoes.pop("maximum") or 1
+        self._desenhar()
+        return super().configure(cnf, **opcoes) if (cnf or opcoes) else None
+
+    config = configure
+
+    def __setitem__(self, chave, valor):
+        self.configure(**{chave: valor})
+
+    def __getitem__(self, chave):
+        return {"value": self._valor, "maximum": self._maximo}.get(chave) if chave in ("value", "maximum") else super().__getitem__(chave)
+
+
 class App(RaizTk):
     def __init__(self):
         super().__init__()
@@ -62,8 +93,8 @@ class App(RaizTk):
         self.tema = self.config_usuario.get("tema", "claro") if self.config_usuario.get("tema") in PALETAS else "claro"
         COR.update(PALETAS[self.tema])
         self.title(f"{NOME} v{VERSAO}")
-        self.geometry("900x800")
-        self.minsize(780, 680)
+        self.geometry("880x700")
+        self.minsize(800, 600)
         self._icone = ImageTk.PhotoImage(desenhar(64))
         self.iconphoto(True, self._icone)
         self.registros, self.iids, self.estados = [], {}, {}
@@ -100,131 +131,156 @@ class App(RaizTk):
         estilo = ttk.Style(self)
         estilo.theme_use("clam")
         estilo.configure(".", font=(FONTE, 10), background=COR["fundo"], foreground=COR["texto"])
-        for nome, fundo, hover, texto in (
-            ("Primario", COR["destaque"], COR["destaque_hover"], "#ffffff"),
-            ("Perigo", "#dc2626", "#b91c1c", "#ffffff"),
-            ("Secundario", COR["cartao"], COR["cinza_fundo"], COR["texto"]),
-        ):
-            estilo.configure(f"{nome}.TButton", font=(FONTE, 10, "bold"), padding=(16, 9), background=fundo,
-                             foreground=texto, borderwidth=1, bordercolor=COR["borda"] if nome == "Secundario" else fundo,
-                             focusthickness=0, relief="flat")
-            estilo.map(f"{nome}.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", hover)],
-                       foreground=[("disabled", COR["suave"])], bordercolor=[("disabled", COR["borda"])])
-        estilo.configure("Link.TButton", font=(FONTE, 9), padding=(8, 4), background=COR["fundo"],
-                         foreground=COR["destaque"], borderwidth=0, relief="flat")
+        base = dict(padding=(14, 6), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
+                    darkcolor=COR["cartao"])
+        estilo.configure("Primario.TButton", **{**base, "lightcolor": COR["destaque"], "darkcolor": COR["destaque"]},
+                         font=(FONTE_FORTE, 10), background=COR["destaque"], foreground=COR["no_destaque"],
+                         bordercolor=COR["destaque"])
+        estilo.map("Primario.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])],
+                   foreground=[("disabled", COR["suave"])], bordercolor=[("disabled", COR["borda"]), ("active", COR["destaque_hover"])],
+                   lightcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])],
+                   darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])])
+        for nome, cor_texto in (("Secundario", COR["texto"]), ("Perigo", COR["erro"])):
+            estilo.configure(f"{nome}.TButton", **{**base, "lightcolor": COR["botao"], "darkcolor": COR["botao"]},
+                             font=(FONTE, 10), background=COR["botao"], foreground=cor_texto, bordercolor=COR["botao"])
+            estilo.map(f"{nome}.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
+                       foreground=[("disabled", COR["borda_forte"])],
+                       bordercolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
+                       lightcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
+                       darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])])
+        estilo.configure("Link.TButton", font=(FONTE, 9), padding=(6, 2), background=COR["fundo"], foreground=COR["destaque"],
+                         borderwidth=0, relief="flat", focusthickness=0)
         estilo.map("Link.TButton", foreground=[("active", COR["destaque_hover"]), ("disabled", COR["suave"])],
                    background=[("active", COR["fundo"])])
-        estilo.configure("Topo.TButton", font=(FONTE, 9), padding=(8, 4), background=COR["topo"], foreground="#93c5fd",
-                         borderwidth=0, relief="flat", focusthickness=0)
-        estilo.map("Topo.TButton", foreground=[("active", "#ffffff")], background=[("active", COR["topo"])])
-        estilo.configure("Treeview", font=(FONTE, 10), rowheight=28, background=COR["cartao"], fieldbackground=COR["cartao"],
+        estilo.configure("Treeview", font=(FONTE, 10), rowheight=26, background=COR["cartao"], fieldbackground=COR["cartao"],
                          foreground=COR["texto"], borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["cartao"],
                          bordercolor=COR["cartao"])
-        estilo.configure("Treeview.Heading", font=(FONTE, 9, "bold"), background=COR["cinza_fundo"], foreground=COR["suave"],
-                         relief="flat", padding=(8, 7))
+        estilo.configure("Treeview.Heading", font=(FONTE, 9), background=COR["cartao"], foreground=COR["suave"],
+                         relief="flat", padding=(8, 6), borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["borda"],
+                         bordercolor=COR["borda"])
+        estilo.map("Treeview.Heading", background=[("active", COR["cinza_fundo"])])
         estilo.map("Treeview", background=[("selected", COR["azul_fundo"])], foreground=[("selected", COR["texto"])])
         estilo.configure("Barra.Horizontal.TProgressbar", troughcolor=COR["borda"], background=COR["destaque"],
-                         borderwidth=0, thickness=8)
-        estilo.configure("Vertical.TScrollbar", background=COR["borda"], troughcolor=COR["cartao"], bordercolor=COR["cartao"],
-                         arrowcolor=COR["suave"], relief="flat")
-        estilo.configure("TEntry", padding=5, fieldbackground=COR["cartao"], foreground=COR["texto"], bordercolor=COR["borda"],
+                         borderwidth=0, thickness=4, lightcolor=COR["destaque"], darkcolor=COR["destaque"])
+        estilo.configure("Vertical.TScrollbar", background=COR["cinza_fundo"], troughcolor=COR["cartao"],
+                         bordercolor=COR["cartao"], arrowcolor=COR["suave"], relief="flat", lightcolor=COR["cinza_fundo"],
+                         darkcolor=COR["cinza_fundo"], gripcount=0)
+        estilo.map("Vertical.TScrollbar", background=[("active", COR["borda_forte"])])
+        estilo.configure("TEntry", padding=(6, 3), fieldbackground=COR["cartao"], foreground=COR["texto"],
+                         bordercolor=COR["borda_forte"], lightcolor=COR["cartao"], darkcolor=COR["cartao"],
                          insertcolor=COR["texto"])
-        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=(FONTE, 9))
-        estilo.map("TCheckbutton", background=[("active", COR["fundo"])])
+        estilo.map("TEntry", bordercolor=[("focus", COR["destaque"])], lightcolor=[("focus", COR["destaque"])])
+        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=(FONTE, 9),
+                         indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
+                         upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
+        estilo.map("TCheckbutton", background=[("active", COR["fundo"])],
+                   indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
 
     def _cartao(self, pai):
-        return tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda"], highlightthickness=1)
+        return tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda"], highlightcolor=COR["borda"],
+                        highlightthickness=1)
 
     def _chip(self, pai):
-        rotulo = tk.Label(pai, text="", bg=COR["cinza_fundo"], fg=COR["suave"], font=(FONTE, 9, "bold"), padx=10, pady=3)
-        rotulo.pack(side="left", padx=(0, 8))
+        """Indicador de resumo: so texto colorido (sem pilula)."""
+        rotulo = tk.Label(pai, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9))
+        rotulo.pack(side="left", padx=(0, 14))
         return rotulo
 
     def _montar(self):
-        topo = tk.Frame(self, bg=COR["topo"])
-        topo.pack(fill="x")
-        titulos = tk.Frame(topo, bg=COR["topo"])
-        titulos.pack(side="left")
-        tk.Label(titulos, text=NOME, bg=COR["topo"], fg="#ffffff", font=(FONTE, 17, "bold")).pack(anchor="w", padx=22, pady=(14, 0))
-        tk.Label(titulos, text="Preenchimento automático de requisições a partir da planilha", bg=COR["topo"],
-                 fg="#94a3b8", font=(FONTE, 10)).pack(anchor="w", padx=22, pady=(0, 14))
-        lado = tk.Frame(topo, bg=COR["topo"])
-        lado.pack(side="right", padx=22)
-        self.chip_citrix = tk.Label(lado, text="Citrix: verificando...", bg=COR["topo"], fg="#94a3b8", font=(FONTE, 9, "bold"))
-        self.chip_citrix.pack(anchor="e")
-        ttk.Button(lado, text="Tema claro" if self.tema == "escuro" else "Tema escuro", style="Topo.TButton",
-                   command=self.alternar_tema).pack(anchor="e", pady=(2, 0))
+        margem = 20
+        topo = tk.Frame(self, bg=COR["fundo"])
+        topo.pack(fill="x", padx=margem, pady=(12, 10))
+        lado = tk.Frame(topo, bg=COR["fundo"])
+        lado.pack(side="right", anchor="n")
+        titulos = tk.Frame(topo, bg=COR["fundo"])
+        titulos.pack(side="left", fill="x", expand=True)
+        tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=(FONTE_FORTE, 13), anchor="w").pack(fill="x")
+        tk.Label(titulos, text="Preenchimento de requisições do SRP a partir da planilha", bg=COR["fundo"],
+                 fg=COR["suave"], font=(FONTE, 9), anchor="w").pack(fill="x")
+        ttk.Button(lado, text="Tema claro" if self.tema == "escuro" else "Tema escuro", style="Link.TButton",
+                   command=self.alternar_tema).pack(side="right")
+        self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9))
+        self.chip_citrix.pack(side="right", padx=(0, 10))
+        tk.Frame(self, bg=COR["borda"], height=1).pack(fill="x")
 
         corpo = tk.Frame(self, bg=COR["fundo"])
-        corpo.pack(fill="both", expand=True, padx=22, pady=14)
+        corpo.pack(fill="both", expand=True, padx=margem, pady=(14, 12))
 
-        self.zona = tk.Frame(corpo, bg=COR["cartao"], highlightbackground=COR["destaque"], highlightthickness=1, cursor="hand2")
+        self.zona = tk.Frame(corpo, bg=COR["cartao"], highlightbackground=COR["borda_forte"], highlightcolor=COR["borda_forte"],
+                             highlightthickness=1, cursor="hand2")
         self.zona.pack(fill="x")
         self.titulo_zona = tk.Label(self.zona, text="Arraste a planilha aqui", bg=COR["cartao"], fg=COR["texto"],
-                                    font=(FONTE, 13, "bold"), cursor="hand2")
-        self.titulo_zona.pack(pady=(14, 0))
+                                    font=(FONTE_FORTE, 11), cursor="hand2")
+        self.titulo_zona.pack(pady=(9, 0))
         self.sub_zona = tk.Label(self.zona, text="ou clique para escolher o arquivo (.xlsx)", bg=COR["cartao"],
-                                 fg=COR["suave"], font=(FONTE, 10), cursor="hand2")
-        self.sub_zona.pack(pady=(2, 14))
+                                 fg=COR["suave"], font=(FONTE, 9), cursor="hand2")
+        self.sub_zona.pack(pady=(0, 9))
         for parte in (self.zona, self.titulo_zona, self.sub_zona):
             parte.bind("<Button-1>", lambda _e: self.escolher())
+            parte.bind("<Enter>", lambda _e: self.zona.configure(highlightbackground=COR["destaque"]))
+            parte.bind("<Leave>", lambda _e: self.zona.configure(highlightbackground=COR["borda_forte"]))
         if DND_FILES:
             self.zona.drop_target_register(DND_FILES)
             self.zona.dnd_bind("<<Drop>>", self._soltou)
 
         chips = tk.Frame(corpo, bg=COR["fundo"])
-        chips.pack(fill="x", pady=(12, 8))
-        self.chip_linhas, self.chip_conta, self.chip_erros = self._chip(chips), self._chip(chips), self._chip(chips)
-        ttk.Button(chips, text="Abrir pasta de logs", style="Link.TButton", command=lambda: os.startfile(pasta_logs())).pack(side="right")
-        self.b_recarregar = ttk.Button(chips, text="Recarregar planilha", style="Link.TButton", command=self.recarregar)
-        self.b_recarregar.pack(side="right")
-        opcoes = tk.Frame(corpo, bg=COR["fundo"])
-        opcoes.pack(fill="x", pady=(0, 8))
-        ttk.Checkbutton(opcoes, text="Conferir quantidade na tela", variable=self.conferir).pack(side="left", padx=(0, 18))
-        tk.Label(opcoes, text="Limite de linhas", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center").pack(side="left", padx=(6, 14))
+        chips.pack(fill="x", pady=(10, 8))
+        opcoes = tk.Frame(chips, bg=COR["fundo"])
+        opcoes.pack(side="right")
+        ttk.Checkbutton(opcoes, text="Conferir quantidade", variable=self.conferir).pack(side="left", padx=(0, 14))
+        tk.Label(opcoes, text="Limite", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
+        ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center").pack(side="left", padx=(6, 12))
         tk.Label(opcoes, text="Pausa (s)", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center").pack(side="left", padx=6)
+        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center").pack(side="left", padx=(6, 0))
+        self.chip_linhas, self.chip_conta, self.chip_erros = self._chip(chips), self._chip(chips), self._chip(chips)
+
+        rodape = tk.Frame(corpo, bg=COR["fundo"])
+        rodape.pack(side="bottom", fill="x", pady=(6, 0))
+        self.b_recarregar = ttk.Button(rodape, text="Recarregar planilha", style="Link.TButton", command=self.recarregar)
+        self.b_recarregar.pack(side="left")
+        ttk.Button(rodape, text="Abrir pasta de logs", style="Link.TButton", command=lambda: os.startfile(pasta_logs())).pack(side="left")
+        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 8)).pack(side="right")
+        caixa_saida = self._cartao(corpo)
+        caixa_saida.pack(side="bottom", fill="x")
+        self.saida = tk.Text(caixa_saida, height=3, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
+                             font=("Consolas", 9), relief="flat", borderwidth=0, padx=10, pady=6,
+                             insertbackground=COR["texto"], highlightthickness=0)
+        self.saida.pack(fill="x")
+
+        botoes = tk.Frame(corpo, bg=COR["fundo"])
+        botoes.pack(side="bottom", fill="x", pady=(12, 10))
+        self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
+        self.b_iniciar.pack(side="left")
+        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=lambda: self.iniciar(True))
+        self.b_continuar.pack(side="left", padx=(8, 0))
+        self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
+        self.b_simular.pack(side="left", padx=(8, 0))
+        self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_parar.pack(side="right")
+
+        progresso = tk.Frame(corpo, bg=COR["fundo"])
+        progresso.pack(side="bottom", fill="x", pady=(12, 0))
+        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9), anchor="w")
+        self.status.pack(fill="x")
+        self.barra = BarraFina(progresso)
+        self.barra.pack(fill="x", pady=(4, 0))
 
         cartao = self._cartao(corpo)
         cartao.pack(fill="both", expand=True)
         colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
-        self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=6)
-        for coluna, titulo, largura in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
-                                           (60, 130, 110, 110, 110, 140)):
-            self.tabela.heading(coluna, text=titulo)
-            self.tabela.column(coluna, width=largura, anchor="center")
+        self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
+        for coluna, titulo, largura, ancora in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
+                                                   (56, 120, 100, 90, 100, 130), ("center", "w", "w", "w", "center", "w")):
+            self.tabela.heading(coluna, text=titulo, anchor=ancora)
+            self.tabela.column(coluna, width=largura, minwidth=50, anchor=ancora, stretch=True)
         rolagem = ttk.Scrollbar(cartao, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y")
-        self.tabela.pack(side="left", fill="both", expand=True)
-        self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok"])
+        self.tabela.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        self.tabela.tag_configure("ok", foreground=COR["ok"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
-        self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["destaque"])
+        self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
         self.tabela.tag_configure("pendente", foreground=COR["texto"])
-
-        progresso = tk.Frame(corpo, bg=COR["fundo"])
-        progresso.pack(fill="x", pady=(12, 0))
-        self.barra = ttk.Progressbar(progresso, style="Barra.Horizontal.TProgressbar", mode="determinate")
-        self.barra.pack(side="left", fill="x", expand=True)
-        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 10, "bold"))
-        self.status.pack(side="left", padx=(12, 0))
-
-        botoes = tk.Frame(corpo, bg=COR["fundo"])
-        botoes.pack(fill="x", pady=12)
-        self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
-        self.b_iniciar.pack(side="left")
-        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=lambda: self.iniciar(True))
-        self.b_continuar.pack(side="left", padx=8)
-        self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
-        self.b_simular.pack(side="left")
-        self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
-        self.b_parar.pack(side="left", padx=8)
-
-        self.saida = tk.Text(corpo, height=6, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
-                             font=("Consolas", 9), relief="flat", padx=12, pady=10, insertbackground="#ffffff")
-        self.saida.pack(fill="x")
-        tk.Label(corpo, text=f"{NOME} v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 8)).pack(anchor="e", pady=(6, 0))
 
     def _repovoar(self):
         """Redesenha o estado atual (usado ao trocar de tema)."""
@@ -254,17 +310,16 @@ class App(RaizTk):
         self._atualizar_botoes()
 
     def _pintar(self, chip, texto, tipo):
-        fundo, cor = {"azul": (COR["azul_fundo"], COR["destaque"]), "verde": (COR["ok_fundo"], COR["ok"]),
-                      "vermelho": (COR["erro_fundo"], COR["erro"]), "neutro": (COR["cinza_fundo"], COR["suave"])}[tipo]
-        chip.configure(text=texto, bg=fundo, fg=cor)
+        cor = {"azul": COR["texto"], "verde": COR["suave"], "vermelho": COR["erro"], "neutro": COR["suave"]}[tipo]
+        chip.configure(text=texto, fg=cor)
 
     def _pintar_citrix(self):
         if self.citrix is None:
-            self.chip_citrix.configure(text="Citrix: verificando...", fg="#94a3b8")
+            self.chip_citrix.configure(text="Citrix: verificando…", fg=COR["suave"])
         elif self.citrix:
-            self.chip_citrix.configure(text="● Citrix conectado", fg="#4ade80")
+            self.chip_citrix.configure(text="● Citrix conectado", fg=COR["ok"])
         else:
-            self.chip_citrix.configure(text="● Citrix não encontrado - abra o Desktop Viewer", fg="#f87171")
+            self.chip_citrix.configure(text="● Citrix não encontrado", fg=COR["erro"])
 
     def alternar_tema(self):
         self.tema = "claro" if self.tema == "escuro" else "escuro"
