@@ -1,2 +1,2 @@
 # planilhas
-Planilhas Excel do dia (`.xlsx`/`.xlsm`), cabecalho na linha 1: `Item`, `C/Custo`, `Conta`, `Quantidade`. Conteudo e dados da empresa e nao vai ao git (so este arquivo). Se a planilha estiver aberta no Excel, o robo le sem problema, mas ela nao pode ser movida/apagada.
+Planilhas Excel do dia (`.xlsx`/`.xlsm`), cabecalho na linha 1: `Item`, `C/Custo`, `Conta`, `Quantidade`. Partir de `BASE PADRAO.xlsx` (so o cabecalho; Item, C/Custo e Conta formatados como texto para manter zeros a esquerda). As planilhas de trabalho nao vao ao git; so este arquivo e a base padrao. Se a planilha estiver aberta no Excel, o robo le sem problema, mas ela nao pode ser movida/apagada.

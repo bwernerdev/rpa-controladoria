@@ -1,13 +1,8 @@
 .venv/
 __pycache__/
 .env
-logs/
-saida/
 build/
 dist/
 planilhas/*
 !planilhas/CLAUDE.md
-vendor/tesseract/
-config.json
-RPA-SRP.exe
-aprendizado.json
+!planilhas/BASE PADRAO.xlsx
