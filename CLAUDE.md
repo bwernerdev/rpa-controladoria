@@ -11,7 +11,7 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 
 ## Mapa
 - `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `build/` — trabalho do PyInstaller; `RPA-SRP.exe` na raiz (ignorados). `dist/` e legado (logs antigos).
-- `assets/` — `icone.ico` (gerado). `scripts/gerar_versao.py` — gera `build/version.txt`. `vendor/` — Tesseract portatil (ignorado). `build.ps1` — gera `RPA-SRP.exe` na raiz do projeto, com icone e versao (fechar o app antes). O exe acha o Tesseract em `vendor	esseract`; para outra maquina, levar o exe + a pasta como `tesseract\` ao lado. Logs e `config.json` ficam ao lado do exe. `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
+- `assets/` — `icone.ico` (gerado). `scripts/gerar_versao.py` — gera `build/version.txt`. `vendor/` — Tesseract portatil (ignorado). `build.ps1` — gera `RPA-SRP.exe` na raiz do projeto, com icone e versao (fechar o app antes). O exe acha o Tesseract em `vendor\tesseract`; para outra maquina, levar o exe + a pasta como `tesseract\` ao lado. Logs e `config.json` ficam ao lado do exe. `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
 - Teste de exe sem matar processos: `timeout 8 ./RPA-SRP.exe` (saida 124 = seguiu rodando). Nao encerrar processos por nome (bloqueado e arriscado).
 
 ## Comandos (PowerShell, na pasta RPA)
