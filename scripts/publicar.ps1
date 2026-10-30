@@ -1,6 +1,7 @@
 # Publica a versao atual (src\versao.py) no GitHub Releases. Rode na pasta RPA, depois de .\build.ps1 e do commit.
 # Precisa: ferramentas\gh (gh portatil, fora do git) logado (ver CLAUDE.md), scripts\notas\vX.Y.Z.md e release\RPA-SRP-vX.Y.Z.zip.
-$ErrorActionPreference = "Stop"
+# Sem $ErrorActionPreference = "Stop": no PowerShell 5.1 o git/gh escrevem progresso no stderr e isso viraria erro.
+# Cada passo confere $LASTEXITCODE.
 $raiz = $PWD.Path
 $env:GH_CONFIG_DIR = "$raiz\ferramentas\gh-config"
 $gh = "$raiz\ferramentas\gh\bin\gh.exe"
