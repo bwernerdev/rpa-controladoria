@@ -20,6 +20,8 @@ Copy-Item "$raiz\vendor\tesseract" "$pacote\tesseract" -Recurse
 Copy-Item "$raiz\planilhas\BASE PADRAO.xlsx" "$pacote\planilhas"
 Copy-Item "$raiz\scripts\instalar.cmd", "$raiz\scripts\instalar.ps1" $pacote
 $zip = "$raiz\release\RPA-SRP-v$versao"
+# so a versao atual fica na pasta: as anteriores estao no GitHub Releases
+Get-ChildItem "$raiz\release\RPA-SRP-v*.zip" | Where-Object { $_.Name -ne "RPA-SRP-v$versao.zip" } | Remove-Item -Force
 # shutil em vez de Compress-Archive: o do PowerShell 5.1 grava caminhos com "\" (outros descompactadores reclamam)
 & "$raiz\.venv\Scripts\python.exe" -c "import shutil, sys; shutil.make_archive(sys.argv[1], 'zip', sys.argv[2])" $zip $pacote
 Write-Host "Pacote: $zip.zip"
