@@ -150,16 +150,20 @@ def ocr_numero(imagem, tesseract, psm=7, escala=6):
         return None
 
 
-def ler_celula(janela, tesseract, caixa, arquivo_debug=None):
-    """Le o numero dentro de `caixa` (coordenadas da janela) em varias ampliacoes. Devolve a lista de leituras.
-    Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel."""
+def ler_celula(janela, tesseract, caixa, esperada):
+    """Le o numero dentro de `caixa` (coordenadas da janela); tenta outras ampliacoes so se a primeira nao conferir.
+    Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel.
+    Devolve (confere, leituras, recorte)."""
     imagem = capturar(janela)
     esq, topo, dir_, base = caixa
     # a caixa vem encolhida ~2 px por lado (filtro de pixels soltos): margem maior, sobretudo a direita, onde o numero encosta
     recorte = imagem.crop((max(esq - 4, 0), max(topo - 4, 0), min(dir_ + 8, imagem.width), min(base + 4, imagem.height)))
-    if arquivo_debug:
-        recorte.save(arquivo_debug)
-    return [ocr_numero(recorte, tesseract, 7, escala) for escala in (4, 6, 8)]
+    leituras = []
+    for escala in (6, 4, 8):
+        leituras.append(ocr_numero(recorte, tesseract, 7, escala))
+        if leituras[-1] is not None and abs(leituras[-1] - esperada) < 1e-6:
+            return True, leituras, recorte
+    return False, leituras, recorte
 
 
 def aguardar_mudanca(janela, referencia, limite):
@@ -168,10 +172,18 @@ def aguardar_mudanca(janela, referencia, limite):
     while time.time() < prazo:
         atual = caixa_foco(janela)
         if atual and referencia and (abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
-            time.sleep(0.15)
-            return caixa_foco(janela)
-        time.sleep(0.1)
+            return atual
+        time.sleep(0.05)
     return None
+
+
+def titulo_janela_ativa():
+    """Titulo da janela em primeiro plano (chamada direta ao Windows; a busca por UIA leva ~1 s)."""
+    alvo = ctypes.windll.user32.GetForegroundWindow()
+    tamanho = ctypes.windll.user32.GetWindowTextLengthW(alvo)
+    texto = ctypes.create_unicode_buffer(tamanho + 1)
+    ctypes.windll.user32.GetWindowTextW(alvo, texto, tamanho + 1)
+    return texto.value
 
 
 def conta_editavel(antes, depois):
@@ -234,11 +246,15 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         if mostrar:
             aviso(texto)
 
-    def teclar(acao, valor):
+    def teclar(acao, valor, esperar=True):
+        """`esperar=False` em Tab seguido de aguardar_mudanca (a propria espera do foco sincroniza)."""
         if parar.is_set() or mouse_no_canto():
             raise KeyboardInterrupt
         send_keys("{TAB}" if acao == "tab" else valor.replace(",", "{,}"), pause=0.05)
-        time.sleep(pausa)
+        if acao == "digitar":
+            time.sleep(min(pausa, 0.1))
+        elif esperar:
+            time.sleep(pausa)
 
     try:
         if conferir and not tesseract:
@@ -252,15 +268,17 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 return 1
             time.sleep(0.1)
         passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
+        coluna_qtd = None  # (esq, dir, altura) da coluna Quantidade, aprendida uma vez
+        proximo = None  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
         for r in registros:
-            if janela_trecho.lower() not in Desktop(backend="uia").window(active_only=True).window_text().lower():
+            if janela_trecho.lower() not in titulo_janela_ativa().lower():
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
                 return 1
             marcar(r, "executando")
-            inicial = caixa_foco(janela)
-            teclar("digitar", r["item"]); teclar("tab", None)
+            inicial = proximo or caixa_foco(janela)
+            teclar("digitar", r["item"]); teclar("tab", None, esperar=False)
             antes = aguardar_mudanca(janela, inicial, render)
-            teclar("digitar", r["custo"]); teclar("tab", None)
+            teclar("digitar", r["custo"]); teclar("tab", None, esperar=False)
             depois = aguardar_mudanca(janela, antes, render)
             if not inicial or not antes or not depois:
                 registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado. Interrompido.")
@@ -272,29 +290,35 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     registrar(f"Linha {r['linha']}: Conta editavel mas em branco na planilha. Interrompido.")
                     return 1
                 teclar("digitar", r["conta"]); teclar("tab", None)
+                if coluna_qtd is None:
+                    foco = caixa_foco(janela)
+                    if foco:
+                        coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
+            elif coluna_qtd is None:
+                coluna_qtd = (depois[0], depois[2], depois[3] - depois[1])
             teclar("digitar", r["quantidade"].replace(".", ","))
-            caixa_qtd = None
-            if tesseract:
-                time.sleep(0.3)
-                caixa_qtd = caixa_foco(janela)
-            teclar("tab", None)
+            referencia = (coluna_qtd[0], inicial[1], coluna_qtd[1], inicial[1] + coluna_qtd[2]) if coluna_qtd else None
+            teclar("tab", None, esperar=False)
+            proximo = aguardar_mudanca(janela, referencia, render) if referencia else None
+            if not proximo and not tesseract:
+                time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo
             if tesseract:
                 # A celula so e lida depois do Tab (valor formatado, ex.: 1.0000): fica na linha acima do novo foco.
-                novo = aguardar_mudanca(janela, caixa_qtd, render) if caixa_qtd else None
-                if not novo:
+                if not proximo:
                     registrar(f"Linha {r['linha']}: nao consegui conferir a quantidade (foco nao mudou ou nao foi detectado). "
                               "Confira no SRP se ha aviso na tela. Interrompido.")
                     return 1
-                if novo[1] - caixa_qtd[1] > 8:
-                    passo = novo[1] - caixa_qtd[1]
-                topo = novo[1] - passo
-                celula = (caixa_qtd[0], topo, caixa_qtd[2], topo + (caixa_qtd[3] - caixa_qtd[1]))
-                pasta_ocr = pasta_logs() / "ocr"
-                pasta_ocr.mkdir(exist_ok=True)
-                lidas = ler_celula(janela, tesseract, celula, pasta_ocr / f"{datetime.now():%H%M%S}-linha{r['linha']}.png")
+                if proximo[1] - inicial[1] > 8:
+                    passo = proximo[1] - inicial[1]
+                topo = proximo[1] - passo
+                celula = (coluna_qtd[0], topo, coluna_qtd[1], topo + coluna_qtd[2])
                 esperada = float(r["quantidade"].replace(",", "."))
+                confere, lidas, recorte = ler_celula(janela, tesseract, celula, esperada)
                 registrar(f"  linha {r['linha']}: quantidade lidas={lidas} esperada={esperada} celula={celula}", mostrar=False)
-                if not any(v is not None and abs(v - esperada) < 1e-6 for v in lidas):
+                if not confere:
+                    pasta_ocr = pasta_logs() / "ocr"
+                    pasta_ocr.mkdir(exist_ok=True)
+                    recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{r['linha']}.png")
                     registrar(f"Linha {r['linha']}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
                               "A linha ja foi confirmada no SRP: corrija-a. Imagem lida em logs/ocr.")
                     return 1
