@@ -10,9 +10,9 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 - Planilha: cabecalho exato `Item`, `C/Custo`, `Conta`, `Quantidade`. Valores so digitaveis; zeros a esquerda preservados se a celula for texto.
 
 ## Mapa
-- `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `dist/`, `build/` — saida do PyInstaller (ignorados).
-- `assets/` — `icone.ico` (gerado). `scripts/gerar_versao.py` — gera `build/version.txt`. `vendor/` — Tesseract portatil (ignorado). `build.ps1` — gera `dist\RPA-SRP.exe` com icone, versao e a pasta `tesseract` ao lado (fechar o app antes). `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
-- Teste de exe sem matar processos: `timeout 8 ./dist/RPA-SRP.exe` (saida 124 = seguiu rodando). Nao encerrar processos por nome (bloqueado e arriscado).
+- `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `build/` — trabalho do PyInstaller; `RPA-SRP.exe` na raiz (ignorados). `dist/` e legado (logs antigos).
+- `assets/` — `icone.ico` (gerado). `scripts/gerar_versao.py` — gera `build/version.txt`. `vendor/` — Tesseract portatil (ignorado). `build.ps1` — gera `RPA-SRP.exe` na raiz do projeto, com icone e versao (fechar o app antes). O exe acha o Tesseract em `vendor	esseract`; para outra maquina, levar o exe + a pasta como `tesseract\` ao lado. Logs e `config.json` ficam ao lado do exe. `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
+- Teste de exe sem matar processos: `timeout 8 ./RPA-SRP.exe` (saida 124 = seguiu rodando). Nao encerrar processos por nome (bloqueado e arriscado).
 
 ## Comandos (PowerShell, na pasta RPA)
 - Janela: `.\.venv\Scripts\python.exe src\gui.py`

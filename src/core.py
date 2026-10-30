@@ -147,10 +147,11 @@ def caixa_foco(janela):
 
 
 def caminho_tesseract():
-    """Tesseract portatil: pasta `tesseract` ao lado do exe, ou `vendor/tesseract` no codigo-fonte."""
-    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent / "vendor"
-    exe = base / "tesseract" / "tesseract.exe"
-    return exe if exe.exists() else None
+    """Tesseract portatil: pasta `tesseract` ou `vendor/tesseract` ao lado do exe (ou da raiz do projeto, no codigo-fonte)."""
+    for pasta in (pasta_base() / "tesseract", pasta_base() / "vendor" / "tesseract"):
+        if (pasta / "tesseract.exe").exists():
+            return pasta / "tesseract.exe"
+    return None
 
 
 def preparar_ocr(imagem, escala=6, limiar=160):
