@@ -444,11 +444,16 @@ def mouse_no_canto():
 
 
 def janela_citrix(trecho):
+    # Acha pelo EnumWindows (o mesmo do chip "Citrix aberto") e so depois embrulha no pywinauto:
+    # a lista de janelas do UIA (Desktop.windows()) chegou a vir sem o Citrix com ele aberto (v1.9.2, 30/10 17:20).
     from pywinauto import Desktop  # importado so ao iniciar (abre o app mais rapido)
 
-    for janela in Desktop(backend="uia").windows():
-        if trecho.lower() in janela.window_text().lower():
-            return janela
+    for alvo in _janelas_com(trecho):
+        for backend in ("uia", "win32"):
+            try:
+                return Desktop(backend=backend).window(handle=alvo).wrapper_object()
+            except Exception:
+                continue
     raise LookupError(f"Janela com '{trecho}' no titulo nao encontrada.")
 
 
@@ -457,8 +462,8 @@ def pasta_base():
     return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 
 
-def citrix_aberto(trecho="Desktop Viewer"):
-    """Ha janela visivel com `trecho` no titulo? Usa EnumWindows (rapido; nao disputa a janela do app)."""
+def _janelas_com(trecho):
+    """Handles das janelas visiveis com `trecho` no titulo (EnumWindows: rapido; nao disputa a janela do app)."""
     user32 = ctypes.windll.user32
     achou = []
 
@@ -470,12 +475,16 @@ def citrix_aberto(trecho="Desktop Viewer"):
                 texto = ctypes.create_unicode_buffer(tamanho + 1)
                 user32.GetWindowTextW(alvo, texto, tamanho + 1)
                 if trecho.lower() in texto.value.lower():
-                    achou.append(True)
-                    return False
+                    achou.append(alvo)
         return True
 
     user32.EnumWindows(visitar, None)
-    return bool(achou)
+    return achou
+
+
+def citrix_aberto(trecho="Desktop Viewer"):
+    """Ha janela visivel com `trecho` no titulo?"""
+    return bool(_janelas_com(trecho))
 
 
 def pasta_logs():
