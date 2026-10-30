@@ -155,7 +155,8 @@ def ler_celula(janela, tesseract, caixa, arquivo_debug=None):
     Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel."""
     imagem = capturar(janela)
     esq, topo, dir_, base = caixa
-    recorte = imagem.crop((max(esq - 3, 0), max(topo - 3, 0), min(dir_ + 3, imagem.width), min(base + 3, imagem.height)))
+    # a caixa vem encolhida ~2 px por lado (filtro de pixels soltos): margem maior, sobretudo a direita, onde o numero encosta
+    recorte = imagem.crop((max(esq - 4, 0), max(topo - 4, 0), min(dir_ + 8, imagem.width), min(base + 4, imagem.height)))
     if arquivo_debug:
         recorte.save(arquivo_debug)
     return [ocr_numero(recorte, tesseract, 7, escala) for escala in (4, 6, 8)]
