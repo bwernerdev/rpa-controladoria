@@ -312,7 +312,11 @@ class App(RaizTk):
         self.after(100, self._drenar)
 
     def _estado_linha(self, linha, nome):
+        anterior = self.estados.get(linha)
         self.estados[linha] = nome
+        if anterior == "ok" and nome != "ok":  # conferencia em segundo plano reprovou uma linha ja marcada como concluida
+            self.concluidas = max(self.concluidas - 1, 0)
+            self.barra["value"] = self.concluidas
         iid = self.iids.get(linha)
         if not iid:
             return

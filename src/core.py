@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -150,20 +151,23 @@ def ocr_numero(imagem, tesseract, psm=7, escala=6):
         return None
 
 
-def ler_celula(janela, tesseract, caixa, esperada):
-    """Le o numero dentro de `caixa` (coordenadas da janela); tenta outras ampliacoes so se a primeira nao conferir.
-    Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel.
-    Devolve (confere, leituras, recorte)."""
+def recortar_celula(janela, caixa):
+    """Captura a tela e recorta `caixa` (coordenadas da janela) com margem."""
     imagem = capturar(janela)
     esq, topo, dir_, base = caixa
     # a caixa vem encolhida ~2 px por lado (filtro de pixels soltos): margem maior, sobretudo a direita, onde o numero encosta
-    recorte = imagem.crop((max(esq - 4, 0), max(topo - 4, 0), min(dir_ + 8, imagem.width), min(base + 4, imagem.height)))
+    return imagem.crop((max(esq - 4, 0), max(topo - 4, 0), min(dir_ + 8, imagem.width), min(base + 4, imagem.height)))
+
+
+def conferir_recorte(recorte, tesseract, esperada):
+    """Le o numero do recorte; tenta outras ampliacoes so se a primeira nao conferir. Devolve (confere, leituras).
+    Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel."""
     leituras = []
     for escala in (6, 4, 8):
         leituras.append(ocr_numero(recorte, tesseract, 7, escala))
         if leituras[-1] is not None and abs(leituras[-1] - esperada) < 1e-6:
-            return True, leituras, recorte
-    return False, leituras, recorte
+            return True, leituras
+    return False, leituras
 
 
 def aguardar_mudanca(janela, referencia, limite):
@@ -246,6 +250,30 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         if mostrar:
             aviso(texto)
 
+    pool = ThreadPoolExecutor(max_workers=1)
+    pendentes = []  # (linha, esperada, futuro, recorte): conferencias de OCR em andamento, em ordem
+
+    def revisar(aguardar=False):
+        """Trata os resultados de OCR ja prontos (todos, com aguardar=True). Devolve a linha que nao conferiu, se houver."""
+        restantes = []
+        falha = None
+        for linha, esperada, futuro, recorte in pendentes:
+            if falha is None and (aguardar or futuro.done()):
+                confere, lidas = futuro.result()
+                registrar(f"  linha {linha}: quantidade lidas={lidas} esperada={esperada}", mostrar=False)
+                if not confere:
+                    pasta_ocr = pasta_logs() / "ocr"
+                    pasta_ocr.mkdir(exist_ok=True)
+                    recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{linha}.png")
+                    registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
+                              "A linha ja foi confirmada no SRP: corrija-a (as seguintes, ate aqui, tambem podem estar afetadas). "
+                              "Imagem lida em logs/ocr.")
+                    falha = linha
+            else:
+                restantes.append((linha, esperada, futuro, recorte))
+        pendentes[:] = restantes
+        return falha
+
     def teclar(acao, valor, esperar=True):
         """`esperar=False` em Tab seguido de aguardar_mudanca (a propria espera do foco sincroniza)."""
         if parar.is_set() or mouse_no_canto():
@@ -273,6 +301,11 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         for r in registros:
             if janela_trecho.lower() not in titulo_janela_ativa().lower():
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
+                return 1
+            falha = revisar()
+            if falha:
+                if estado:
+                    estado(falha, "erro")
                 return 1
             marcar(r, "executando")
             t0 = time.time()
@@ -318,21 +351,19 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 topo = proximo[1] - passo
                 celula = (coluna_qtd[0], topo, coluna_qtd[1], topo + coluna_qtd[2])
                 esperada = float(r["quantidade"].replace(",", "."))
-                confere, lidas, recorte = ler_celula(janela, tesseract, celula, esperada)
+                recorte = recortar_celula(janela, celula)
+                pendentes.append((r["linha"], esperada, pool.submit(conferir_recorte, recorte, tesseract, esperada), recorte))
                 t5 = time.time()
-                registrar(f"  linha {r['linha']}: quantidade lidas={lidas} esperada={esperada} celula={celula}", mostrar=False)
-                if not confere:
-                    pasta_ocr = pasta_logs() / "ocr"
-                    pasta_ocr.mkdir(exist_ok=True)
-                    recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{r['linha']}.png")
-                    registrar(f"Linha {r['linha']}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
-                              "A linha ja foi confirmada no SRP: corrija-a. Imagem lida em logs/ocr.")
-                    return 1
             registrar(f"  linha {r['linha']}: tempos (s) item_tab={t1 - t0:.2f} custo_tab={t2 - t1:.2f} "
                       f"digitar_conta_qtd={t3 - t2:.2f} resposta_tab_qtd={t4 - t3:.2f} ocr={t5 - t4:.2f}", mostrar=False)
             conta = "digitada " + r["conta"] if editavel else "travada"
             registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
             marcar(r, "ok")
+        falha = revisar(aguardar=True)
+        if falha:
+            if estado:
+                estado(falha, "erro")
+            return 1
         registrar("Concluido.")
         return 0
     except KeyboardInterrupt:
@@ -342,6 +373,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         registrar(f"Erro: {erro}")
         return 1
     finally:
+        pool.shutdown(wait=False, cancel_futures=True)
         if atual is not None and estado:
             estado(atual, "erro")
         log.close()
