@@ -71,7 +71,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe src\gui.py                            # abre a janela
 .\.venv\Scripts\python.exe -m unittest discover -s tests         # testes (SRP simulado, sem Citrix)
-.\build.ps1                                                      # gera RPA-SRP.exe e release\RPA-SRP-vX.Y.Z.zip
+.\build.ps1                                                      # gera build\dist\RPA-SRP.exe e release\RPA-SRP-vX.Y.Z.zip
 ```
 
 Detalhes de funcionamento e regras estão nos `CLAUDE.md` de cada pasta. O Tesseract em `vendor\tesseract` vem do instalador UB-Mannheim 5.4.0, enxugado (ver `vendor/CLAUDE.md`).

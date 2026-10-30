@@ -5,4 +5,4 @@ Origem: `https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240
 Depois de copiar, enxugar (163,6 MB -> 24,5 MB; o limite por arquivo do GitHub e 100 MB) e rodar os testes:
 1. Tirar a depuracao dos binarios (`libtesseract-5.dll` 96,8 -> 3,1 MB): `.\.venv\Scripts\python.exe scripts\enxugar_dll.py (Get-ChildItem vendor\tesseract\*.dll, vendor\tesseract\*.exe)`.
 2. Apagar as DLLs que o `tesseract.exe` nao carrega (ICU, cairo, pango, glib...: so servem ao treino): `.\.venv\Scripts\python.exe scripts\dlls_usadas.py vendor\tesseract` (as marcadas "sobra").
-Na maquina de desenvolvimento o `RPA-SRP.exe` (raiz do projeto) usa esta pasta direto. Para outra maquina, o `build.ps1` monta `release\RPA-SRP-vX.Y.Z.zip` com o exe e esta pasta como `tesseract\` ao lado. Sem ela o app roda, mas a conferencia e a deteccao do C/Custo pelo cabecalho ficam desativadas com aviso.
+Rodando pelo codigo-fonte (`src\gui.py`), o app usa esta pasta direto. Para o exe, o `build.ps1` monta `release\RPA-SRP-vX.Y.Z.zip` com o exe e esta pasta como `tesseract\` ao lado. Sem ela o app roda, mas a conferencia e a deteccao do C/Custo pelo cabecalho ficam desativadas com aviso.
