@@ -15,10 +15,13 @@ from pathlib import Path
 
 sys.coinit_flags = 2  # COM em modo STA, necessario para arrastar e soltar (tkdnd/OLE) e pywinauto coexistirem
 
-from openpyxl import load_workbook
 from PIL import Image, ImageChops, ImageFilter, ImageGrab, ImageOps
-from pywinauto import Desktop
-from pywinauto.keyboard import send_keys
+
+
+def send_keys(*args, **kwargs):
+    """pywinauto.keyboard.send_keys importado so na primeira tecla: o pywinauto leva ~1,3 s para carregar."""
+    from pywinauto.keyboard import send_keys as enviar
+    return enviar(*args, **kwargs)
 
 COLUNAS = {"item": "item", "c/custo": "custo", "conta": "conta", "quantidade": "quantidade"}
 OBRIGATORIAS = ("item", "custo", "quantidade")
@@ -33,6 +36,8 @@ def texto(valor):
 
 
 def ler_planilha(caminho):
+    from openpyxl import load_workbook  # importado so ao ler a planilha (abre o app mais rapido)
+
     ws = load_workbook(caminho, read_only=True, data_only=True).active
     linhas = ws.iter_rows(values_only=True)
     cabecalho = next(linhas, None) or ()
@@ -277,6 +282,8 @@ def mouse_no_canto():
 
 
 def janela_citrix(trecho):
+    from pywinauto import Desktop  # importado so ao iniciar (abre o app mais rapido)
+
     for janela in Desktop(backend="uia").windows():
         if trecho.lower() in janela.window_text().lower():
             return janela

@@ -538,5 +538,16 @@ class App(RaizTk):
             self.fila.put(None)
 
 
+def fechar_abertura():
+    """Fecha a tela de abertura do .exe (PyInstaller --splash); no codigo-fonte nao existe."""
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
+
+
 if __name__ == "__main__":
-    App().mainloop()
+    app = App()
+    app.after(0, fechar_abertura)
+    app.mainloop()

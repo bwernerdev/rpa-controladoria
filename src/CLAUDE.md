@@ -11,3 +11,4 @@
 - Logica nova vai em `core.py`; `gui.py` e `preencher.py` so chamam.
 - Ao mudar a deteccao de foco, testar `maior_caixa_ciano` com um print do SRP e conferir o log (`foco C/Custo=... depois=...`).
 - Strings com `\n` em Python via heredoc do shell quebram: edite com a ferramenta de edicao, nao com `python - <<EOF`.
+- Abertura: `pywinauto` e `openpyxl` sao importados so quando usados (`send_keys`/`janela_citrix`/`ler_planilha`); nao voltar a importar no topo do `core.py`. O exe tem tela de abertura (`assets/splash.png`, fechada por `fechar_abertura` em `gui.py`). Medido em 30/10/2026: ~4-6 s ate a janela, quase tudo antes do Python comecar (verificacao do Windows/antivirus; uma janela tkinter vazia leva o mesmo).
