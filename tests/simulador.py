@@ -26,7 +26,7 @@ class SRP:
         t = self.travas[min(self.linha, len(self.travas) - 1)]
         return [c for c in core.ORDEM if not t.get(c)]
 
-    def tela(self, _janela=None):
+    def tela(self, _janela=None, _fixos=()):
         """(foco, ha aviso): o aviso some quando o usuario resolve o campo recusado."""
         return self.caixa(), self.alerta and (self.linha, self.campo) in self.recusar
 
@@ -70,7 +70,7 @@ def ambiente(srp, com_cabecalho=True, extras=None):
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela, "capturar": lambda janela: None,
         "localizar_colunas": (lambda imagem, t: dict(CENTROS)) if com_cabecalho else (lambda imagem, t: None),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"), "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer",
-        "mouse_no_canto": lambda: False, "janela_citrix": lambda trecho: Janela(), "ler_aviso": lambda imagem, t: None,
+        "mouse_no_canto": lambda: False, "janela_citrix": lambda trecho: Janela(), "ler_aviso": lambda imagem, t, fixos=(): None,
         "pasta_logs": lambda: pasta, "arquivo_aprendizado": lambda: pasta / "aprendizado.json",
     }
     trocas.update(extras or {})

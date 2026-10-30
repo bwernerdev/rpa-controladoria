@@ -166,12 +166,20 @@ def maior_caixa_cor(imagem, cor):
     return max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if caixas else None
 
 
-def icone_aviso(imagem):
-    """Icone vermelho do aviso do SRP: bloco vermelho quase quadrado de 8 a 60 px (ja erodido pelo filtro).
-    Outros vermelhos da tela (texto, faixas, botoes) sao descartados; antes o maior vermelho virava o "icone" e o
-    recorte do aviso pegava a tela inteira."""
+def _sobrepoe(caixa, outras, folga=4):
+    esq, topo, dir_, base = caixa
+    return any(esq < o[2] + folga and dir_ > o[0] - folga and topo < o[3] + folga and base > o[1] - folga for o in outras)
+
+
+def icone_aviso(imagem, fixos=()):
+    """Icone vermelho do aviso do SRP: bloco vermelho NOVO, quase quadrado, de 8 a 60 px (ja erodido pelo filtro).
+    `fixos` = blocos vermelhos que ja estavam na tela no inicio (`caixas_cor` da calibracao): o cabecalho do SRP tem
+    uma faixa vermelha que o logo corta, e o pedaco da esquerda (~17x21 px, na borda) parecia um icone; na v1.8.0 isso
+    fazia o robo pausar em todo campo. Tambem descarta blocos encostados na borda da janela."""
+    largura, altura = imagem.size
     candidatos = [c for c in caixas_cor(imagem, "vermelho")
-                  if 8 <= c[2] - c[0] <= 60 and 8 <= c[3] - c[1] <= 60 and 0.6 <= (c[2] - c[0]) / (c[3] - c[1]) <= 1.6]
+                  if 8 <= c[2] - c[0] <= 60 and 8 <= c[3] - c[1] <= 60 and 0.6 <= (c[2] - c[0]) / (c[3] - c[1]) <= 1.6
+                  and c[0] > 3 and c[1] > 3 and c[2] < largura - 3 and c[3] < altura - 3 and not _sobrepoe(c, fixos)]
     return max(candidatos, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if candidatos else None
 
 
@@ -181,14 +189,14 @@ def capturar(janela):
 
 
 def caixa_foco(janela):
-    """RetÃ¢ngulo do campo em foco (ciano) na janela do Citrix."""
+    """Retangulo do campo em foco (ciano) na janela do Citrix."""
     return maior_caixa_ciano(capturar(janela))
 
 
-def estado_tela(janela):
-    """(caixa do foco ciano, ha aviso do SRP na tela) a partir de uma unica captura."""
+def estado_tela(janela, fixos=()):
+    """(caixa do foco ciano, ha aviso do SRP na tela) a partir de uma unica captura; `fixos` como em icone_aviso."""
     imagem = capturar(janela)
-    return maior_caixa_ciano(imagem), icone_aviso(imagem) is not None
+    return maior_caixa_ciano(imagem), icone_aviso(imagem, fixos) is not None
 
 
 def caminho_tesseract():
@@ -244,19 +252,20 @@ def conferir_recorte(recorte, tesseract, esperada):
     return False, leituras
 
 
-def aguardar_mudanca(janela, referencia, limite, ver_aviso=False):
+def aguardar_mudanca(janela, referencia, limite, ver_aviso=False, fixos=()):
     """Espera o foco (ciano) sair de `referencia`; devolve a nova caixa, None no tempo esgotado ou, com ver_aviso,
-    a palavra "aviso" assim que o aviso do SRP (icone vermelho) aparecer."""
+    a palavra "aviso" assim que o aviso do SRP (icone vermelho novo, fora de `fixos`) aparecer."""
     prazo = time.time() + limite
     while time.time() < prazo:
+        tem_aviso = False
         if ver_aviso:
-            atual, tem_aviso = estado_tela(janela)
-            if tem_aviso:
-                return "aviso"
+            atual, tem_aviso = estado_tela(janela, fixos)
         else:
             atual = caixa_foco(janela)
         if atual and referencia and (abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
-            return atual
+            return atual  # o foco andou: o SRP aceitou o campo (um aviso de verdade prende o foco)
+        if tem_aviso:
+            return "aviso"
         time.sleep(0.02)  # cada volta ja custa ~60 ms (captura + busca das cores)
     return None
 
@@ -288,10 +297,10 @@ def palavras_tela(imagem, tesseract, escala=2):
     return palavras
 
 
-def ler_aviso(imagem, tesseract):
+def ler_aviso(imagem, tesseract, fixos=()):
     """Le a janela de aviso do SRP (localizada pelo icone vermelho). Devolve {'texto', 'item', 'custo', 'conta_correta'}
     ou None. O OCR erra digitos de vez em quando (8712 -> 3712): le de 5 jeitos e so aceita a conta da maioria."""
-    icone = icone_aviso(imagem)
+    icone = icone_aviso(imagem, fixos)
     if not icone:
         return None
     esq, topo, dir_, base = icone
@@ -756,7 +765,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
 
             def ler_em_segundo_plano():
                 try:
-                    info = ler_aviso(tela_do_aviso, exe_tesseract)
+                    info = ler_aviso(tela_do_aviso, exe_tesseract, fixos)
                 except Exception as erro:
                     registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
                     return
@@ -807,9 +816,15 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         inicio_contagem = time.time()
         colunas = None
         exe_tesseract = caminho_tesseract()
+        tela_inicial = capturar(janela)
+        try:  # vermelhos que ja estao na tela (faixa do cabecalho do SRP): nao sao aviso
+            fixos = caixas_cor(tela_inicial, "vermelho")
+        except Exception:
+            fixos = []
+        registrar(f"  vermelhos fixos na tela: {fixos}", mostrar=False)
         if exe_tesseract:
             try:
-                colunas = localizar_colunas(capturar(janela), exe_tesseract)
+                colunas = localizar_colunas(tela_inicial, exe_tesseract)
             except Exception as erro:  # sem cabecalho, segue no modo antigo
                 registrar(f"  leitura do cabecalho falhou: {erro}", mostrar=False)
         if colunas:
@@ -853,7 +868,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
                 teclar("digitar", valor); teclar("tab", None, esperar=False)
                 digitados.append(campo)
-                novo = aguardar_mudanca(janela, foco, render, ver_aviso=bool(colunas))
+                novo = aguardar_mudanca(janela, foco, render, ver_aviso=bool(colunas), fixos=fixos)
                 if novo == "aviso":
                     novo = None
                 seguinte = proximo_campo(campo, foco, novo, colunas) if novo else None

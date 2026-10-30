@@ -124,7 +124,7 @@ class PausaPorAviso(unittest.TestCase):
     def test_aviso_lido_e_conta_aprendida(self):
         info = {"texto": "Conta Contabil invalida para o item 101 conta 301 c.custo 7300. Conta correta=8712",
                 "item": "101", "custo": "7300", "conta_correta": "8712"}
-        codigo, _, avisos, _, pasta = self.rodar(self.corrige_e_tab, extras={"ler_aviso": lambda imagem, t: info})
+        codigo, _, avisos, _, pasta = self.rodar(self.corrige_e_tab, extras={"ler_aviso": lambda imagem, t, fixos=(): info})
         self.assertEqual(codigo, 0)
         self.assertTrue(any("SRP:" in a and "8712" in a for a in avisos))
         aprendido = json.loads((pasta / "aprendizado.json").read_text(encoding="utf-8"))
@@ -132,7 +132,7 @@ class PausaPorAviso(unittest.TestCase):
 
     def test_aviso_de_outro_item_nao_ensina(self):
         info = {"texto": "...", "item": "999", "custo": "7300", "conta_correta": "8712"}
-        _, _, _, _, pasta = self.rodar(self.corrige_e_tab, extras={"ler_aviso": lambda imagem, t: info})
+        _, _, _, _, pasta = self.rodar(self.corrige_e_tab, extras={"ler_aviso": lambda imagem, t, fixos=(): info})
         self.assertFalse((pasta / "aprendizado.json").exists())
 
 

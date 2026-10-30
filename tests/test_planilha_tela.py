@@ -65,6 +65,21 @@ class Tela(unittest.TestCase):
         self.assertTrue(298 <= esq <= 306 and 98 <= topo <= 106 and 316 <= dir_ <= 324)
         self.assertLessEqual(core.maior_caixa_cor(imagem, "vermelho")[0], 24)  # o maior vermelho continua sendo a faixa
 
+    def test_faixa_vermelha_fixa_do_cabecalho_nao_e_aviso(self):
+        """Cabecalho do SRP: faixa vermelha cortada pelo logo; o pedaco da esquerda (17x21, na borda) parecia icone."""
+        tela = Image.new("RGB", (1366, 768), (240, 240, 240))
+        d = ImageDraw.Draw(tela)
+        d.rectangle((0, 49, 19, 74), fill=(255, 0, 0))       # pedaco da faixa a esquerda do logo
+        d.rectangle((51, 49, 457, 74), fill=(255, 0, 0))     # resto da faixa
+        d.rectangle((300, 60, 330, 66), fill=(250, 250, 250))  # texto branco sobre a faixa
+        fixos = core.caixas_cor(tela, "vermelho")
+        self.assertIsNone(core.icone_aviso(tela))            # encostado na borda: descartado mesmo sem calibracao
+        d.rectangle((200, 49, 222, 74), fill=(255, 0, 0))     # o mesmo tipo de pedaco longe da borda
+        fixos = core.caixas_cor(tela, "vermelho")
+        self.assertIsNone(core.icone_aviso(tela, fixos))     # ja estava na tela: nao e aviso
+        d.ellipse((600, 380, 622, 402), fill=(255, 0, 0))    # aviso que aparece depois
+        self.assertIsNotNone(core.icone_aviso(tela, fixos))
+
     def test_coluna_do_foco(self):
         self.assertEqual(core.qual_coluna((424, 503, 466, 514), CENTROS), "custo")
         self.assertEqual(core.qual_coluna((475, 503, 499, 514), CENTROS), "conta")
