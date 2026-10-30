@@ -127,15 +127,20 @@ def caminho_tesseract():
     return exe if exe.exists() else None
 
 
-def ocr_numero(imagem, tesseract):
+def preparar_ocr(imagem, escala=6):
+    """Cinza, contraste maximo, ampliacao e margem branca para o Tesseract."""
+    cinza = ImageOps.autocontrast(imagem.convert("L"), cutoff=2)
+    cinza = cinza.resize((cinza.width * escala, cinza.height * escala), Image.LANCZOS)
+    return ImageOps.expand(cinza, border=30, fill=255)
+
+
+def ocr_numero(imagem, tesseract, psm=7, escala=6):
     """Le um numero de uma imagem recortada com o Tesseract (somente digitos, ponto, virgula e sinal)."""
-    imagem = ImageOps.autocontrast(imagem.convert("L").resize((imagem.width * 4, imagem.height * 4), Image.LANCZOS))
-    imagem = ImageOps.expand(imagem, border=20, fill=255)
     with tempfile.TemporaryDirectory() as pasta:
         arquivo = Path(pasta) / "campo.png"
-        imagem.save(arquivo)
+        preparar_ocr(imagem, escala).save(arquivo)
         saida = subprocess.run(
-            [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", "7",
+            [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", str(psm),
              "-c", "tessedit_char_whitelist=0123456789.,-"],
             capture_output=True, text=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     limpo = saida.stdout.strip().replace(",", ".")
@@ -145,11 +150,15 @@ def ocr_numero(imagem, tesseract):
         return None
 
 
-def ler_quantidade(janela, tesseract):
-    """Le o numero do campo em foco (Quantidade) na tela do Citrix."""
+def ler_celula(janela, tesseract, caixa, arquivo_debug=None):
+    """Le o numero dentro de `caixa` (coordenadas da janela) em varias ampliacoes. Devolve a lista de leituras.
+    Funciona com o valor ja formatado (ex.: 1.0000); um digito isolado o Tesseract nao le de forma confiavel."""
     imagem = capturar(janela)
-    caixa = maior_caixa_ciano(imagem)
-    return ocr_numero(imagem.crop(caixa), tesseract) if caixa else None
+    esq, topo, dir_, base = caixa
+    recorte = imagem.crop((max(esq - 3, 0), max(topo - 3, 0), min(dir_ + 3, imagem.width), min(base + 3, imagem.height)))
+    if arquivo_debug:
+        recorte.save(arquivo_debug)
+    return [ocr_numero(recorte, tesseract, 7, escala) for escala in (4, 6, 8)]
 
 
 def aguardar_mudanca(janela, referencia, limite):
@@ -241,6 +250,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 registrar("Interrompido antes de iniciar.")
                 return 1
             time.sleep(0.1)
+        passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
         for r in registros:
             if janela_trecho.lower() not in Desktop(backend="uia").window(active_only=True).window_text().lower():
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
@@ -262,15 +272,31 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     return 1
                 teclar("digitar", r["conta"]); teclar("tab", None)
             teclar("digitar", r["quantidade"].replace(".", ","))
+            caixa_qtd = None
             if tesseract:
                 time.sleep(0.3)
-                lida = ler_quantidade(janela, tesseract)
-                esperada = float(r["quantidade"].replace(",", "."))
-                registrar(f"  linha {r['linha']}: quantidade lida={lida} esperada={esperada}", mostrar=False)
-                if lida is None or abs(lida - esperada) > 1e-6:
-                    registrar(f"Linha {r['linha']}: quantidade na tela ({lida}) difere da planilha ({esperada}). Interrompido.")
-                    return 1
+                caixa_qtd = caixa_foco(janela)
             teclar("tab", None)
+            if tesseract:
+                # A celula so e lida depois do Tab (valor formatado, ex.: 1.0000): fica na linha acima do novo foco.
+                novo = aguardar_mudanca(janela, caixa_qtd, render) if caixa_qtd else None
+                if not novo:
+                    registrar(f"Linha {r['linha']}: nao consegui conferir a quantidade (foco nao mudou ou nao foi detectado). "
+                              "Confira no SRP se ha aviso na tela. Interrompido.")
+                    return 1
+                if novo[1] - caixa_qtd[1] > 8:
+                    passo = novo[1] - caixa_qtd[1]
+                topo = novo[1] - passo
+                celula = (caixa_qtd[0], topo, caixa_qtd[2], topo + (caixa_qtd[3] - caixa_qtd[1]))
+                pasta_ocr = pasta_logs() / "ocr"
+                pasta_ocr.mkdir(exist_ok=True)
+                lidas = ler_celula(janela, tesseract, celula, pasta_ocr / f"{datetime.now():%H%M%S}-linha{r['linha']}.png")
+                esperada = float(r["quantidade"].replace(",", "."))
+                registrar(f"  linha {r['linha']}: quantidade lidas={lidas} esperada={esperada} celula={celula}", mostrar=False)
+                if not any(v is not None and abs(v - esperada) < 1e-6 for v in lidas):
+                    registrar(f"Linha {r['linha']}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
+                              "A linha ja foi confirmada no SRP: corrija-a. Imagem lida em logs/ocr.")
+                    return 1
             conta = "digitada " + r["conta"] if editavel else "travada"
             registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
             marcar(r, "ok")
