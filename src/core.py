@@ -5,7 +5,9 @@ A tela do Citrix e so imagem: o campo em foco e o bloco ciano; a Conta e editave
 """
 import ctypes
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +15,7 @@ from pathlib import Path
 sys.coinit_flags = 2  # COM em modo STA, necessario para arrastar e soltar (tkdnd/OLE) e pywinauto coexistirem
 
 from openpyxl import load_workbook
-from PIL import ImageChops, ImageFilter, ImageGrab
+from PIL import Image, ImageChops, ImageFilter, ImageGrab, ImageOps
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
@@ -108,10 +110,46 @@ def maior_caixa_ciano(imagem):
     return melhor[1] if melhor else None
 
 
+def capturar(janela):
+    ret = janela.rectangle()
+    return ImageGrab.grab(bbox=(ret.left, ret.top, ret.right, ret.bottom), all_screens=True)
+
+
 def caixa_foco(janela):
     """Retângulo do campo em foco (ciano) na janela do Citrix."""
-    ret = janela.rectangle()
-    return maior_caixa_ciano(ImageGrab.grab(bbox=(ret.left, ret.top, ret.right, ret.bottom), all_screens=True))
+    return maior_caixa_ciano(capturar(janela))
+
+
+def caminho_tesseract():
+    """Tesseract portatil: pasta `tesseract` ao lado do exe, ou `vendor/tesseract` no codigo-fonte."""
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent / "vendor"
+    exe = base / "tesseract" / "tesseract.exe"
+    return exe if exe.exists() else None
+
+
+def ocr_numero(imagem, tesseract):
+    """Le um numero de uma imagem recortada com o Tesseract (somente digitos, ponto, virgula e sinal)."""
+    imagem = ImageOps.autocontrast(imagem.convert("L").resize((imagem.width * 4, imagem.height * 4), Image.LANCZOS))
+    imagem = ImageOps.expand(imagem, border=20, fill=255)
+    with tempfile.TemporaryDirectory() as pasta:
+        arquivo = Path(pasta) / "campo.png"
+        imagem.save(arquivo)
+        saida = subprocess.run(
+            [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", "7",
+             "-c", "tessedit_char_whitelist=0123456789.,-"],
+            capture_output=True, text=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    limpo = saida.stdout.strip().replace(",", ".")
+    try:
+        return float(limpo)
+    except ValueError:
+        return None
+
+
+def ler_quantidade(janela, tesseract):
+    """Le o numero do campo em foco (Quantidade) na tela do Citrix."""
+    imagem = capturar(janela)
+    caixa = maior_caixa_ciano(imagem)
+    return ocr_numero(imagem.crop(caixa), tesseract) if caixa else None
 
 
 def aguardar_mudanca(janela, referencia, limite):
@@ -154,9 +192,11 @@ def pasta_logs():
     return pasta
 
 
-def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None):
+def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False):
     """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento;
-    `estado(linha, nome)` (opcional) recebe 'executando', 'ok' ou 'erro' por linha. Devolve 0 se concluiu."""
+    `estado(linha, nome)` (opcional) recebe 'executando', 'ok' ou 'erro' por linha;
+    `conferir` le a Quantidade na tela (OCR) antes de confirmar cada linha. Devolve 0 se concluiu."""
+    tesseract = caminho_tesseract() if conferir else None
     log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
     atual = None
 
@@ -179,6 +219,8 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         time.sleep(pausa)
 
     try:
+        if conferir and not tesseract:
+            aviso("ATENCAO: pasta 'tesseract' nao encontrada ao lado do programa. Conferencia da quantidade DESATIVADA nesta execucao.")
         janela = janela_citrix(janela_trecho)
         janela.set_focus()
         aviso(f"Clique no campo Item da primeira linha. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
@@ -207,7 +249,16 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     registrar(f"Linha {r['linha']}: Conta editavel mas em branco na planilha. Interrompido.")
                     return 1
                 teclar("digitar", r["conta"]); teclar("tab", None)
-            teclar("digitar", r["quantidade"].replace(".", ",")); teclar("tab", None)
+            teclar("digitar", r["quantidade"].replace(".", ","))
+            if tesseract:
+                time.sleep(0.3)
+                lida = ler_quantidade(janela, tesseract)
+                esperada = float(r["quantidade"].replace(",", "."))
+                registrar(f"  linha {r['linha']}: quantidade lida={lida} esperada={esperada}", mostrar=False)
+                if lida is None or abs(lida - esperada) > 1e-6:
+                    registrar(f"Linha {r['linha']}: quantidade na tela ({lida}) difere da planilha ({esperada}). Interrompido.")
+                    return 1
+            teclar("tab", None)
             conta = "digitada " + r["conta"] if editavel else "travada"
             registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
             marcar(r, "ok")

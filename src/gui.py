@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import descrever, executar, ler_planilha, pasta_logs, validar
+from core import caminho_tesseract, descrever, executar, ler_planilha, pasta_logs, validar
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -39,6 +39,7 @@ class App(RaizTk):
         self.concluidas = 0
         self.limite = tk.StringVar(value="0")
         self.pausa = tk.StringVar(value="0.25")
+        self.conferir = tk.BooleanVar(value=caminho_tesseract() is not None)
         self._estilos()
         self._montar()
         if DND_FILES:
@@ -115,7 +116,8 @@ class App(RaizTk):
         tk.Label(opcoes, text="Limite de linhas", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
         ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center").pack(side="left", padx=(6, 14))
         tk.Label(opcoes, text="Pausa (s)", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center").pack(side="left", padx=6)
+        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center").pack(side="left", padx=(6, 14))
+        ttk.Checkbutton(opcoes, text="Conferir quantidade na tela", variable=self.conferir).pack(side="left")
 
         cartao = self._cartao(corpo)
         cartao.pack(fill="both", expand=True)
@@ -280,13 +282,13 @@ class App(RaizTk):
             self.tabela.item(iid, tags=("pendente",))
         self._status("Iniciando...", "destaque")
         self._ocupado(True)
-        self.thread = threading.Thread(target=self._rodar, args=(registros, pausa), daemon=True)
+        self.thread = threading.Thread(target=self._rodar, args=(registros, pausa, self.conferir.get()), daemon=True)
         self.thread.start()
 
-    def _rodar(self, registros, pausa):
+    def _rodar(self, registros, pausa, conferir):
         try:
             executar(registros, "Desktop Viewer", pausa, 4.0, 5, self.parar, self.fila.put,
-                     lambda linha, nome: self.fila.put((linha, nome)))
+                     lambda linha, nome: self.fila.put((linha, nome)), conferir)
         finally:
             self.fila.put(None)
 

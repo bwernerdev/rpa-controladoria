@@ -7,3 +7,4 @@ build/
 dist/
 planilhas/*
 !planilhas/CLAUDE.md
+vendor/tesseract/
