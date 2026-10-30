@@ -6,6 +6,7 @@ A tela do Citrix e so imagem: o campo em foco e o bloco ciano; a Conta e editave
 import ctypes
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 import subprocess
@@ -586,13 +587,17 @@ def aplicar_atualizacao(pacote, destino):
     `destino` (mantendo config, contas aprendidas, andamento e logs) e abre o app de novo. Chamar e fechar o app."""
     log = Path(destino) / "logs" / "atualizacao.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    # o exe novo, aberto no fim pelo script, nao pode herdar as variaveis do PyInstaller deste app
+    # (senao procura o python314.dll na pasta _MEI deste, apagada quando ele fecha)
+    ambiente = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    ambiente["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File",
          str(Path(pacote) / "instalar.ps1"), "-Destino", str(destino), "-SemAtalhos", "-Esperar", "60", "-Abrir",
          "-Log", str(log)],
         # console oculto (CREATE_NO_WINDOW); DETACHED_PROCESS faz o PowerShell 5.1 sair sem rodar nada
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        close_fds=True)
+        close_fds=True, env=ambiente)
 
 
 def limpar_logs(dias=30):

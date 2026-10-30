@@ -48,6 +48,11 @@ try {
     }
     Write-Host "Robô SRP instalado em $Destino"
 } finally {
-    if ($Abrir -and (Test-Path "$Destino\RPA-SRP.exe")) { Start-Process "$Destino\RPA-SRP.exe" -WorkingDirectory $Destino }
+    if ($Abrir -and (Test-Path "$Destino\RPA-SRP.exe")) {
+        # Herdado do app antigo (exe do PyInstaller): sem limpar, o exe novo procura o python314.dll na pasta _MEI do antigo, que ja foi apagada.
+        @(Get-ChildItem Env: | Where-Object { $_.Name -like "_PYI_*" -or $_.Name -like "_MEIPASS*" }) | ForEach-Object { Remove-Item "Env:$($_.Name)" }
+        $env:PYINSTALLER_RESET_ENVIRONMENT = "1"
+        Start-Process "$Destino\RPA-SRP.exe" -WorkingDirectory $Destino
+    }
     if ($Log) { Stop-Transcript | Out-Null }
 }
