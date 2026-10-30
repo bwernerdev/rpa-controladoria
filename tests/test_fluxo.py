@@ -70,6 +70,20 @@ class PausaPorAviso(unittest.TestCase):
         self.assertEqual(valores[2]["quantidade"], "3")
         self.assertIn((3, "pausado"), estados)
 
+    def test_pausa_na_hora_que_o_aviso_aparece(self):
+        """Antes esperava o tempo maximo (render) para concluir que o campo nao mudou; agora pausa ao ver o aviso."""
+        srp = SRP([LIVRE] * 3, recusar={(1, "conta")})
+        momentos = {}
+
+        def reacao(srp, retomar, _linha):
+            momentos["pausa"] = time.time()
+            self.corrige_e_tab(srp, retomar, _linha)
+        with ambiente(srp):
+            inicio = time.time()
+            codigo, _, _ = executar(srp, registros(3), threading.Event(), reacao, render=5.0)
+        self.assertEqual(codigo, 0)
+        self.assertLess(momentos["pausa"] - inicio, 2.0)
+
     def test_esquece_o_tab_continua_pausado(self):
         tentativas = []
 

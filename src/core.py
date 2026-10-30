@@ -10,6 +10,7 @@ from collections import Counter
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -164,6 +165,14 @@ def caixa_foco(janela):
     return maior_caixa_ciano(capturar(janela))
 
 
+def estado_tela(janela):
+    """(caixa do foco ciano, ha aviso do SRP na tela) a partir de uma unica captura."""
+    imagem = capturar(janela)
+    icone = maior_caixa_cor(imagem, "vermelho")
+    tem_aviso = bool(icone) and (icone[2] - icone[0]) >= 8 and (icone[3] - icone[1]) >= 8  # ignora pontos vermelhos soltos
+    return maior_caixa_ciano(imagem), tem_aviso
+
+
 def caminho_tesseract():
     """Tesseract portatil: pasta `tesseract` ou `vendor/tesseract` ao lado do exe (ou da raiz do projeto, no codigo-fonte)."""
     for pasta in (pasta_base() / "tesseract", pasta_base() / "vendor" / "tesseract"):
@@ -217,11 +226,17 @@ def conferir_recorte(recorte, tesseract, esperada):
     return False, leituras
 
 
-def aguardar_mudanca(janela, referencia, limite):
-    """Espera o foco (ciano) sair de `referencia`; devolve a nova caixa ou None no tempo esgotado."""
+def aguardar_mudanca(janela, referencia, limite, ver_aviso=False):
+    """Espera o foco (ciano) sair de `referencia`; devolve a nova caixa, None no tempo esgotado ou, com ver_aviso,
+    a palavra "aviso" assim que o aviso do SRP (icone vermelho) aparecer."""
     prazo = time.time() + limite
     while time.time() < prazo:
-        atual = caixa_foco(janela)
+        if ver_aviso:
+            atual, tem_aviso = estado_tela(janela)
+            if tem_aviso:
+                return "aviso"
+        else:
+            atual = caixa_foco(janela)
         if atual and referencia and (abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
             return atual
         time.sleep(0.05)
@@ -267,13 +282,15 @@ def ler_aviso(imagem, tesseract):
                            min(imagem.width, esq + int(420 * f)), min(imagem.height, base + int(60 * f))))
     r, g, b = recorte.convert("RGB").split()
     escuro = ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 0 if v < 120 else 255).convert("RGB")
-    leituras = []
-    for img, escala in ((recorte, 2), (recorte, 4), (recorte, 5), (escuro, 4), (escuro, 5)):
-        palavras = palavras_tela(img, tesseract, escala)
+    def ler(img, escala):
         linhas = {}
-        for texto, x, y, _, _ in palavras:
+        for texto, x, y, _, _ in palavras_tela(img, tesseract, escala):
             linhas.setdefault(round(y / 6), []).append((x, texto))
-        leituras.append(" ".join(" ".join(t for _, t in sorted(l)) for _, l in sorted(linhas.items())))
+        return " ".join(" ".join(t for _, t in sorted(l)) for _, l in sorted(linhas.items()))
+
+    variantes = ((recorte, 2), (recorte, 4), (recorte, 5), (escuro, 4), (escuro, 5))
+    with ThreadPoolExecutor(max_workers=len(variantes)) as paralelo:  # cada leitura e um processo do Tesseract
+        leituras = list(paralelo.map(lambda v: ler(*v), variantes))
     def votar(padrao):
         achados = [m.group(1) for m in (re.search(padrao, t, re.I | re.S) for t in leituras) if m]
         if not achados:
@@ -440,9 +457,14 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         if estado:
             estado(r["linha"], nome)
 
+    trava_log = threading.Lock()
+
     def registrar(texto, mostrar=True):
-        log.write(texto + "\n")
-        log.flush()
+        with trava_log:
+            if log.closed:
+                return
+            log.write(texto + "\n")
+            log.flush()
         if mostrar:
             aviso(texto)
 
@@ -524,18 +546,23 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
     def esperar_correcao(r, campo_erro):
         """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
         'fim' quando o cursor ja esta no Item (linha completada a mao)."""
-        info = None
         if exe_tesseract:
-            try:
-                info = ler_aviso(capturar(janela), exe_tesseract)
-            except Exception as erro:
-                registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
-        if info:
-            registrar(f'Linha {r["linha"]}: SRP: "{info["texto"]}"')
-            if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
-                aprender_conta(r["item"], r["custo"], info["conta_correta"])
-                registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item {r['item']} "
-                          f"(C/Custo {r['custo']}); guardada para avisar nas proximas planilhas.")
+            tela_do_aviso = capturar(janela)  # captura ja: o usuario pode fechar o aviso a qualquer momento
+
+            def ler_em_segundo_plano():
+                try:
+                    info = ler_aviso(tela_do_aviso, exe_tesseract)
+                except Exception as erro:
+                    registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
+                    return
+                if not info:
+                    return
+                registrar(f'Linha {r["linha"]}: SRP: "{info["texto"]}"')
+                if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
+                    aprender_conta(r["item"], r["custo"], info["conta_correta"])
+                    registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item "
+                              f"{r['item']} (C/Custo {r['custo']}); guardada para avisar nas proximas planilhas.")
+            threading.Thread(target=ler_em_segundo_plano, daemon=True).start()
         registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
                   f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
                   "e clique em Continuar. Se completou a linha a mao, deixe o cursor no Item da linha seguinte.")
@@ -619,7 +646,9 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
                 teclar("digitar", valor); teclar("tab", None, esperar=False)
                 digitados.append(campo)
-                novo = aguardar_mudanca(janela, foco, render)
+                novo = aguardar_mudanca(janela, foco, render, ver_aviso=bool(colunas))
+                if novo == "aviso":
+                    novo = None
                 seguinte = proximo_campo(campo, foco, novo, colunas) if novo else None
                 if seguinte is None and campo == "quantidade" and not tesseract and not colunas:
                     time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo (modo antigo)

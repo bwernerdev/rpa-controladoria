@@ -20,10 +20,15 @@ class SRP:
     def __init__(self, travas, recusar=()):
         self.travas, self.recusar = travas, set(recusar)
         self.linha, self.campo, self.valores, self.lock = 0, "item", [{}], threading.Lock()
+        self.alerta = False  # aviso do SRP na tela (icone vermelho) depois de um Tab recusado
 
     def ordem(self):
         t = self.travas[min(self.linha, len(self.travas) - 1)]
         return [c for c in core.ORDEM if not t.get(c)]
+
+    def tela(self, _janela=None):
+        """(foco, ha aviso): o aviso some quando o usuario resolve o campo recusado."""
+        return self.caixa(), self.alerta and (self.linha, self.campo) in self.recusar
 
     def caixa(self, _janela=None):
         e, _, d, _ = CAIXAS[self.campo]
@@ -34,6 +39,7 @@ class SRP:
         with self.lock:
             if texto == "{TAB}":
                 if (self.linha, self.campo) in self.recusar:
+                    self.alerta = True
                     return
                 ordem = self.ordem()
                 i = ordem.index(self.campo)
@@ -61,7 +67,7 @@ def ambiente(srp, com_cabecalho=True, extras=None):
     """Troca as dependencias de tela/teclado do core pelo SRP simulado; logs e aprendizado vao para uma pasta temporaria."""
     pasta = pathlib.Path(tempfile.mkdtemp())
     trocas = {
-        "send_keys": srp.teclas, "caixa_foco": srp.caixa, "capturar": lambda janela: None,
+        "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela, "capturar": lambda janela: None,
         "localizar_colunas": (lambda imagem, t: dict(CENTROS)) if com_cabecalho else (lambda imagem, t: None),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"), "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer",
         "mouse_no_canto": lambda: False, "janela_citrix": lambda trecho: Janela(), "ler_aviso": lambda imagem, t: None,
