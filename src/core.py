@@ -185,9 +185,21 @@ def janela_citrix(trecho):
     raise LookupError(f"Janela com '{trecho}' no titulo nao encontrada.")
 
 
+def pasta_base():
+    """Pasta do .exe quando empacotado; raiz do projeto no codigo-fonte."""
+    return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+
+
+def citrix_aberto(trecho="Desktop Viewer"):
+    try:
+        janela_citrix(trecho)
+        return True
+    except LookupError:
+        return False
+
+
 def pasta_logs():
-    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-    pasta = base / "logs"
+    pasta = pasta_base() / "logs"
     pasta.mkdir(exist_ok=True)
     return pasta
 

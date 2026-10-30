@@ -8,3 +8,4 @@ dist/
 planilhas/*
 !planilhas/CLAUDE.md
 vendor/tesseract/
+config.json
