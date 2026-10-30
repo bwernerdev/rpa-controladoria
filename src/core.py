@@ -215,6 +215,52 @@ def titulo_janela_ativa():
     return texto.value
 
 
+def palavras_tela(imagem, tesseract, escala=2):
+    """[(texto, esq, topo, larg, alt)] das palavras da imagem (Tesseract em modo de texto esparso)."""
+    cinza = imagem.convert("L").resize((imagem.width * escala, imagem.height * escala), Image.LANCZOS)
+    with tempfile.TemporaryDirectory() as pasta:
+        arquivo = Path(pasta) / "tela.png"
+        cinza.save(arquivo)
+        saida = subprocess.run(
+            [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", "11", "tsv"],
+            capture_output=True, text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    palavras = []
+    for linha in saida.stdout.splitlines()[1:]:
+        campos = linha.split("\t")
+        if len(campos) == 12 and campos[11].strip():
+            esq, topo, larg, alt = (int(v) // escala for v in campos[6:10])
+            palavras.append((campos[11].strip(), esq, topo, larg, alt))
+    return palavras
+
+
+def localizar_colunas(imagem, tesseract):
+    """Centro horizontal das colunas C/Custo, Conta e Quantidade (e Item, se lido) pelo cabecalho da grade.
+    Devolve {'custo': x, 'conta': x, 'quantidade': x[, 'item': x]} ou None se o cabecalho nao for achado."""
+    palavras = palavras_tela(imagem, tesseract)
+    quant = [p for p in palavras if p[0].lower().startswith("quant")]
+    for _, qx, qy, qw, _ in quant:
+        mesma_linha = [p for p in palavras if abs(p[2] - qy) <= 6]
+        colunas = {"quantidade": qx + qw / 2}
+        for texto, x, _, w, _ in mesma_linha:
+            t = texto.lower()
+            if "custo" in t:
+                colunas["custo"] = x + w / 2
+            elif t == "conta":
+                colunas["conta"] = x + w / 2
+            elif t == "item":
+                colunas["item"] = x + w / 2
+        if "custo" in colunas and "conta" in colunas:
+            return colunas
+    return None
+
+
+def qual_coluna(caixa, colunas):
+    """Nome da coluna cujo centro do cabecalho fica mais perto do centro da caixa em foco (None se nenhuma servir)."""
+    centro = (caixa[0] + caixa[2]) / 2
+    nome, x = min(colunas.items(), key=lambda item: abs(item[1] - centro))
+    return nome if abs(x - centro) <= max(40, caixa[2] - caixa[0]) else None
+
+
 def conta_editavel(antes, depois):
     """Conta editavel se o novo foco comeca logo apos o C/Custo (vao menor que 1,5 largura)."""
     largura = antes[2] - antes[0]
@@ -328,7 +374,20 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         janela = janela_citrix(janela_trecho)
         janela.set_focus()
         aviso(f"Clique no campo Item da primeira linha. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
-        for _ in range(espera * 10):
+        inicio_contagem = time.time()
+        colunas = None
+        exe_tesseract = caminho_tesseract()
+        if exe_tesseract:
+            try:
+                colunas = localizar_colunas(capturar(janela), exe_tesseract)
+            except Exception as erro:  # sem cabecalho, segue no modo antigo
+                registrar(f"  leitura do cabecalho falhou: {erro}", mostrar=False)
+        if colunas:
+            registrar(f"  colunas pelo cabecalho: {colunas}", mostrar=False)
+        else:
+            aviso("ATENCAO: nao localizei o cabecalho da grade (C/Custo, Conta, Quantidade). "
+                  "Sem ele o robo nao detecta C/Custo travado: o C/Custo sera sempre digitado.")
+        while time.time() - inicio_contagem < espera:
             if parar.is_set():
                 registrar("Interrompido antes de iniciar.")
                 return 1
@@ -348,28 +407,50 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             marcar(r, "executando")
             t0 = time.time()
             inicial = proximo or caixa_foco(janela)
-            teclar("digitar", r["item"]); teclar("tab", None, esperar=False)
-            antes = aguardar_mudanca(janela, inicial, render)
-            t1 = time.time()
-            teclar("digitar", r["custo"]); teclar("tab", None, esperar=False)
-            depois = aguardar_mudanca(janela, antes, render)
-            t2 = time.time()
-            if not inicial or not antes or not depois:
+            if not inicial:
                 registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado. Interrompido.")
                 return 1
-            editavel = conta_editavel(antes, depois)
-            registrar(f"  linha {r['linha']}: foco C/Custo={antes} depois={depois} editavel={editavel}", mostrar=False)
+            teclar("digitar", r["item"]); teclar("tab", None, esperar=False)
+            foco = aguardar_mudanca(janela, inicial, render)
+            t1 = time.time()
+            if not foco:
+                registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois do Item. Interrompido.")
+                return 1
+            # Depois do Item o foco vai para o C/Custo, ou pula para Conta/Quantidade quando o C/Custo esta travado.
+            campo = qual_coluna(foco, colunas) if colunas else "custo"
+            custo_travado = campo != "custo"
+            if not custo_travado:
+                foco_custo = foco
+                teclar("digitar", r["custo"]); teclar("tab", None, esperar=False)
+                foco = aguardar_mudanca(janela, foco_custo, render)
+                if not foco:
+                    registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois do C/Custo. Interrompido.")
+                    return 1
+                if colunas:
+                    campo = qual_coluna(foco, colunas)
+                else:
+                    campo = "conta" if conta_editavel(foco_custo, foco) else "quantidade"
+            t2 = time.time()
+            editavel = campo == "conta"
             if editavel:
                 if not r["conta"]:
                     registrar(f"Linha {r['linha']}: Conta editavel mas em branco na planilha. Interrompido.")
                     return 1
-                teclar("digitar", r["conta"]); teclar("tab", None)
-                if coluna_qtd is None:
-                    foco = caixa_foco(janela)
-                    if foco:
-                        coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
-            elif coluna_qtd is None:
-                coluna_qtd = (depois[0], depois[2], depois[3] - depois[1])
+                foco_conta = foco
+                teclar("digitar", r["conta"]); teclar("tab", None, esperar=False)
+                foco = aguardar_mudanca(janela, foco_conta, render)
+                if not foco:
+                    registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois da Conta. Interrompido.")
+                    return 1
+                campo = qual_coluna(foco, colunas) if colunas else "quantidade"
+            registrar(f"  linha {r['linha']}: C/Custo={'travado' if custo_travado else 'digitado'} "
+                      f"Conta={'digitada' if editavel else 'travada'} foco_final={foco} campo={campo}", mostrar=False)
+            if campo != "quantidade":
+                registrar(f"Linha {r['linha']}: esperava o foco na Quantidade, mas ele esta em '{campo or 'campo desconhecido'}'. "
+                          "Nada foi digitado na Quantidade. Interrompido.")
+                return 1
+            if coluna_qtd is None:
+                coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
             teclar("digitar", r["quantidade"].replace(".", ","))
             referencia = (coluna_qtd[0], inicial[1], coluna_qtd[1], inicial[1] + coluna_qtd[2]) if coluna_qtd else None
             teclar("tab", None, esperar=False)
@@ -395,7 +476,8 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             registrar(f"  linha {r['linha']}: tempos (s) item_tab={t1 - t0:.2f} custo_tab={t2 - t1:.2f} "
                       f"digitar_conta_qtd={t3 - t2:.2f} resposta_tab_qtd={t4 - t3:.2f} ocr={t5 - t4:.2f}", mostrar=False)
             conta = "digitada " + r["conta"] if editavel else "travada"
-            registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
+            custo = "travado" if custo_travado else r["custo"]
+            registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}")
             marcar(r, "ok")
         falha = revisar(aguardar=True)
         if falha:

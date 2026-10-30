@@ -4,7 +4,9 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 ## Contexto que importa
 - O SRP roda dentro do **Citrix** (janela "Corporativo - Desktop Viewer"): so existe imagem, `pywinauto` NAO enxerga os campos. O robo envia teclas e le a tela por pixels.
 - Campo em foco = bloco ciano puro `(0,255,255)`. Conta editavel se o novo foco comeca logo apos o C/Custo (vao < 1,5 largura); se pular para longe, a Conta esta travada e o robo vai direto para Quantidade.
-- Sequencia por linha: Item, Tab, C/Custo, Tab, [Conta, Tab], Quantidade, Tab (ja desce para a proxima linha).
+- Sequencia por linha: Item, Tab, [C/Custo, Tab], [Conta, Tab], Quantidade, Tab (ja desce para a proxima linha). C/Custo e Conta podem vir travados: o foco pula o campo.
+- Qual campo esta em foco: no inicio o Tesseract le o cabecalho da grade (`localizar_colunas`) e cada caixa ciano e classificada pela coluna mais proxima (`qual_coluna`). Sem cabecalho: C/Custo sempre digitado e Conta pela regra do vao (`conta_editavel`).
+- O SRP soma itens repetidos na mesma linha: a conferencia da quantidade da alarme falso nesses itens (o app avisa ao carregar).
 - Planilha: cabecalho exato `Item`, `C/Custo`, `Conta`, `Quantidade`. Valores so digitaveis; zeros a esquerda preservados se a celula for texto.
 
 ## Mapa
