@@ -11,8 +11,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar, gravar_progresso, itens_repetidos,
-                  ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
+from core import (VK_F8, VK_F9, atalhos_globais, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
+                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
 
@@ -147,6 +147,8 @@ class App(RaizTk):
         self.fila = queue.Queue()
         self.parar = threading.Event()
         self.retomar = threading.Event()  # botao Continuar durante uma pausa
+        self.pausar = threading.Event()  # F9: pausa ao terminar a linha atual
+        self.soltar_atalhos = None
         self.pausado = False
         self.thread = None
         self.concluidas = 0
@@ -417,10 +419,16 @@ class App(RaizTk):
             while True:
                 item = self.fila.get_nowait()
                 if item is None:
+                    if self.soltar_atalhos:
+                        self.soltar_atalhos()
+                        self.soltar_atalhos = None
                     self.ocupado = False
                     self.pausado = False
+                    self.pausar.clear()
                     self._atualizar_botoes()
                     self._fim_da_execucao()
+                elif isinstance(item, tuple) and item[0] == "tecla":
+                    self._tecla(item[1])
                 elif isinstance(item, tuple) and item[0] == "citrix":
                     if item[1] != self.citrix:
                         self.citrix = item[1]
@@ -494,6 +502,20 @@ class App(RaizTk):
             self.retomar.set()
         elif not self.ocupado:
             self.iniciar(True)
+
+    def _tecla(self, nome):
+        """Atalhos globais durante a execucao: F9 pausa (ao fim da linha) ou continua; F8 para."""
+        if not self.ocupado:
+            return
+        if nome == "parar":
+            self.escrever("F8: parando.")
+            self.parar.set()
+        elif self.pausado:
+            self.continuar()
+        elif not self.pausar.is_set():
+            self.pausar.set()
+            self.escrever("F9: o robo pausa ao terminar a linha atual.")
+            self._status("Pausando ao fim da linha...", "aviso")
 
     def _fim_da_execucao(self):
         if self.registros and self.concluidas == len(self.registros):
@@ -641,14 +663,21 @@ class App(RaizTk):
         self.barra.configure(value=self.concluidas, maximum=len(self.registros))
         self._status("Iniciando...", "destaque")
         self.ocupado = True
+        self.pausar.clear()
         self._atualizar_botoes()
+        self.soltar_atalhos, falhas = atalhos_globais({VK_F9: lambda: self.fila.put(("tecla", "pausa")),
+                                                       VK_F8: lambda: self.fila.put(("tecla", "parar"))})
+        if falhas:
+            self.escrever("Aviso: F8/F9 ja estao em uso por outro programa; use os botoes ou o mouse no canto.")
+        else:
+            self.escrever("Atalhos: F9 pausa ao fim da linha (e continua), F8 para.")
         self.thread = threading.Thread(target=self._rodar, args=(registros, pausa, self.conferir.get()), daemon=True)
         self.thread.start()
 
     def _rodar(self, registros, pausa, conferir):
         try:
             executar(registros, "Desktop Viewer", pausa, 4.0, 5, self.parar, self.fila.put,
-                     lambda linha, nome: self.fila.put((linha, nome)), conferir, self.retomar)
+                     lambda linha, nome: self.fila.put((linha, nome)), conferir, self.retomar, self.pausar)
         finally:
             self.fila.put(None)
 

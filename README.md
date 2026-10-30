@@ -7,13 +7,13 @@ O robô só digita e confere. Ele nunca faz login nem corrige dado sozinho: quan
 ## Instalar
 
 1. Em [Releases](../../releases), baixe o `RPA-SRP-vX.Y.Z.zip` mais recente.
-2. Extraia numa pasta sua (ex.: `Documentos\RPA-SRP`). A pasta fica assim:
-   ```
-   RPA-SRP.exe
-   tesseract\        leitura da tela (OCR); precisa ficar ao lado do exe
-   planilhas\BASE PADRAO.xlsx
-   ```
-3. Abra o `RPA-SRP.exe`. Não precisa instalar nada.
+2. Extraia o zip (botão direito → Extrair tudo).
+3. Dê duplo clique em **`instalar.cmd`**. Ele copia o app para `%LOCALAPPDATA%\Programs\RPA-SRP` (sem precisar de administrador) e cria o atalho **Robô SRP** na área de trabalho e no menu Iniciar.
+4. Abra pelo atalho. A pasta extraída pode ser apagada.
+
+Para **atualizar**, faça o mesmo com o zip novo (feche o app antes). Configurações, contas aprendidas, andamento e logs são mantidos.
+
+Sem instalar: o `RPA-SRP.exe` também roda direto da pasta extraída, desde que a pasta `tesseract\` (leitura da tela) fique ao lado dele.
 
 Na primeira vez o Windows pode levar alguns segundos a mais para abrir (verificação do antivírus).
 
@@ -37,7 +37,10 @@ Use `planilhas\BASE PADRAO.xlsx` como modelo. A linha 1 tem que ter exatamente:
    - contas que o SRP já recusou antes para o mesmo item e C/Custo.
 3. **Simular** mostra o que seria digitado, sem enviar nada.
 4. **Iniciar**: depois do OK você tem 5 segundos para clicar no campo **Item** da primeira linha livre do SRP.
-5. Para abortar: botão **Parar**, ou leve o mouse ao canto superior esquerdo da tela.
+5. Atalhos enquanto o robô roda, mesmo com o foco no Citrix:
+   - **F9** pausa ao terminar a linha atual. Com ele pausado, F9 de novo continua, igual ao botão **Continuar**.
+   - **F8** para.
+   - Também param: o botão **Parar**, ou levar o mouse ao canto superior esquerdo da tela.
 
 ### Quando ele pausa
 

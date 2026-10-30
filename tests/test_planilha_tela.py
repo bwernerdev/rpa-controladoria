@@ -54,6 +54,17 @@ class Tela(unittest.TestCase):
         self.assertTrue(600 <= esq <= 604 and 706 <= dir_ <= 711 and 200 <= topo <= 204)
         self.assertIsNone(core.maior_caixa_ciano(Image.new("RGB", (50, 50), (255, 255, 255))))
 
+    def test_icone_do_aviso_ignora_outros_vermelhos(self):
+        imagem = Image.new("RGB", (900, 500), (240, 240, 240))
+        d = ImageDraw.Draw(imagem)
+        d.rectangle((20, 400, 600, 440), fill=(255, 0, 0))   # faixa vermelha grande (nao e o icone)
+        d.rectangle((700, 20, 703, 300), fill=(255, 0, 0))   # traco vermelho fino
+        self.assertIsNone(core.icone_aviso(imagem))
+        d.ellipse((300, 100, 322, 122), fill=(255, 0, 0))    # icone ~22 px
+        esq, topo, dir_, base = core.icone_aviso(imagem)
+        self.assertTrue(298 <= esq <= 306 and 98 <= topo <= 106 and 316 <= dir_ <= 324)
+        self.assertLessEqual(core.maior_caixa_cor(imagem, "vermelho")[0], 24)  # o maior vermelho continua sendo a faixa
+
     def test_coluna_do_foco(self):
         self.assertEqual(core.qual_coluna((424, 503, 466, 514), CENTROS), "custo")
         self.assertEqual(core.qual_coluna((475, 503, 499, 514), CENTROS), "conta")

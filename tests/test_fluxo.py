@@ -136,6 +136,29 @@ class PausaPorAviso(unittest.TestCase):
         self.assertFalse((pasta / "aprendizado.json").exists())
 
 
+class PausaPorF9(unittest.TestCase):
+    def test_pausa_no_fim_da_linha_e_continua(self):
+        srp = SRP([LIVRE] * 3)
+        pausar, retomar = threading.Event(), threading.Event()
+        pausas = []
+
+        def estado(linha, nome):
+            if nome == "ok" and linha == 2:
+                pausar.set()  # F9 durante a linha 2: so pausa antes da linha 3
+            if nome == "pausado":
+                pausas.append(linha)
+                threading.Timer(0.2, retomar.set).start()  # usuario clica em Continuar (cursor ja no Item)
+        avisos = []
+        with ambiente(srp):
+            codigo = core.executar(registros(3), "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado,
+                                   False, retomar, pausar)
+        self.assertEqual(codigo, 0)
+        self.assertEqual(pausas, [3])
+        self.assertEqual([v.get("quantidade") for v in srp.valores[:3]], ["1", "2", "3"])
+        self.assertTrue(any("F9" in a for a in avisos))
+        self.assertFalse(pausar.is_set())
+
+
 class PausaPorQuantidade(unittest.TestCase):
     """O OCR (simulado) le na linha 3 uma quantidade diferente da planilha."""
 

@@ -80,7 +80,7 @@ def ambiente(srp, com_cabecalho=True, extras=None):
         yield pasta
 
 
-def executar(srp, regs, retomar=None, ao_pausar=None, conferir=False, render=0.3):
+def executar(srp, regs, retomar=None, ao_pausar=None, conferir=False, render=0.3, pausar=None):
     """Roda core.executar; `ao_pausar(srp, retomar, linha)` e chamado (em outra thread) a cada pausa."""
     avisos, estados = [], []
 
@@ -89,5 +89,6 @@ def executar(srp, regs, retomar=None, ao_pausar=None, conferir=False, render=0.3
         if nome == "pausado" and ao_pausar:
             threading.Thread(target=ao_pausar, args=(srp, retomar, linha), daemon=True).start()
 
-    codigo = core.executar(regs, "Desktop Viewer", 0, render, 0, threading.Event(), avisos.append, estado, conferir, retomar)
+    codigo = core.executar(regs, "Desktop Viewer", 0, render, 0, threading.Event(), avisos.append, estado, conferir, retomar,
+                           pausar)
     return codigo, avisos, estados

@@ -2,7 +2,7 @@
 # Feche o RPA-SRP antes. O exe acha o Tesseract em vendor\tesseract (ou numa pasta tesseract ao lado dele).
 # Abertura medida (30/10/2026): ~4,6 s, quase tudo antes do Python comecar (verificacao do Windows/antivirus);
 # o formato de pasta (--onedir) deu o mesmo tempo, por isso ficou o arquivo unico.
-# Depois do exe, monta release\RPA-SRP-vX.Y.Z.zip (exe + tesseract\ + BASE PADRAO.xlsx) para anexar no GitHub Releases;
+# Depois do exe, monta release\RPA-SRP-vX.Y.Z.zip (exe + tesseract\ + BASE PADRAO.xlsx + instalar.cmd) para o GitHub Releases;
 # o exe e o zip nao vao ao git.
 $raiz = $PWD.Path
 & "$raiz\.venv\Scripts\python.exe" src\icone.py
@@ -18,6 +18,7 @@ New-Item -ItemType Directory -Force "$pacote\planilhas", "$raiz\release" | Out-N
 Copy-Item "$raiz\RPA-SRP.exe" $pacote
 Copy-Item "$raiz\vendor\tesseract" "$pacote\tesseract" -Recurse
 Copy-Item "$raiz\planilhas\BASE PADRAO.xlsx" "$pacote\planilhas"
+Copy-Item "$raiz\scripts\instalar.cmd", "$raiz\scripts\instalar.ps1" $pacote
 $zip = "$raiz\release\RPA-SRP-v$versao"
 # shutil em vez de Compress-Archive: o do PowerShell 5.1 grava caminhos com "\" (outros descompactadores reclamam)
 & "$raiz\.venv\Scripts\python.exe" -c "import shutil, sys; shutil.make_archive(sys.argv[1], 'zip', sys.argv[2])" $zip $pacote

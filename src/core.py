@@ -105,12 +105,19 @@ CORES = {
 
 
 def _mascara_cor(imagem, cor="ciano"):
+    """(mascara erodida, deslocamento x, y) so da area onde a cor aparece: o filtro de erosao na tela inteira custava
+    ~50 ms por consulta; sem a cor na tela (o vermelho do aviso, quase sempre) devolve (None, 0, 0) na hora."""
     r, g, b = imagem.convert("RGB").split()
     tr, tg, tb = CORES[cor]
     mascara = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if tr(v) else 0),
                                                       g.point(lambda v: 255 if tg(v) else 0)),
                                   b.point(lambda v: 255 if tb(v) else 0))
-    return mascara.filter(ImageFilter.MinFilter(5))
+    caixa = mascara.getbbox()
+    if not caixa:
+        return None, 0, 0
+    esq, topo = max(caixa[0] - 3, 0), max(caixa[1] - 3, 0)
+    recorte = mascara.crop((esq, topo, min(caixa[2] + 3, mascara.width), min(caixa[3] + 3, mascara.height)))
+    return recorte.filter(ImageFilter.MinFilter(5)), esq, topo
 
 
 def _trechos(valores):
@@ -131,29 +138,41 @@ def maior_caixa_ciano(imagem):
     return maior_caixa_cor(imagem, "ciano")
 
 
-def maior_caixa_cor(imagem, cor):
-    """Retangulo (esq, topo, dir, base) do maior bloco ciano puro; ignora pixels ciano soltos.
+def caixas_cor(imagem, cor):
+    """Retangulos (esq, topo, dir, base) dos blocos da cor pura; ignora pixels soltos.
     Trabalha por faixas (getbbox/resize em C): ~100x mais rapido que percorrer pixel a pixel, e nao trava a janela."""
-    mascara = _mascara_cor(imagem, cor)
-    caixa_total = mascara.getbbox()
+    mascara, dx, dy = _mascara_cor(imagem, cor)
+    caixa_total = mascara.getbbox() if mascara else None
     if not caixa_total:
-        return None
-    esq0, topo0, dir0, base0 = caixa_total
+        return []
+    esq0, topo0 = caixa_total[0] + dx, caixa_total[1] + dy
     regiao = mascara.crop(caixa_total)
     largura, altura = regiao.size
     linhas = [regiao.crop((0, y, largura, y + 1)).getbbox() is not None for y in range(altura)]
-    melhor = None
+    caixas = []
     for y_ini, y_fim in _trechos(linhas):
         faixa = regiao.crop((0, y_ini, largura, y_fim))
         colunas = list(faixa.resize((largura, 1), Image.BOX).tobytes())
         for x_ini, x_fim in _trechos(colunas):
             bloco = faixa.crop((x_ini, 0, x_fim, y_fim - y_ini)).getbbox()
-            if not bloco:
-                continue
-            area = (bloco[2] - bloco[0]) * (bloco[3] - bloco[1])
-            if melhor is None or area > melhor[0]:
-                melhor = (area, (esq0 + x_ini + bloco[0], topo0 + y_ini + bloco[1], esq0 + x_ini + bloco[2], topo0 + y_ini + bloco[3]))
-    return melhor[1] if melhor else None
+            if bloco:
+                caixas.append((esq0 + x_ini + bloco[0], topo0 + y_ini + bloco[1], esq0 + x_ini + bloco[2], topo0 + y_ini + bloco[3]))
+    return caixas
+
+
+def maior_caixa_cor(imagem, cor):
+    """Maior bloco da cor pura (ex.: o campo em foco, ciano)."""
+    caixas = caixas_cor(imagem, cor)
+    return max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if caixas else None
+
+
+def icone_aviso(imagem):
+    """Icone vermelho do aviso do SRP: bloco vermelho quase quadrado de 8 a 60 px (ja erodido pelo filtro).
+    Outros vermelhos da tela (texto, faixas, botoes) sao descartados; antes o maior vermelho virava o "icone" e o
+    recorte do aviso pegava a tela inteira."""
+    candidatos = [c for c in caixas_cor(imagem, "vermelho")
+                  if 8 <= c[2] - c[0] <= 60 and 8 <= c[3] - c[1] <= 60 and 0.6 <= (c[2] - c[0]) / (c[3] - c[1]) <= 1.6]
+    return max(candidatos, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if candidatos else None
 
 
 def capturar(janela):
@@ -162,16 +181,14 @@ def capturar(janela):
 
 
 def caixa_foco(janela):
-    """Retângulo do campo em foco (ciano) na janela do Citrix."""
+    """RetÃ¢ngulo do campo em foco (ciano) na janela do Citrix."""
     return maior_caixa_ciano(capturar(janela))
 
 
 def estado_tela(janela):
     """(caixa do foco ciano, ha aviso do SRP na tela) a partir de uma unica captura."""
     imagem = capturar(janela)
-    icone = maior_caixa_cor(imagem, "vermelho")
-    tem_aviso = bool(icone) and (icone[2] - icone[0]) >= 8 and (icone[3] - icone[1]) >= 8  # ignora pontos vermelhos soltos
-    return maior_caixa_ciano(imagem), tem_aviso
+    return maior_caixa_ciano(imagem), icone_aviso(imagem) is not None
 
 
 def caminho_tesseract():
@@ -200,7 +217,7 @@ def ocr_numero(imagem, tesseract, psm=7, escala=6):
         saida = subprocess.run(
             [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", str(psm),
              "-c", "tessedit_char_whitelist=0123456789.,-"],
-            capture_output=True, text=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     limpo = saida.stdout.strip().replace(",", ".")
     try:
         return float(limpo)
@@ -240,7 +257,7 @@ def aguardar_mudanca(janela, referencia, limite, ver_aviso=False):
             atual = caixa_foco(janela)
         if atual and referencia and (abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
             return atual
-        time.sleep(0.05)
+        time.sleep(0.02)  # cada volta ja custa ~60 ms (captura + busca das cores)
     return None
 
 
@@ -261,7 +278,7 @@ def palavras_tela(imagem, tesseract, escala=2):
         cinza.save(arquivo)
         saida = subprocess.run(
             [str(tesseract), str(arquivo), "stdout", "--tessdata-dir", str(tesseract.parent / "tessdata"), "--psm", "11", "tsv"],
-            capture_output=True, text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     palavras = []
     for linha in saida.stdout.splitlines()[1:]:
         campos = linha.split("\t")
@@ -274,11 +291,11 @@ def palavras_tela(imagem, tesseract, escala=2):
 def ler_aviso(imagem, tesseract):
     """Le a janela de aviso do SRP (localizada pelo icone vermelho). Devolve {'texto', 'item', 'custo', 'conta_correta'}
     ou None. O OCR erra digitos de vez em quando (8712 -> 3712): le de 5 jeitos e so aceita a conta da maioria."""
-    icone = maior_caixa_cor(imagem, "vermelho")
+    icone = icone_aviso(imagem)
     if not icone:
         return None
     esq, topo, dir_, base = icone
-    f = max(dir_ - esq, 10) / 19  # o icone detectado tem ~19 px a 100% de escala; a janela de aviso tem ~380 x 110
+    f = min(max(dir_ - esq, 10) / 19, 2.5)  # o icone detectado tem ~19 px a 100% de escala; a janela de aviso tem ~380 x 110
     recorte = imagem.crop((max(0, esq - int(40 * f)), max(0, topo - int(60 * f)),
                            min(imagem.width, esq + int(420 * f)), min(imagem.height, base + int(60 * f))))
     r, g, b = recorte.convert("RGB").split()
@@ -372,6 +389,40 @@ def conta_editavel(antes, depois):
     """Conta editavel se o novo foco comeca logo apos o C/Custo (vao menor que 1,5 largura)."""
     largura = antes[2] - antes[0]
     return (depois[0] - antes[2]) < largura * 1.5
+
+
+VK_F8, VK_F9 = 0x77, 0x78
+
+
+def atalhos_globais(acoes):
+    """Teclas globais do Windows (funcionam com o foco em outra janela): `acoes` = {codigo_vk: funcao}.
+    As funcoes rodam na thread das teclas. Devolve (soltar, teclas_que_falharam); chamar soltar() libera as teclas.
+    Se o Citrix capturar o teclado (tela cheia), as teclas podem nao chegar: o mouse no canto continua valendo."""
+    import ctypes.wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    pronto, info = threading.Event(), {"falhas": list(acoes)}
+    mapa = dict(enumerate(acoes, 1))
+
+    def laco():
+        info["thread"] = kernel32.GetCurrentThreadId()
+        registrados = [i for i, vk in mapa.items() if user32.RegisterHotKey(None, i, 0x4000, vk)]  # 0x4000 = sem repeticao
+        info["falhas"] = [vk for i, vk in mapa.items() if i not in registrados]
+        pronto.set()
+        msg = ctypes.wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == 0x0312 and msg.wParam in mapa:  # WM_HOTKEY
+                acoes[mapa[msg.wParam]]()
+        for i in registrados:
+            user32.UnregisterHotKey(None, i)
+
+    threading.Thread(target=laco, daemon=True).start()
+    pronto.wait(2)
+
+    def soltar():
+        if "thread" in info:
+            user32.PostThreadMessageW(info["thread"], 0x0012, 0, 0)  # WM_QUIT encerra o laco e libera as teclas
+
+    return soltar, info["falhas"]
 
 
 def mouse_no_canto():
@@ -491,12 +542,14 @@ def proximo_campo(atual, caixa_antes, caixa_depois, colunas):
     return "quantidade" if atual == "conta" else "fim"
 
 
-def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False, retomar=None):
+def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False, retomar=None,
+             pausar=None):
     """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento;
     `estado(linha, nome)` (opcional) recebe 'executando', 'pausado', 'ok' ou 'erro' por linha;
     `conferir` le a Quantidade na tela (OCR) antes de confirmar cada linha;
     `retomar` (threading.Event, opcional): se o SRP nao avancar (aviso na tela), o robo PAUSA e espera esse
-    evento (botao Continuar) em vez de interromper. Sem ele, interrompe como antes. Devolve 0 se concluiu."""
+    evento (botao Continuar) em vez de interromper. Sem ele, interrompe como antes.
+    `pausar` (threading.Event, opcional; F9): pausa ao terminar a linha atual e espera `retomar`. Devolve 0 se concluiu."""
     tesseract = caminho_tesseract() if conferir else None
     limpar_logs()
     log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
@@ -544,9 +597,10 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         """`esperar=False` em Tab seguido de aguardar_mudanca (a propria espera do foco sincroniza)."""
         if parar.is_set() or mouse_no_canto():
             raise KeyboardInterrupt
-        send_keys("{TAB}" if acao == "tab" else valor.replace(",", "{,}"), pause=0.05)
+        # 0,03 s por tecla (era 0,05): o Citrix recebe as teclas em ordem; a sincronizacao real e o foco mudar apos o Tab
+        send_keys("{TAB}" if acao == "tab" else valor.replace(",", "{,}"), pause=0.03)
         if acao == "digitar":
-            time.sleep(min(pausa, 0.1))
+            time.sleep(min(pausa, 0.05))
         elif esperar:
             time.sleep(pausa)
 
@@ -593,6 +647,29 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         if estado:
             estado(linha, "ok")
         return True
+
+    def pausa_pedida(r):
+        """F9: pausa antes de comecar a linha `r`; volta quando o cursor estiver no Item e o usuario continuar."""
+        pausar.clear()
+        registrar(f"Pausado antes da linha {r['linha']} (F9). Para continuar: deixe o cursor no Item da linha "
+                  f"{r['linha']} no SRP e clique em Continuar (ou F9).")
+        if estado:
+            estado(r["linha"], "pausado")
+        while True:
+            esperar_continuar()
+            pausar.clear()
+            janela.set_focus()
+            aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(janela)
+            if caixa and (not colunas or qual_coluna(caixa, colunas) == "item"):
+                return caixa
+            registrar(f"Ainda pausado: deixe o cursor no Item da linha {r['linha']} e clique em Continuar (ou F9).")
+            if estado:
+                estado(r["linha"], "pausado")
 
     def esperar_correcao(r, campo_erro):
         """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
@@ -680,6 +757,8 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 if not tratar_divergencia(falha):
                     return 1
                 falha = revisar()
+            if pausar is not None and pausar.is_set() and retomar is not None:
+                proximo = pausa_pedida(r)
             marcar(r, "executando")
             t0 = time.time()
             inicial = proximo or caixa_foco(janela)
