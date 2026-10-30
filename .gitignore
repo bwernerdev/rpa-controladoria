@@ -6,6 +6,8 @@ dist/
 release/
 RPA-SRP.exe
 progresso.json
+logs/
+aprendizado.json
 planilhas/*
 !planilhas/CLAUDE.md
 !planilhas/BASE PADRAO.xlsx
