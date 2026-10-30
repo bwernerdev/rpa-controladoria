@@ -7,7 +7,8 @@
 $raiz = $PWD.Path
 & "$raiz\.venv\Scripts\python.exe" src\icone.py
 & "$raiz\.venv\Scripts\python.exe" scripts\gerar_versao.py
-& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src --collect-all tkinterdnd2 --splash "$raiz\assets\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
+& "$raiz\.venv\Scripts\python.exe" scripts\gerar_splash.py  # a tela de abertura mostra a versao: refeita a cada build
+& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src --collect-all tkinterdnd2 --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou" }
 $ErrorActionPreference = "Stop"  # so depois do PyInstaller: no PowerShell 5.1 o INFO dele no stderr vira erro
 
