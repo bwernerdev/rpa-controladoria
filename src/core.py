@@ -275,11 +275,14 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
                 return 1
             marcar(r, "executando")
+            t0 = time.time()
             inicial = proximo or caixa_foco(janela)
             teclar("digitar", r["item"]); teclar("tab", None, esperar=False)
             antes = aguardar_mudanca(janela, inicial, render)
+            t1 = time.time()
             teclar("digitar", r["custo"]); teclar("tab", None, esperar=False)
             depois = aguardar_mudanca(janela, antes, render)
+            t2 = time.time()
             if not inicial or not antes or not depois:
                 registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado. Interrompido.")
                 return 1
@@ -299,7 +302,9 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             teclar("digitar", r["quantidade"].replace(".", ","))
             referencia = (coluna_qtd[0], inicial[1], coluna_qtd[1], inicial[1] + coluna_qtd[2]) if coluna_qtd else None
             teclar("tab", None, esperar=False)
+            t3 = time.time()
             proximo = aguardar_mudanca(janela, referencia, render) if referencia else None
+            t4 = t5 = time.time()
             if not proximo and not tesseract:
                 time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo
             if tesseract:
@@ -314,6 +319,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 celula = (coluna_qtd[0], topo, coluna_qtd[1], topo + coluna_qtd[2])
                 esperada = float(r["quantidade"].replace(",", "."))
                 confere, lidas, recorte = ler_celula(janela, tesseract, celula, esperada)
+                t5 = time.time()
                 registrar(f"  linha {r['linha']}: quantidade lidas={lidas} esperada={esperada} celula={celula}", mostrar=False)
                 if not confere:
                     pasta_ocr = pasta_logs() / "ocr"
@@ -322,6 +328,8 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     registrar(f"Linha {r['linha']}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
                               "A linha ja foi confirmada no SRP: corrija-a. Imagem lida em logs/ocr.")
                     return 1
+            registrar(f"  linha {r['linha']}: tempos (s) item_tab={t1 - t0:.2f} custo_tab={t2 - t1:.2f} "
+                      f"digitar_conta_qtd={t3 - t2:.2f} resposta_tab_qtd={t4 - t3:.2f} ocr={t5 - t4:.2f}", mostrar=False)
             conta = "digitada " + r["conta"] if editavel else "travada"
             registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
             marcar(r, "ok")
