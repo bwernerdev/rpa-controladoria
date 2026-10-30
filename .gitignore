@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.env
+logs/
+saida/
+build/
+dist/
+planilhas/*
+!planilhas/CLAUDE.md
