@@ -159,9 +159,12 @@ def caminho_tesseract():
     return None
 
 
-def preparar_ocr(imagem, escala=6, limiar=160):
-    """Preto e branco (descarta a moldura clara da celula e o fundo ciano), ampliacao e margem branca para o Tesseract."""
-    pb = imagem.convert("L").point(lambda v: 0 if v < limiar else 255)
+def preparar_ocr(imagem, escala=6, limiar=120):
+    """Preto e branco (descarta a moldura clara da celula e o fundo ciano), ampliacao e margem branca para o Tesseract.
+    Usa o canal de cor mais escuro de cada pixel, nao a luminancia: o ClearType desenha os digitos com franjas
+    coloridas e, pela luminancia, parte do "5" sumia (45.0000 era lido como 4.0)."""
+    r, g, b = imagem.convert("RGB").split()
+    pb = ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 0 if v < limiar else 255)
     pb = pb.resize((pb.width * escala, pb.height * escala), Image.LANCZOS)
     return ImageOps.expand(pb, border=30, fill=255)
 
