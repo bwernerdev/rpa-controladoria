@@ -1,4 +1,5 @@
 """Janela do robo do SRP: arrastar a planilha, simular, preencher, retomar e recarregar."""
+import ctypes
 import json
 import os
 import queue
@@ -40,6 +41,42 @@ FONTE = "Segoe UI"
 FONTE_FORTE = "Segoe UI Semibold"
 ESTADOS = {"pendente": "Pendente", "executando": "Em andamento", "ok": "Concluída", "erro": "Erro"}
 ARQUIVO_CONFIG = pasta_base() / "config.json"
+ESCALA = 1.0  # DPI do monitor / 96; tamanhos em pixels passam por px()
+
+
+def px(valor):
+    return max(1, round(valor * ESCALA))
+
+
+def fonte(pontos, forte=False, mono=False):
+    """Fonte com tamanho em pixels da escala atual (tamanho negativo = pixels no Tk): nao depende do cache do
+    tk scaling, que deixava parte das fontes no tamanho do monitor anterior."""
+    familia = "Consolas" if mono else (FONTE_FORTE if forte else FONTE)
+    return (familia, -max(1, round(pontos * ESCALA * 96 / 72)))
+
+
+def ativar_dpi():
+    """Declara ao Windows que o app desenha na escala de cada monitor (sem isso, a 150% a janela fica desfocada).
+    Precisa rodar antes de criar qualquer janela."""
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # por monitor (v2)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+def dpi_da_janela(janela):
+    try:
+        return ctypes.windll.user32.GetDpiForWindow(int(janela.wm_frame(), 16)) or 96
+    except (AttributeError, OSError, ValueError):
+        return 96
 
 
 def ler_config():
@@ -60,8 +97,8 @@ class BarraFina(tk.Frame):
     """Barra de progresso de 4 px; aceita configure(value=, maximum=) e barra["value"] como a ttk.Progressbar."""
 
     def __init__(self, pai):
-        super().__init__(pai, bg=COR["borda"], height=4)
-        self.preenchido = tk.Frame(self, bg=COR["destaque"], height=4)
+        super().__init__(pai, bg=COR["borda"], height=px(4))
+        self.preenchido = tk.Frame(self, bg=COR["destaque"], height=px(4))
         self._valor, self._maximo = 0, 1
         self._desenhar()
 
@@ -88,13 +125,16 @@ class BarraFina(tk.Frame):
 
 class App(RaizTk):
     def __init__(self):
+        ativar_dpi()
         super().__init__()
+        self.dpi = 96
+        self._aplicar_escala(self.winfo_fpixels("1i"))
         self.config_usuario = ler_config()
         self.tema = self.config_usuario.get("tema", "claro") if self.config_usuario.get("tema") in PALETAS else "claro"
         COR.update(PALETAS[self.tema])
         self.title(f"{NOME} v{VERSAO}")
-        self.geometry("880x700")
-        self.minsize(800, 600)
+        self.geometry(f"{px(880)}x{px(700)}")
+        self.minsize(px(800), px(600))
         self._icone = ImageTk.PhotoImage(desenhar(64))
         self.iconphoto(True, self._icone)
         self.registros, self.iids, self.estados = [], {}, {}
@@ -115,10 +155,32 @@ class App(RaizTk):
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._soltou)
         self._construir()
+        self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
 
     # ---------- visual ----------
+    def _aplicar_escala(self, dpi):
+        global ESCALA
+        self.dpi = round(dpi)
+        ESCALA = self.dpi / 96
+        self.tk.call("tk", "scaling", self.dpi / 72)  # fontes em pontos acompanham o DPI
+
+    def _talvez_mudou_monitor(self, evento):
+        """Ao arrastar para um monitor de outra escala, refaz a janela no tamanho certo (o tkinter nao faz sozinho)."""
+        if evento.widget is not self:
+            return
+        novo = dpi_da_janela(self)
+        if novo == self.dpi:
+            return
+        proporcao = novo / self.dpi
+        largura, altura = self.winfo_width(), self.winfo_height()
+        self._aplicar_escala(novo)
+        self.iids = {}
+        self._construir()
+        self.minsize(px(800), px(600))
+        self.geometry(f"{round(largura * proporcao)}x{round(altura * proporcao)}")
+
     def _construir(self):
         for filho in self.winfo_children():
             filho.destroy()
@@ -130,11 +192,11 @@ class App(RaizTk):
     def _estilos(self):
         estilo = ttk.Style(self)
         estilo.theme_use("clam")
-        estilo.configure(".", font=(FONTE, 10), background=COR["fundo"], foreground=COR["texto"])
-        base = dict(padding=(14, 6), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
+        estilo.configure(".", font=fonte(10), background=COR["fundo"], foreground=COR["texto"])
+        base = dict(padding=(px(14), px(6)), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
                     darkcolor=COR["cartao"])
         estilo.configure("Primario.TButton", **{**base, "lightcolor": COR["destaque"], "darkcolor": COR["destaque"]},
-                         font=(FONTE_FORTE, 10), background=COR["destaque"], foreground=COR["no_destaque"],
+                         font=fonte(10, forte=True), background=COR["destaque"], foreground=COR["no_destaque"],
                          bordercolor=COR["destaque"])
         estilo.map("Primario.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])],
                    foreground=[("disabled", COR["suave"])], bordercolor=[("disabled", COR["borda"]), ("active", COR["destaque_hover"])],
@@ -142,21 +204,21 @@ class App(RaizTk):
                    darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])])
         for nome, cor_texto in (("Secundario", COR["texto"]), ("Perigo", COR["erro"])):
             estilo.configure(f"{nome}.TButton", **{**base, "lightcolor": COR["botao"], "darkcolor": COR["botao"]},
-                             font=(FONTE, 10), background=COR["botao"], foreground=cor_texto, bordercolor=COR["botao"])
+                             font=fonte(10), background=COR["botao"], foreground=cor_texto, bordercolor=COR["botao"])
             estilo.map(f"{nome}.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
                        foreground=[("disabled", COR["borda_forte"])],
                        bordercolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
                        lightcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
                        darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])])
-        estilo.configure("Link.TButton", font=(FONTE, 9), padding=(6, 2), background=COR["fundo"], foreground=COR["destaque"],
+        estilo.configure("Link.TButton", font=fonte(9), padding=(px(6), px(2)), background=COR["fundo"], foreground=COR["destaque"],
                          borderwidth=0, relief="flat", focusthickness=0)
         estilo.map("Link.TButton", foreground=[("active", COR["destaque_hover"]), ("disabled", COR["suave"])],
                    background=[("active", COR["fundo"])])
-        estilo.configure("Treeview", font=(FONTE, 10), rowheight=26, background=COR["cartao"], fieldbackground=COR["cartao"],
+        estilo.configure("Treeview", font=fonte(10), rowheight=px(26), background=COR["cartao"], fieldbackground=COR["cartao"],
                          foreground=COR["texto"], borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["cartao"],
                          bordercolor=COR["cartao"])
-        estilo.configure("Treeview.Heading", font=(FONTE, 9), background=COR["cartao"], foreground=COR["suave"],
-                         relief="flat", padding=(8, 6), borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["borda"],
+        estilo.configure("Treeview.Heading", font=fonte(9), background=COR["cartao"], foreground=COR["suave"],
+                         relief="flat", padding=(px(8), px(6)), borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["borda"],
                          bordercolor=COR["borda"])
         estilo.map("Treeview.Heading", background=[("active", COR["cinza_fundo"])])
         estilo.map("Treeview", background=[("selected", COR["azul_fundo"])], foreground=[("selected", COR["texto"])])
@@ -166,11 +228,11 @@ class App(RaizTk):
                          bordercolor=COR["cartao"], arrowcolor=COR["suave"], relief="flat", lightcolor=COR["cinza_fundo"],
                          darkcolor=COR["cinza_fundo"], gripcount=0)
         estilo.map("Vertical.TScrollbar", background=[("active", COR["borda_forte"])])
-        estilo.configure("TEntry", padding=(6, 3), fieldbackground=COR["cartao"], foreground=COR["texto"],
+        estilo.configure("TEntry", padding=(px(6), px(3)), fieldbackground=COR["cartao"], foreground=COR["texto"],
                          bordercolor=COR["borda_forte"], lightcolor=COR["cartao"], darkcolor=COR["cartao"],
                          insertcolor=COR["texto"])
         estilo.map("TEntry", bordercolor=[("focus", COR["destaque"])], lightcolor=[("focus", COR["destaque"])])
-        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=(FONTE, 9),
+        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=fonte(9),
                          indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
                          upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
         estilo.map("TCheckbutton", background=[("active", COR["fundo"])],
@@ -182,24 +244,24 @@ class App(RaizTk):
 
     def _chip(self, pai):
         """Indicador de resumo: so texto colorido (sem pilula)."""
-        rotulo = tk.Label(pai, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9))
+        rotulo = tk.Label(pai, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
         rotulo.pack(side="left", padx=(0, 14))
         return rotulo
 
     def _montar(self):
-        margem = 20
+        margem = px(20)
         topo = tk.Frame(self, bg=COR["fundo"])
         topo.pack(fill="x", padx=margem, pady=(12, 10))
         lado = tk.Frame(topo, bg=COR["fundo"])
         lado.pack(side="right", anchor="n")
         titulos = tk.Frame(topo, bg=COR["fundo"])
         titulos.pack(side="left", fill="x", expand=True)
-        tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=(FONTE_FORTE, 13), anchor="w").pack(fill="x")
+        tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").pack(fill="x")
         tk.Label(titulos, text="Preenchimento de requisições do SRP a partir da planilha", bg=COR["fundo"],
-                 fg=COR["suave"], font=(FONTE, 9), anchor="w").pack(fill="x")
+                 fg=COR["suave"], font=fonte(9), anchor="w").pack(fill="x")
         ttk.Button(lado, text="Tema claro" if self.tema == "escuro" else "Tema escuro", style="Link.TButton",
                    command=self.alternar_tema).pack(side="right")
-        self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9))
+        self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
         self.chip_citrix.pack(side="right", padx=(0, 10))
         tk.Frame(self, bg=COR["borda"], height=1).pack(fill="x")
 
@@ -210,11 +272,11 @@ class App(RaizTk):
                              highlightthickness=1, cursor="hand2")
         self.zona.pack(fill="x")
         self.titulo_zona = tk.Label(self.zona, text="Arraste a planilha aqui", bg=COR["cartao"], fg=COR["texto"],
-                                    font=(FONTE_FORTE, 11), cursor="hand2")
-        self.titulo_zona.pack(pady=(9, 0))
+                                    font=fonte(11, forte=True), cursor="hand2")
+        self.titulo_zona.pack(pady=(px(9), 0))
         self.sub_zona = tk.Label(self.zona, text="ou clique para escolher o arquivo (.xlsx)", bg=COR["cartao"],
-                                 fg=COR["suave"], font=(FONTE, 9), cursor="hand2")
-        self.sub_zona.pack(pady=(0, 9))
+                                 fg=COR["suave"], font=fonte(9), cursor="hand2")
+        self.sub_zona.pack(pady=(0, px(9)))
         for parte in (self.zona, self.titulo_zona, self.sub_zona):
             parte.bind("<Button-1>", lambda _e: self.escolher())
             parte.bind("<Enter>", lambda _e: self.zona.configure(highlightbackground=COR["destaque"]))
@@ -228,10 +290,10 @@ class App(RaizTk):
         opcoes = tk.Frame(chips, bg=COR["fundo"])
         opcoes.pack(side="right")
         ttk.Checkbutton(opcoes, text="Conferir quantidade", variable=self.conferir).pack(side="left", padx=(0, 14))
-        tk.Label(opcoes, text="Limite", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center").pack(side="left", padx=(6, 12))
-        tk.Label(opcoes, text="Pausa (s)", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9)).pack(side="left")
-        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center").pack(side="left", padx=(6, 0))
+        tk.Label(opcoes, text="Limite", bg=COR["fundo"], fg=COR["suave"], font=fonte(9)).pack(side="left")
+        ttk.Entry(opcoes, textvariable=self.limite, width=5, justify="center", font=fonte(10)).pack(side="left", padx=(6, 12))
+        tk.Label(opcoes, text="Pausa (s)", bg=COR["fundo"], fg=COR["suave"], font=fonte(9)).pack(side="left")
+        ttk.Entry(opcoes, textvariable=self.pausa, width=5, justify="center", font=fonte(10)).pack(side="left", padx=(6, 0))
         self.chip_linhas, self.chip_conta, self.chip_erros = self._chip(chips), self._chip(chips), self._chip(chips)
 
         rodape = tk.Frame(corpo, bg=COR["fundo"])
@@ -239,11 +301,11 @@ class App(RaizTk):
         self.b_recarregar = ttk.Button(rodape, text="Recarregar planilha", style="Link.TButton", command=self.recarregar)
         self.b_recarregar.pack(side="left")
         ttk.Button(rodape, text="Abrir pasta de logs", style="Link.TButton", command=lambda: os.startfile(pasta_logs())).pack(side="left")
-        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 8)).pack(side="right")
+        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
         caixa_saida = self._cartao(corpo)
         caixa_saida.pack(side="bottom", fill="x")
         self.saida = tk.Text(caixa_saida, height=3, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
-                             font=("Consolas", 9), relief="flat", borderwidth=0, padx=10, pady=6,
+                             font=fonte(9, mono=True), relief="flat", borderwidth=0, padx=px(10), pady=px(6),
                              insertbackground=COR["texto"], highlightthickness=0)
         self.saida.pack(fill="x")
 
@@ -260,7 +322,7 @@ class App(RaizTk):
 
         progresso = tk.Frame(corpo, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
-        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=(FONTE, 9), anchor="w")
+        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
         self.status.pack(fill="x")
         self.barra = BarraFina(progresso)
         self.barra.pack(fill="x", pady=(4, 0))
@@ -270,9 +332,9 @@ class App(RaizTk):
         colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
         self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
         for coluna, titulo, largura, ancora in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
-                                                   (56, 120, 100, 90, 100, 130), ("center", "w", "w", "w", "center", "w")):
+                                                   tuple(px(v) for v in (56, 120, 100, 90, 100, 130)), ("center", "w", "w", "w", "center", "w")):
             self.tabela.heading(coluna, text=titulo, anchor=ancora)
-            self.tabela.column(coluna, width=largura, minwidth=50, anchor=ancora, stretch=True)
+            self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
         rolagem = ttk.Scrollbar(cartao, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y")
