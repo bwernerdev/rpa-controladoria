@@ -322,10 +322,31 @@ def pasta_logs():
     return pasta
 
 
-def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False):
+ORDEM = ("item", "custo", "conta", "quantidade")
+NOME_CAMPO = {"item": "Item", "custo": "C/Custo", "conta": "Conta", "quantidade": "Quantidade"}
+
+
+def proximo_campo(atual, caixa_antes, caixa_depois, colunas):
+    """Campo onde o foco caiu depois do Tab em `atual`: 'custo'/'conta'/'quantidade', 'fim' (Item da linha seguinte)
+    ou None se o foco foi para um lugar inesperado. Sem cabecalho (`colunas` None) usa a regra antiga."""
+    if colunas:
+        onde = qual_coluna(caixa_depois, colunas)
+        if atual == "quantidade":
+            return "fim" if onde == "item" else None
+        return onde if onde in ORDEM and ORDEM.index(onde) > ORDEM.index(atual) else None
+    if atual == "item":
+        return "custo"
+    if atual == "custo":
+        return "conta" if conta_editavel(caixa_antes, caixa_depois) else "quantidade"
+    return "quantidade" if atual == "conta" else "fim"
+
+
+def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False, retomar=None):
     """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento;
-    `estado(linha, nome)` (opcional) recebe 'executando', 'ok' ou 'erro' por linha;
-    `conferir` le a Quantidade na tela (OCR) antes de confirmar cada linha. Devolve 0 se concluiu."""
+    `estado(linha, nome)` (opcional) recebe 'executando', 'pausado', 'ok' ou 'erro' por linha;
+    `conferir` le a Quantidade na tela (OCR) antes de confirmar cada linha;
+    `retomar` (threading.Event, opcional): se o SRP nao avancar (aviso na tela), o robo PAUSA e espera esse
+    evento (botao Continuar) em vez de interromper. Sem ele, interrompe como antes. Devolve 0 se concluiu."""
     tesseract = caminho_tesseract() if conferir else None
     log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
     atual = None
@@ -376,6 +397,43 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         elif esperar:
             time.sleep(pausa)
 
+    def esperar_correcao(r, campo_erro):
+        """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
+        'fim' quando o cursor ja esta no Item (linha completada a mao)."""
+        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo_erro]} (aviso na tela?). PAUSADO. "
+                  f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
+                  "e clique em Continuar. Se completou a linha a mao, deixe o cursor no Item da linha seguinte.")
+        if estado:
+            estado(r["linha"], "pausado")
+        while True:
+            retomar.clear()
+            while not retomar.is_set():
+                if parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.2)
+            janela.set_focus()
+            aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(janela)
+            onde = qual_coluna(caixa, colunas) if caixa else None
+            if onde == "item":
+                registrar(f"  linha {r['linha']}: retomada com o cursor no Item (linha completada a mao)", mostrar=False)
+                if estado:
+                    estado(r["linha"], "executando")
+                return caixa, "fim"
+            if onde in ORDEM and ORDEM.index(onde) > ORDEM.index(campo_erro):
+                registrar(f"  linha {r['linha']}: retomada no campo {NOME_CAMPO[onde]}", mostrar=False)
+                if estado:
+                    estado(r["linha"], "executando")
+                return caixa, onde
+            registrar(f"Ainda pausado: o cursor esta em '{NOME_CAMPO.get(onde, 'campo nao identificado')}'. "
+                      f"Deixe-o no campo depois do {NOME_CAMPO[campo_erro]} (ou no Item da linha seguinte) e clique em Continuar.")
+            if estado:
+                estado(r["linha"], "pausado")
+
     try:
         if conferir and not tesseract:
             aviso("ATENCAO: pasta 'tesseract' nao encontrada ao lado do programa. Conferencia da quantidade DESATIVADA nesta execucao.")
@@ -418,61 +476,35 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             if not inicial:
                 registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado. Interrompido.")
                 return 1
-            teclar("digitar", r["item"]); teclar("tab", None, esperar=False)
-            foco = aguardar_mudanca(janela, inicial, render)
-            t1 = time.time()
-            if not foco:
-                registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois do Item. Interrompido.")
-                return 1
-            # Depois do Item o foco vai para o C/Custo, ou pula para Conta/Quantidade quando o C/Custo esta travado.
-            campo = qual_coluna(foco, colunas) if colunas else "custo"
-            custo_travado = campo != "custo"
-            if not custo_travado:
-                foco_custo = foco
-                teclar("digitar", r["custo"]); teclar("tab", None, esperar=False)
-                foco = aguardar_mudanca(janela, foco_custo, render)
-                if not foco:
-                    registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois do C/Custo. Interrompido.")
-                    return 1
-                if colunas:
-                    campo = qual_coluna(foco, colunas)
-                else:
-                    campo = "conta" if conta_editavel(foco_custo, foco) else "quantidade"
-            t2 = time.time()
-            editavel = campo == "conta"
-            if editavel:
-                if not r["conta"]:
+            foco, campo = inicial, "item"
+            digitados, manual, proximo = [], False, None
+            while campo != "fim":
+                if campo == "conta" and not r["conta"]:
                     registrar(f"Linha {r['linha']}: Conta editavel mas em branco na planilha. Interrompido.")
                     return 1
-                foco_conta = foco
-                teclar("digitar", r["conta"]); teclar("tab", None, esperar=False)
-                foco = aguardar_mudanca(janela, foco_conta, render)
-                if not foco:
-                    registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado depois da Conta. Interrompido.")
-                    return 1
-                campo = qual_coluna(foco, colunas) if colunas else "quantidade"
-            registrar(f"  linha {r['linha']}: C/Custo={'travado' if custo_travado else 'digitado'} "
-                      f"Conta={'digitada' if editavel else 'travada'} foco_final={foco} campo={campo}", mostrar=False)
-            if campo != "quantidade":
-                registrar(f"Linha {r['linha']}: esperava o foco na Quantidade, mas ele esta em '{campo or 'campo desconhecido'}'. "
-                          "Nada foi digitado na Quantidade. Interrompido.")
-                return 1
-            if coluna_qtd is None:
-                coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
-            teclar("digitar", r["quantidade"].replace(".", ","))
-            referencia = (coluna_qtd[0], inicial[1], coluna_qtd[1], inicial[1] + coluna_qtd[2]) if coluna_qtd else None
-            teclar("tab", None, esperar=False)
-            t3 = time.time()
-            proximo = aguardar_mudanca(janela, referencia, render) if referencia else None
-            t4 = t5 = time.time()
-            if not proximo and not tesseract:
-                time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo
-            if tesseract:
+                if campo == "quantidade" and coluna_qtd is None:
+                    coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
+                valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
+                teclar("digitar", valor); teclar("tab", None, esperar=False)
+                digitados.append(campo)
+                novo = aguardar_mudanca(janela, foco, render)
+                seguinte = proximo_campo(campo, foco, novo, colunas) if novo else None
+                if seguinte is None and campo == "quantidade" and not tesseract and not colunas:
+                    time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo (modo antigo)
+                    break
+                if seguinte is None:
+                    if retomar is None or not colunas:
+                        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo]} "
+                                  "(aviso na tela?). Interrompido.")
+                        return 1
+                    novo, seguinte = esperar_correcao(r, campo)
+                    manual = True
+                foco, campo = novo, seguinte
+                if campo == "fim":
+                    proximo = novo
+            registrar(f"  linha {r['linha']}: digitados={digitados} manual={manual} tempo={time.time() - t0:.2f}s", mostrar=False)
+            if tesseract and proximo and not manual and coluna_qtd:
                 # A celula so e lida depois do Tab (valor formatado, ex.: 1.0000): fica na linha acima do novo foco.
-                if not proximo:
-                    registrar(f"Linha {r['linha']}: nao consegui conferir a quantidade (foco nao mudou ou nao foi detectado). "
-                              "Confira no SRP se ha aviso na tela. Interrompido.")
-                    return 1
                 if proximo[1] - inicial[1] > 8:
                     passo = proximo[1] - inicial[1]
                 topo = proximo[1] - passo
@@ -480,12 +512,12 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 esperada = float(r["quantidade"].replace(",", "."))
                 recorte = recortar_celula(janela, celula)
                 pendentes.append((r["linha"], esperada, pool.submit(conferir_recorte, recorte, tesseract, esperada), recorte))
-                t5 = time.time()
-            registrar(f"  linha {r['linha']}: tempos (s) item_tab={t1 - t0:.2f} custo_tab={t2 - t1:.2f} "
-                      f"digitar_conta_qtd={t3 - t2:.2f} resposta_tab_qtd={t4 - t3:.2f} ocr={t5 - t4:.2f}", mostrar=False)
-            conta = "digitada " + r["conta"] if editavel else "travada"
-            custo = "travado" if custo_travado else r["custo"]
-            registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}")
+            elif tesseract and manual:
+                registrar(f"  linha {r['linha']}: conferencia da quantidade pulada (linha ajustada a mao)", mostrar=False)
+            conta = "digitada " + r["conta"] if "conta" in digitados else "travada"
+            custo = r["custo"] if "custo" in digitados else "travado"
+            registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}"
+                      + (" (ajustada a mao)" if manual else ""))
             marcar(r, "ok")
         falha = revisar(aguardar=True)
         if falha:

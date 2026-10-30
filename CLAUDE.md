@@ -6,6 +6,7 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 - Campo em foco = bloco ciano puro `(0,255,255)`. Conta editavel se o novo foco comeca logo apos o C/Custo (vao < 1,5 largura); se pular para longe, a Conta esta travada e o robo vai direto para Quantidade.
 - Sequencia por linha: Item, Tab, [C/Custo, Tab], [Conta, Tab], Quantidade, Tab (ja desce para a proxima linha). C/Custo e Conta podem vir travados: o foco pula o campo.
 - Qual campo esta em foco: no inicio o Tesseract le o cabecalho da grade (`localizar_colunas`) e cada caixa ciano e classificada pela coluna mais proxima (`qual_coluna`). Sem cabecalho: C/Custo sempre digitado e Conta pela regra do vao (`conta_editavel`).
+- Aviso do SRP (ex.: "Conta Contabil invalida ... Conta correta=8712") trava o foco: o robo PAUSA a linha (estado 'pausado'), o usuario corrige no SRP, da Tab e clica em Continuar; o robo retoma do campo onde o cursor estiver (`esperar_correcao`). Cursor no Item = linha completada a mao. Sem cabecalho ou na linha de comando: interrompe.
 - O SRP soma itens repetidos na mesma linha: a conferencia da quantidade da alarme falso nesses itens (o app avisa ao carregar).
 - Planilha: cabecalho exato `Item`, `C/Custo`, `Conta`, `Quantidade`. Valores so digitaveis; zeros a esquerda preservados se a celula for texto.
 

@@ -39,7 +39,7 @@ PALETAS = {
 COR = dict(PALETAS["claro"])
 FONTE = "Segoe UI"
 FONTE_FORTE = "Segoe UI Semibold"
-ESTADOS = {"pendente": "Pendente", "executando": "Em andamento", "ok": "Concluída", "erro": "Erro"}
+ESTADOS = {"pendente": "Pendente", "executando": "Em andamento", "pausado": "Pausada", "ok": "Concluída", "erro": "Erro"}
 ARQUIVO_CONFIG = pasta_base() / "config.json"
 ESCALA = 1.0  # DPI do monitor / 96; tamanhos em pixels passam por px()
 
@@ -146,6 +146,8 @@ class App(RaizTk):
         self.ocupado = False
         self.fila = queue.Queue()
         self.parar = threading.Event()
+        self.retomar = threading.Event()  # botao Continuar durante uma pausa
+        self.pausado = False
         self.thread = None
         self.concluidas = 0
         self.limite = tk.StringVar(value="0")
@@ -313,7 +315,7 @@ class App(RaizTk):
         botoes.pack(side="bottom", fill="x", pady=(12, 10))
         self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
         self.b_iniciar.pack(side="left")
-        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=lambda: self.iniciar(True))
+        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
         self.b_continuar.pack(side="left", padx=(8, 0))
         self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
         self.b_simular.pack(side="left", padx=(8, 0))
@@ -342,6 +344,7 @@ class App(RaizTk):
         self.tabela.tag_configure("ok", foreground=COR["ok"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
         self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
+        self.tabela.tag_configure("pausado", foreground=COR["aviso"])
         self.tabela.tag_configure("pendente", foreground=COR["texto"])
 
     def _repovoar(self):
@@ -415,6 +418,7 @@ class App(RaizTk):
                 item = self.fila.get_nowait()
                 if item is None:
                     self.ocupado = False
+                    self.pausado = False
                     self._atualizar_botoes()
                     self._fim_da_execucao()
                 elif isinstance(item, tuple) and item[0] == "citrix":
@@ -440,9 +444,18 @@ class App(RaizTk):
             return
         self.tabela.set(iid, "status", ESTADOS[nome])
         self.tabela.item(iid, tags=(nome,))
+        if nome in ("executando", "pausado"):
+            self.pausado = nome == "pausado"
+            self._atualizar_botoes()
         if nome == "executando":
             self.tabela.see(iid)
             self._status(f"Preenchendo linha {linha}...", "destaque")
+        elif nome == "pausado":
+            self.tabela.see(iid)
+            self._status(f"Pausado na linha {linha}: corrija no SRP e clique em Continuar", "aviso")
+            self.bell()
+            self.deiconify()
+            self.lift()
         elif nome == "ok":
             self.concluidas += 1
             self.barra["value"] = self.concluidas
@@ -462,9 +475,23 @@ class App(RaizTk):
         self.b_iniciar.configure(state="normal" if pronto else "disabled")
         self.b_simular.configure(state="normal" if pronto else "disabled")
         self.b_parar.configure(state="normal" if self.ocupado else "disabled")
-        self.b_continuar.configure(state="normal" if retomar else "disabled",
-                                   text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar")
+        if self.ocupado:
+            self.b_continuar.configure(state="normal" if self.pausado else "disabled",
+                                       text="Continuar (corrigido no SRP)" if self.pausado else "Continuar")
+        else:
+            self.b_continuar.configure(state="normal" if retomar else "disabled",
+                                       text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar")
         self.b_recarregar.configure(state="normal" if self.caminho_atual and not self.ocupado else "disabled")
+
+    def continuar(self):
+        """Durante uma pausa, libera o robo; depois de uma interrupcao, retoma pelas linhas nao concluidas."""
+        if self.ocupado and self.pausado:
+            self.escrever("Continuando: o robo volta ao Citrix e retoma do campo onde o cursor estiver.")
+            self.pausado = False
+            self._atualizar_botoes()
+            self.retomar.set()
+        elif not self.ocupado:
+            self.iniciar(True)
 
     def _fim_da_execucao(self):
         if self.registros and self.concluidas == len(self.registros):
@@ -595,7 +622,7 @@ class App(RaizTk):
     def _rodar(self, registros, pausa, conferir):
         try:
             executar(registros, "Desktop Viewer", pausa, 4.0, 5, self.parar, self.fila.put,
-                     lambda linha, nome: self.fila.put((linha, nome)), conferir)
+                     lambda linha, nome: self.fila.put((linha, nome)), conferir, self.retomar)
         finally:
             self.fila.put(None)
 
