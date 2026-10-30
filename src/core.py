@@ -509,6 +509,83 @@ def ler_progresso(registros):
     return {l for l in dados.get("ok", []) if l in validas}, dados.get("em")
 
 
+REPOSITORIO = "bwernerdev/rpa-controladoria"  # publico: os releases sao lidos sem token
+
+
+def versao_tupla(texto):
+    """'v1.10.2' -> (1, 10, 2); texto invalido -> (0,)."""
+    try:
+        return tuple(int(p) for p in texto.strip().lstrip("vV").split("."))
+    except ValueError:
+        return (0,)
+
+
+def buscar_atualizacao(atual, tempo_limite=5):
+    """Release mais nova que `atual` no GitHub: {'versao', 'url', 'sha256', 'tamanho', 'notas'}; None se nao houver,
+    se nao tiver o zip ou sem internet (nunca levanta erro: a checagem nao pode atrapalhar o app)."""
+    import urllib.request
+    pedido = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIO}/releases/latest",
+                                    headers={"Accept": "application/vnd.github+json", "User-Agent": "RPA-SRP"})
+    try:
+        with urllib.request.urlopen(pedido, timeout=tempo_limite) as resposta:
+            dados = json.load(resposta)
+    except Exception:
+        return None
+    versao = str(dados.get("tag_name", "")).lstrip("vV")
+    if versao_tupla(versao) <= versao_tupla(atual):
+        return None
+    zips = [a for a in dados.get("assets", []) if str(a.get("name", "")).lower().endswith(".zip")]
+    if not zips:
+        return None
+    digest = str(zips[0].get("digest") or "")
+    return {"versao": versao, "url": zips[0]["browser_download_url"], "tamanho": zips[0].get("size"),
+            "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else None, "notas": dados.get("body") or ""}
+
+
+def baixar_atualizacao(info, progresso=None):
+    """Baixa e extrai o zip do release numa pasta temporaria; confere o SHA-256 publicado pelo GitHub.
+    `progresso(baixados, total)` e opcional. Devolve a pasta com instalar.ps1 e RPA-SRP.exe."""
+    import urllib.request
+    import zipfile
+    pasta = Path(tempfile.mkdtemp(prefix="rpa-srp-"))
+    arquivo = pasta / "pacote.zip"
+    soma = hashlib.sha256()
+    pedido = urllib.request.Request(info["url"], headers={"User-Agent": "RPA-SRP"})
+    with urllib.request.urlopen(pedido, timeout=30) as resposta, open(arquivo, "wb") as saida:
+        total, baixados = info.get("tamanho") or int(resposta.headers.get("Content-Length") or 0), 0
+        while True:
+            bloco = resposta.read(256 * 1024)
+            if not bloco:
+                break
+            saida.write(bloco)
+            soma.update(bloco)
+            baixados += len(bloco)
+            if progresso:
+                progresso(baixados, total)
+    if info.get("sha256") and soma.hexdigest() != info["sha256"].lower():
+        raise ValueError("o arquivo baixado nao confere com o publicado (SHA-256 diferente); atualizacao cancelada")
+    destino = pasta / "pacote"
+    with zipfile.ZipFile(arquivo) as zip_:
+        zip_.extractall(destino)  # extractall descarta caminhos absolutos e ".."
+    if not (destino / "instalar.ps1").exists() or not (destino / "RPA-SRP.exe").exists():
+        raise ValueError("o pacote baixado nao tem instalar.ps1 e RPA-SRP.exe")
+    return destino
+
+
+def aplicar_atualizacao(pacote, destino):
+    """Roda o instalar.ps1 do pacote num processo separado: ele espera este app fechar, troca exe e Tesseract em
+    `destino` (mantendo config, contas aprendidas, andamento e logs) e abre o app de novo. Chamar e fechar o app."""
+    log = Path(destino) / "logs" / "atualizacao.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File",
+         str(Path(pacote) / "instalar.ps1"), "-Destino", str(destino), "-SemAtalhos", "-Esperar", "60", "-Abrir",
+         "-Log", str(log)],
+        # console oculto (CREATE_NO_WINDOW); DETACHED_PROCESS faz o PowerShell 5.1 sair sem rodar nada
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        close_fds=True)
+
+
 def limpar_logs(dias=30):
     """Apaga logs (e recortes de OCR em logs/ocr) com mais de `dias` dias; devolve quantos apagou."""
     limite = time.time() - dias * 86400

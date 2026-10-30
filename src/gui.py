@@ -3,6 +3,8 @@ import ctypes
 import json
 import os
 import queue
+import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -11,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (VK_F8, VK_F9, atalhos_globais, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
+from core import (VK_F8, VK_F9, aplicar_atualizacao, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
@@ -162,6 +164,57 @@ class App(RaizTk):
         self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
+        self.atualizacao_pendente = None
+        if getattr(sys, "frozen", False):  # so no exe; rodando pelo codigo-fonte nao se atualiza
+            self.after(2000, lambda: threading.Thread(
+                target=lambda: self.fila.put(("atualizacao", buscar_atualizacao(VERSAO))), daemon=True).start())
+
+    # ---------- atualizacao ----------
+    def _oferecer_atualizacao(self, info):
+        if not info:
+            return
+        if self.ocupado:  # nao interrompe um preenchimento: pergunta quando terminar
+            self.atualizacao_pendente = info
+            return
+        self.atualizacao_pendente = None
+        notas = re.sub(r"[*#`]", "", info["notas"]).strip()
+        notas = notas if len(notas) <= 700 else notas[:700].rsplit("\n", 1)[0] + "\n..."
+        if not messagebox.askyesno(
+                "Atualização disponível",
+                f"Versão {info['versao']} disponível (você tem a {VERSAO}).\n\n{notas}\n\n"
+                "Atualizar agora? O app fecha e abre de novo sozinho em alguns segundos. "
+                "Configurações, contas aprendidas, andamento e logs são mantidos."):
+            self.escrever(f"Atualizacao {info['versao']} adiada; o app pergunta de novo na proxima abertura.")
+            return
+        self.ocupado = True
+        self._atualizar_botoes()
+        self._status(f"Baixando a versão {info['versao']}...", "destaque")
+        self.escrever(f"Baixando a versao {info['versao']} do GitHub...")
+
+        def baixar():
+            try:
+                pacote = baixar_atualizacao(info, lambda feito, total: self.fila.put(("baixando", feito, total)))
+                self.fila.put(("baixado", pacote))
+            except Exception as erro:
+                self.fila.put(("falha_atualizacao", str(erro)))
+        threading.Thread(target=baixar, daemon=True).start()
+
+    def _evento_atualizacao(self, item):
+        if item[0] == "atualizacao":
+            self._oferecer_atualizacao(item[1])
+        elif item[0] == "baixando" and item[2]:
+            self._status(f"Baixando atualização... {item[1] * 100 // item[2]}%", "destaque")
+        elif item[0] == "baixado":
+            self.escrever("Atualizacao baixada e conferida. O app vai fechar e abrir de novo na versao nova.")
+            self._status("Instalando a atualização...", "destaque")
+            self.update()
+            aplicar_atualizacao(item[1], pasta_base())
+            self.after(500, self.destroy)
+        elif item[0] == "falha_atualizacao":
+            self.ocupado = False
+            self._atualizar_botoes()
+            self._status("Atualização falhou: veja o console", "erro")
+            self.escrever(f"A atualizacao falhou: {item[1]}. O app continua na versao {VERSAO}.")
 
     # ---------- visual ----------
     def _aplicar_escala(self, dpi):
@@ -427,6 +480,10 @@ class App(RaizTk):
                     self.pausar.clear()
                     self._atualizar_botoes()
                     self._fim_da_execucao()
+                    if self.atualizacao_pendente:
+                        self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
+                elif isinstance(item, tuple) and item[0] in ("atualizacao", "baixando", "baixado", "falha_atualizacao"):
+                    self._evento_atualizacao(item)
                 elif isinstance(item, tuple) and item[0] == "tecla":
                     self._tecla(item[1])
                 elif isinstance(item, tuple) and item[0] == "citrix":

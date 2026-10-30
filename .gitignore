@@ -8,6 +8,7 @@ RPA-SRP.exe
 progresso.json
 logs/
 aprendizado.json
+/tesseract/
 planilhas/*
 !planilhas/CLAUDE.md
 !planilhas/BASE PADRAO.xlsx

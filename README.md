@@ -11,7 +11,9 @@ O robô só digita e confere. Ele nunca faz login nem corrige dado sozinho: quan
 3. Dê duplo clique em **`instalar.cmd`**. Ele copia o app para `%LOCALAPPDATA%\Programs\RPA-SRP` (sem precisar de administrador) e cria o atalho **Robô SRP** na área de trabalho e no menu Iniciar.
 4. Abra pelo atalho. A pasta extraída pode ser apagada.
 
-Para **atualizar**, faça o mesmo com o zip novo (feche o app antes). Configurações, contas aprendidas, andamento e logs são mantidos.
+**Atualizações** (a partir da v1.9.0): ao abrir, o app confere se há versão nova aqui no GitHub e pergunta se quer atualizar. Ele baixa o pacote, confere a integridade (SHA-256), fecha, troca os arquivos e abre de novo sozinho. Configurações, contas aprendidas, andamento e logs são mantidos. Durante um preenchimento ele só pergunta ao terminar. Sem internet, nada acontece.
+
+Para atualizar à mão, faça o mesmo que na instalação com o zip novo (feche o app antes).
 
 Sem instalar: o `RPA-SRP.exe` também roda direto da pasta extraída, desde que a pasta `tesseract\` (leitura da tela) fique ao lado dele.
 
