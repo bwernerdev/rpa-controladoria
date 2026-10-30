@@ -10,7 +10,7 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 - Planilha: cabecalho exato `Item`, `C/Custo`, `Conta`, `Quantidade`. Valores so digitaveis; zeros a esquerda preservados se a celula for texto.
 
 ## Mapa
-- `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `build/` — trabalho do PyInstaller; `RPA-SRP.exe` na raiz (ignorados). `dist/` e legado (logs antigos).
+- `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `build/` — trabalho do PyInstaller; `RPA-SRP.exe` na raiz (ignorados).
 - `assets/` — `icone.ico` (gerado). `scripts/gerar_versao.py` — gera `build/version.txt`. `vendor/` — Tesseract portatil (ignorado). `build.ps1` — gera `RPA-SRP.exe` na raiz do projeto, com icone e versao (fechar o app antes). O exe acha o Tesseract em `vendor\tesseract`; para outra maquina, levar o exe + a pasta como `tesseract\` ao lado. Logs e `config.json` ficam ao lado do exe. `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
 - Teste de exe sem matar processos: `timeout 8 ./RPA-SRP.exe` (saida 124 = seguiu rodando). Nao encerrar processos por nome (bloqueado e arriscado).
 
@@ -25,4 +25,4 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 - Abortar: botao Parar ou mouse no canto superior esquerdo da tela.
 - `pyautogui` nao compila no Python 3.14: usar `pywinauto.keyboard`.
 - Dados de planilhas e logs sao da empresa: nao versionar.
-- Ignorar: `.venv/`, `build/`, `dist/`, `logs/`, `planilhas/*`.
+- Ignorar: `.venv/`, `build/`, `logs/`, `planilhas/*`, `vendor/tesseract/`, `RPA-SRP.exe`, `config.json`.
