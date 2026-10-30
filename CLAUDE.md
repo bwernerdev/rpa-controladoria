@@ -9,7 +9,8 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 
 ## Mapa
 - `src/` — codigo (ver `src/CLAUDE.md`). `planilhas/` — planilhas de trabalho (nao vao ao git). `logs/` — um log por execucao (ignorado). `dist/`, `build/` — saida do PyInstaller (ignorados).
-- `build.ps1` — gera `dist\RPA-SRP.exe`. `requirements.txt` — pywinauto, openpyxl, pillow, pyinstaller.
+- `build.ps1` — gera `dist\RPA-SRP.exe`. `requirements.txt` — pywinauto, openpyxl, pillow, tkinterdnd2, pyinstaller.
+- Teste de exe sem matar processos: `timeout 8 ./dist/RPA-SRP.exe` (saida 124 = seguiu rodando). Nao encerrar processos por nome (bloqueado e arriscado).
 
 ## Comandos (PowerShell, na pasta RPA)
 - Janela: `.\.venv\Scripts\python.exe src\gui.py`

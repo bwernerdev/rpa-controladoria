@@ -10,6 +10,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.coinit_flags = 2  # COM em modo STA, necessario para arrastar e soltar (tkdnd/OLE) e pywinauto coexistirem
+
 from openpyxl import load_workbook
 from PIL import ImageChops, ImageFilter, ImageGrab
 from pywinauto import Desktop
@@ -152,9 +154,17 @@ def pasta_logs():
     return pasta
 
 
-def executar(registros, janela_trecho, pausa, render, espera, parar, aviso):
-    """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento. Devolve 0 se concluiu."""
+def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None):
+    """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento;
+    `estado(linha, nome)` (opcional) recebe 'executando', 'ok' ou 'erro' por linha. Devolve 0 se concluiu."""
     log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
+    atual = None
+
+    def marcar(r, nome):
+        nonlocal atual
+        atual = r["linha"] if nome == "executando" else None
+        if estado:
+            estado(r["linha"], nome)
 
     def registrar(texto, mostrar=True):
         log.write(texto + "\n")
@@ -181,6 +191,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso):
             if janela_trecho.lower() not in Desktop(backend="uia").window(active_only=True).window_text().lower():
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
                 return 1
+            marcar(r, "executando")
             inicial = caixa_foco(janela)
             teclar("digitar", r["item"]); teclar("tab", None)
             antes = aguardar_mudanca(janela, inicial, render)
@@ -199,6 +210,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso):
             teclar("digitar", r["quantidade"].replace(".", ",")); teclar("tab", None)
             conta = "digitada " + r["conta"] if editavel else "travada"
             registrar(f"OK linha {r['linha']}: {r['item']} {r['custo']} conta={conta} {r['quantidade']}")
+            marcar(r, "ok")
         registrar("Concluido.")
         return 0
     except KeyboardInterrupt:
@@ -208,4 +220,6 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso):
         registrar(f"Erro: {erro}")
         return 1
     finally:
+        if atual is not None and estado:
+            estado(atual, "erro")
         log.close()
