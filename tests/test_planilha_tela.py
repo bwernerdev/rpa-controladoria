@@ -80,6 +80,19 @@ class Tela(unittest.TestCase):
         d.ellipse((600, 380, 622, 402), fill=(255, 0, 0))    # aviso que aparece depois
         self.assertIsNotNone(core.icone_aviso(tela, fixos))
 
+    def test_checagem_antes_de_comecar(self):
+        tela = Image.new("RGB", (1366, 768), (240, 240, 240))
+        d = ImageDraw.Draw(tela)
+        d.rectangle((0, 49, 19, 74), fill=(255, 0, 0))        # faixa do cabecalho na borda: nao e aviso
+        d.rectangle((44, 503, 118, 514), fill=(0, 255, 255))  # foco no Item
+        d.text((50, 480), "Item  C/Custo  Conta  Quantidade", fill=(0, 0, 0))
+        janela = (0, 0, 1366, 768)
+        self.assertIsNone(core.problema_tela(janela, tela))
+        self.assertIn("minimizada", core.problema_tela((-32000, -32000, -31840, -31972), tela))
+        self.assertIn("vazia", core.problema_tela(janela, Image.new("RGB", (1366, 768), (0, 0, 0))))
+        d.ellipse((600, 380, 622, 402), fill=(255, 0, 0))     # aviso do SRP ja aberto
+        self.assertIn("aviso aberto", core.problema_tela(janela, tela))
+
     def test_coluna_do_foco(self):
         self.assertEqual(core.qual_coluna((424, 503, 466, 514), CENTROS), "custo")
         self.assertEqual(core.qual_coluna((475, 503, 499, 514), CENTROS), "conta")

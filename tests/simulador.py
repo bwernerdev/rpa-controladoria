@@ -57,6 +57,9 @@ class Janela:
     def set_focus(self):
         pass
 
+    def rectangle(self):
+        return type("Ret", (), {"left": 0, "top": 0, "right": 1366, "bottom": 768})()
+
 
 def registros(n, conta="301"):
     return [{"linha": i + 2, "item": f"10{i}", "custo": "7300", "conta": conta, "quantidade": str(i + 1)} for i in range(n)]
@@ -71,7 +74,7 @@ def ambiente(srp, com_cabecalho=True, extras=None):
         "localizar_colunas": (lambda imagem, t: dict(CENTROS)) if com_cabecalho else (lambda imagem, t: None),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"), "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer",
         "mouse_no_canto": lambda: False, "janela_citrix": lambda trecho: Janela(), "ler_aviso": lambda imagem, t, fixos=(): None,
-        "pasta_logs": lambda: pasta, "arquivo_aprendizado": lambda: pasta / "aprendizado.json",
+        "problema_tela": lambda retangulo, imagem: None, "pasta_logs": lambda: pasta, "arquivo_aprendizado": lambda: pasta / "aprendizado.json",
     }
     trocas.update(extras or {})
     with contextlib.ExitStack() as pilha:

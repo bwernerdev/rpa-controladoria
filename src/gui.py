@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (VK_F8, VK_F9, aplicar_atualizacao, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
+from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
@@ -140,6 +140,7 @@ class App(RaizTk):
         self._icone = ImageTk.PhotoImage(desenhar(64))
         self.iconphoto(True, self._icone)
         self.registros, self.iids, self.estados = [], {}, {}
+        self.originais = []  # registros como estao no Excel: o andamento e salvo por eles, mesmo com contas sugeridas aceitas
         self.caminho_atual = None
         self.historico = []
         self.resumo = None  # (linhas, com_conta, erros)
@@ -528,7 +529,7 @@ class App(RaizTk):
         elif nome == "erro":
             self._status(f"Interrompido na linha {linha}", "erro")
         if (anterior == "ok") != (nome == "ok") and self.registros:  # guarda o andamento para o app reabrir dali
-            gravar_progresso(self.registros, {l for l, e in self.estados.items() if e == "ok"})
+            gravar_progresso(self.originais, {l for l, e in self.estados.items() if e == "ok"})
 
     def _proxima_linha(self):
         for r in self.registros:
@@ -595,7 +596,7 @@ class App(RaizTk):
                 "Recarregar", f"Recarregar apaga o andamento ({self.concluidas} linha(s) concluída(s)).\nContinuar?"):
             return
         if self.registros:
-            gravar_progresso(self.registros, set())
+            gravar_progresso(self.originais, set())
         self.carregar(self.caminho_atual)
 
     def carregar(self, caminho):
@@ -631,9 +632,10 @@ class App(RaizTk):
             self._status("Planilha vazia", "aviso")
         else:
             self.registros = registros
+            self.originais = [dict(r) for r in registros]
             self.barra.configure(maximum=len(registros))
             self._status("Pronta para preencher", "ok")
-            feitas, quando = ler_progresso(registros)
+            feitas, quando = ler_progresso(self.originais)
             if feitas:
                 for linha in sorted(feitas):
                     self._estado_linha(linha, "ok")
@@ -653,11 +655,76 @@ class App(RaizTk):
                 self._status("Itens repetidos: veja o aviso", "aviso")
             suspeitas = contas_suspeitas(registros)
             if suspeitas:
-                for linha, item, conta, correta in suspeitas:
+                aceitas = self._sugerir_contas(suspeitas)
+                for linha, antes, depois in aplicar_sugestoes(registros, aceitas):
+                    self.tabela.set(self.iids[linha], "conta", depois)
+                    self.escrever(f"Linha {linha}: Conta {antes} trocada por {depois} (sugestao do SRP aceita; a planilha no "
+                                  "Excel nao muda).")
+                recusadas = [s for s in suspeitas if s[0] not in aceitas]
+                for linha, item, conta, correta in recusadas:
                     self.escrever(f"AVISO: linha {linha}: item {item} com Conta {conta}, mas o SRP ja informou que a correta e {correta}. "
-                                  "Corrija na planilha e clique em Recarregar, ou corrija no SRP quando o robo pausar.")
-                self._status(f"{len(suspeitas)} conta(s) que o SRP ja recusou: veja o aviso", "aviso")
+                                  "O robo vai pausar nela para voce corrigir no SRP.")
+                if recusadas:
+                    self._status(f"{len(recusadas)} conta(s) que o SRP ja recusou: veja o aviso", "aviso")
+                else:
+                    self._status(f"Pronta para preencher ({len(aceitas)} conta(s) sugerida(s) aceita(s))", "ok")
         self._atualizar_botoes()
+
+    def _sugerir_contas(self, suspeitas):
+        """Mostra as linhas com Conta que o SRP ja recusou e a conta que ele informou; devolve as linhas que o
+        usuario marcou para trocar (nada muda sem o clique dele)."""
+        janela = tk.Toplevel(self)
+        janela.title("Contas que o SRP já recusou")
+        janela.configure(bg=COR["fundo"])
+        janela.transient(self)
+        janela.iconphoto(False, self._icone)
+        marcadas = {linha for linha, *_ in suspeitas}
+        escolha = set()
+        margem = px(16)
+        tk.Label(janela, text=f"{len(suspeitas)} linha(s) com uma Conta que o SRP já recusou para o mesmo Item e C/Custo",
+                 bg=COR["fundo"], fg=COR["texto"], font=fonte(11, forte=True), anchor="w").pack(fill="x", padx=margem,
+                                                                                               pady=(margem, px(2)))
+        tk.Label(janela, text="Clique numa linha para marcar ou desmarcar. As marcadas usam a conta que o SRP informou "
+                              "como correta; as outras ficam como estão e o robô pausa nelas. A planilha no Excel não muda.",
+                 bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w", justify="left",
+                 wraplength=px(560)).pack(fill="x", padx=margem, pady=(0, px(10)))
+        cartao = self._cartao(janela)
+        cartao.pack(fill="both", expand=True, padx=margem)
+        colunas = ("usar", "linha", "item", "conta", "sugerida")
+        tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=min(len(suspeitas), 10), selectmode="none")
+        for coluna, titulo, largura in zip(colunas, ("Usar", "Linha", "Item", "Conta na planilha", "Conta sugerida"),
+                                           (50, 60, 120, 130, 130)):
+            tabela.heading(coluna, text=titulo, anchor="center")
+            tabela.column(coluna, width=px(largura), anchor="center")
+        for linha, item, conta, correta in suspeitas:
+            tabela.insert("", "end", iid=str(linha), values=("✓", linha, item, conta, correta))
+        if len(suspeitas) > 10:
+            rolagem = ttk.Scrollbar(cartao, orient="vertical", command=tabela.yview)
+            tabela.configure(yscrollcommand=rolagem.set)
+            rolagem.pack(side="right", fill="y")
+        tabela.pack(fill="both", expand=True, padx=1, pady=1)
+
+        def alternar(evento):
+            iid = tabela.identify_row(evento.y)
+            if iid:
+                marcadas.symmetric_difference_update({int(iid)})
+                tabela.set(iid, "usar", "✓" if int(iid) in marcadas else "")
+
+        def usar():
+            escolha.update(marcadas)
+            janela.destroy()
+        tabela.bind("<Button-1>", alternar)
+        botoes = tk.Frame(janela, bg=COR["fundo"])
+        botoes.pack(fill="x", padx=margem, pady=margem)
+        ttk.Button(botoes, text="Usar as marcadas", style="Primario.TButton", command=usar).pack(side="right")
+        ttk.Button(botoes, text="Manter a planilha", style="Secundario.TButton", command=janela.destroy).pack(side="right",
+                                                                                                         padx=(0, px(8)))
+        janela.update_idletasks()
+        janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
+                        f"+{self.winfo_rooty() + px(80)}")
+        janela.grab_set()
+        self.wait_window(janela)
+        return escolha
 
     def selecionadas(self, retomar=False):
         try:
@@ -710,7 +777,7 @@ class App(RaizTk):
         if not retomar:
             self.concluidas = 0
             self.estados = {}
-            gravar_progresso(self.registros, set())
+            gravar_progresso(self.originais, set())
             for iid in self.iids.values():
                 self.tabela.set(iid, "status", ESTADOS["pendente"])
                 self.tabela.item(iid, tags=("pendente",))

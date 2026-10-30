@@ -196,6 +196,44 @@ class ContasSuspeitas(unittest.TestCase):
             regs[0]["conta"] = "8712"
             self.assertEqual(core.contas_suspeitas(regs), [])
 
+    def test_so_troca_as_linhas_aceitas(self):
+        srp = SRP([LIVRE])
+        with ambiente(srp):
+            core.aprender_conta("100", "7300", "8712")
+            core.aprender_conta("101", "7300", "8713")
+            regs = registros(3)
+            self.assertEqual(core.aplicar_sugestoes(regs, {3}), [(3, "301", "8713")])
+            self.assertEqual([r["conta"] for r in regs], ["301", "8713", "301"])
+            self.assertEqual(core.aplicar_sugestoes(regs, set()), [])
+            self.assertEqual(core.aplicar_sugestoes(regs, {4}), [])  # linha sem sugestao: nao muda
+
+
+class ChecagemInicial(unittest.TestCase):
+    def test_cursor_fora_do_item_nao_digita(self):
+        srp = SRP([LIVRE])
+        srp.campo = "quantidade"
+        with ambiente(srp):
+            codigo, avisos, _ = executar(srp, registros(1))
+        self.assertEqual(codigo, 1)
+        self.assertEqual(srp.valores, [{}])
+        self.assertTrue(any("coluna Quantidade" in a for a in avisos))
+
+    def test_sem_foco_nao_digita(self):
+        srp = SRP([LIVRE])
+        with ambiente(srp, extras={"caixa_foco": lambda janela: None}):
+            codigo, avisos, _ = executar(srp, registros(1))
+        self.assertEqual(codigo, 1)
+        self.assertEqual(srp.valores, [{}])
+        self.assertTrue(any("nenhum campo" in a for a in avisos))
+
+    def test_tela_com_problema_nao_digita(self):
+        srp = SRP([LIVRE])
+        with ambiente(srp, extras={"problema_tela": lambda r, i: "ja ha um aviso aberto no SRP"}):
+            codigo, avisos, _ = executar(srp, registros(1))
+        self.assertEqual(codigo, 1)
+        self.assertEqual(srp.valores, [{}])
+        self.assertTrue(any("aviso aberto" in a for a in avisos))
+
 
 if __name__ == "__main__":
     unittest.main()

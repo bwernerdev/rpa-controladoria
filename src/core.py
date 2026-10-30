@@ -184,6 +184,20 @@ def icone_aviso(imagem, fixos=()):
     return max(candidatos, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if candidatos else None
 
 
+def problema_tela(retangulo, imagem):
+    """Checagem antes de digitar: motivo (texto para o usuario) se a tela do Citrix nao serve para comecar, senao None.
+    `retangulo` = (esq, topo, dir, base) da janela; `imagem` = captura dela."""
+    esq, topo, dir_, base = retangulo
+    if esq <= -30000 or dir_ - esq < 400 or base - topo < 300:
+        return "a janela do Citrix esta minimizada ou pequena demais. Maximize o Citrix com o SRP aberto"
+    menor, maior = imagem.convert("L").getextrema()
+    if maior - menor < 40:
+        return "a tela do Citrix esta vazia (sessao bloqueada, desconectada ou carregando). Desbloqueie o Citrix e abra o SRP"
+    if icone_aviso(imagem):
+        return "ja ha um aviso aberto no SRP. Feche o aviso (OK) e deixe o cursor no campo Item"
+    return None
+
+
 def capturar(janela):
     ret = janela.rectangle()
     return ImageGrab.grab(bbox=(ret.left, ret.top, ret.right, ret.bottom), all_screens=True)
@@ -365,6 +379,18 @@ def contas_suspeitas(registros):
         if certo and r["conta"] and r["conta"] != certo["conta"]:
             suspeitas.append((r["linha"], r["item"], r["conta"], certo["conta"]))
     return suspeitas
+
+
+def aplicar_sugestoes(registros, linhas):
+    """Troca a Conta das `linhas` que o USUARIO aceitou pela que o SRP informou como correta (ver contas_suspeitas).
+    So na memoria: a planilha no disco nao muda. Devolve [(linha, conta_antes, conta_nova)]."""
+    sugeridas = {linha: correta for linha, _, _, correta in contas_suspeitas(registros)}
+    trocas = []
+    for r in registros:
+        if r["linha"] in linhas and r["linha"] in sugeridas:
+            trocas.append((r["linha"], r["conta"], sugeridas[r["linha"]]))
+            r["conta"] = sugeridas[r["linha"]]
+    return trocas
 
 
 def localizar_colunas(imagem, tesseract):
@@ -831,6 +857,11 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         colunas = None
         exe_tesseract = caminho_tesseract()
         tela_inicial = capturar(janela)
+        ret = janela.rectangle()
+        problema = problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela_inicial)
+        if problema:
+            registrar(f"Nao iniciei: {problema}. Nada foi digitado.")
+            return 1
         try:  # vermelhos que ja estao na tela (faixa do cabecalho do SRP): nao sao aviso
             fixos = caixas_cor(tela_inicial, "vermelho")
         except Exception:
@@ -851,9 +882,19 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 registrar("Interrompido antes de iniciar.")
                 return 1
             time.sleep(0.1)
+        # fim da contagem: o cursor tem que estar no Item, senao nada e digitado
+        proximo = caixa_foco(janela)  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
+        if not proximo:
+            registrar("Nao iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Item da primeira linha livre "
+                      "e inicie de novo. Nada foi digitado.")
+            return 1
+        if colunas and "item" in colunas and qual_coluna(proximo, colunas) != "item":
+            onde = qual_coluna(proximo, colunas)
+            registrar(f"Nao iniciei: o cursor esta {f'na coluna {NOME_CAMPO[onde]}' if onde else 'fora da grade'}, "
+                      "nao no Item. Clique no campo Item da primeira linha livre e inicie de novo. Nada foi digitado.")
+            return 1
         passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
         coluna_qtd = None  # (esq, dir, altura) da coluna Quantidade, aprendida uma vez
-        proximo = None  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
         for r in registros:
             if janela_trecho.lower() not in titulo_janela_ativa().lower():
                 registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
