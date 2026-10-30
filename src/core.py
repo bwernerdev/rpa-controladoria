@@ -53,6 +53,14 @@ def ler_planilha(caminho):
     return registros
 
 
+def itens_repetidos(registros):
+    """{item: [linhas]} dos codigos de Item que aparecem mais de uma vez (o SRP soma itens iguais na mesma linha)."""
+    linhas = {}
+    for r in registros:
+        linhas.setdefault(r["item"], []).append(r["linha"])
+    return {item: lista for item, lista in linhas.items() if len(lista) > 1}
+
+
 def validar(registros):
     erros = []
     for r in registros:
@@ -81,33 +89,50 @@ def descrever(r):
     return " ".join("TAB" if v is None else f"'{v}'" for _, v in passos(r))
 
 
-def maior_caixa_ciano(imagem):
-    """Retângulo (esq, topo, dir, base) do maior bloco ciano puro; ignora pixels ciano soltos."""
+def _mascara_ciano(imagem):
     r, g, b = imagem.convert("RGB").split()
     mascara = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if v < 40 else 0),
                                                       g.point(lambda v: 255 if v > 215 else 0)),
                                   b.point(lambda v: 255 if v > 215 else 0))
-    mascara = mascara.filter(ImageFilter.MinFilter(5))
-    largura, altura = mascara.size
-    dados = mascara.load()
-    visto = set()
+    return mascara.filter(ImageFilter.MinFilter(5))
+
+
+def _trechos(valores):
+    """Intervalos [ini, fim) onde a sequencia e diferente de zero."""
+    trechos, inicio = [], None
+    for i, v in enumerate(valores):
+        if v and inicio is None:
+            inicio = i
+        elif not v and inicio is not None:
+            trechos.append((inicio, i))
+            inicio = None
+    if inicio is not None:
+        trechos.append((inicio, len(valores)))
+    return trechos
+
+
+def maior_caixa_ciano(imagem):
+    """Retangulo (esq, topo, dir, base) do maior bloco ciano puro; ignora pixels ciano soltos.
+    Trabalha por faixas (getbbox/resize em C): ~100x mais rapido que percorrer pixel a pixel, e nao trava a janela."""
+    mascara = _mascara_ciano(imagem)
+    caixa_total = mascara.getbbox()
+    if not caixa_total:
+        return None
+    esq0, topo0, dir0, base0 = caixa_total
+    regiao = mascara.crop(caixa_total)
+    largura, altura = regiao.size
+    linhas = [regiao.crop((0, y, largura, y + 1)).getbbox() is not None for y in range(altura)]
     melhor = None
-    for y0 in range(altura):
-        for x0 in range(largura):
-            if dados[x0, y0] and (x0, y0) not in visto:
-                pilha, area = [(x0, y0)], 0
-                esq, topo, dir_, base = x0, y0, x0, y0
-                visto.add((x0, y0))
-                while pilha:
-                    x, y = pilha.pop()
-                    area += 1
-                    esq, topo, dir_, base = min(esq, x), min(topo, y), max(dir_, x), max(base, y)
-                    for vx, vy in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-                        if 0 <= vx < largura and 0 <= vy < altura and dados[vx, vy] and (vx, vy) not in visto:
-                            visto.add((vx, vy))
-                            pilha.append((vx, vy))
-                if melhor is None or area > melhor[0]:
-                    melhor = (area, (esq, topo, dir_ + 1, base + 1))
+    for y_ini, y_fim in _trechos(linhas):
+        faixa = regiao.crop((0, y_ini, largura, y_fim))
+        colunas = list(faixa.resize((largura, 1), Image.BOX).getdata())
+        for x_ini, x_fim in _trechos(colunas):
+            bloco = faixa.crop((x_ini, 0, x_fim, y_fim - y_ini)).getbbox()
+            if not bloco:
+                continue
+            area = (bloco[2] - bloco[0]) * (bloco[3] - bloco[1])
+            if melhor is None or area > melhor[0]:
+                melhor = (area, (esq0 + x_ini + bloco[0], topo0 + y_ini + bloco[1], esq0 + x_ini + bloco[2], topo0 + y_ini + bloco[3]))
     return melhor[1] if melhor else None
 
 
@@ -217,11 +242,24 @@ def pasta_base():
 
 
 def citrix_aberto(trecho="Desktop Viewer"):
-    try:
-        janela_citrix(trecho)
+    """Ha janela visivel com `trecho` no titulo? Usa EnumWindows (rapido; nao disputa a janela do app)."""
+    user32 = ctypes.windll.user32
+    achou = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def visitar(alvo, _):
+        if user32.IsWindowVisible(alvo):
+            tamanho = user32.GetWindowTextLengthW(alvo)
+            if tamanho:
+                texto = ctypes.create_unicode_buffer(tamanho + 1)
+                user32.GetWindowTextW(alvo, texto, tamanho + 1)
+                if trecho.lower() in texto.value.lower():
+                    achou.append(True)
+                    return False
         return True
-    except LookupError:
-        return False
+
+    user32.EnumWindows(visitar, None)
+    return bool(achou)
 
 
 def pasta_logs():

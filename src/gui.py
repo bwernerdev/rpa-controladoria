@@ -10,7 +10,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import caminho_tesseract, citrix_aberto, descrever, executar, ler_planilha, pasta_base, pasta_logs, validar
+from core import (caminho_tesseract, citrix_aberto, descrever, executar, itens_repetidos, ler_planilha, pasta_base,
+                  pasta_logs, validar)
 from icone import desenhar
 from versao import NOME, VERSAO
 
@@ -405,6 +406,13 @@ class App(RaizTk):
             self.registros = registros
             self.barra.configure(maximum=len(registros))
             self._status("Pronta para preencher", "ok")
+            repetidos = itens_repetidos(registros)
+            if repetidos:
+                lista = "; ".join(f"{item} (linhas {', '.join(map(str, linhas))})" for item, linhas in list(repetidos.items())[:5])
+                self.escrever(f"AVISO: {len(repetidos)} item(ns) repetido(s): {lista}{' ...' if len(repetidos) > 5 else ''}. "
+                              "O SRP soma as quantidades de itens iguais na mesma linha, entao a conferencia da quantidade "
+                              "vai interromper. Para esta planilha, desmarque 'Conferir quantidade na tela'.")
+                self._status("Itens repetidos: veja o aviso", "aviso")
         self._atualizar_botoes()
 
     def selecionadas(self, retomar=False):
@@ -445,6 +453,9 @@ class App(RaizTk):
         else:
             aviso = (f"Preencher {len(registros)} linha(s) no SRP?\n\n"
                      "Depois do OK você terá 5 segundos para clicar no campo Item da primeira linha livre.")
+        if self.conferir.get() and itens_repetidos(self.registros):
+            aviso += ("\n\nATENÇÃO: a planilha tem itens repetidos e a conferência da quantidade está ligada. "
+                      "Como o SRP soma itens iguais, a conferência vai interromper nesses itens.")
         if not messagebox.askokcancel("Iniciar", aviso):
             return
         self.parar.clear()
