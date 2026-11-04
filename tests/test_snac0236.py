@@ -7,6 +7,8 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
+from PIL import Image
+
 import simulador  # noqa: F401  (poe src no sys.path)
 import core
 import snac0236
@@ -17,13 +19,13 @@ CHAVE_B = "2" * 40 + "0002"
 # palavras da tela (texto, esq, topo, larg, alt), como o palavras_tela devolve
 PALAVRAS = [
     ("Chave", 10, 100, 40, 12), ("Acesso", 55, 100, 45, 12), ("NF-e", 105, 100, 25, 12),
-    ("Filial", 10, 130, 35, 12), ("Fiscal:", 50, 130, 40, 12), ("Filial", 500, 130, 35, 12), ("Pagamento:", 540, 130, 70, 12),
+    ("Filial", 10, 130, 35, 12), ("Física:", 50, 130, 40, 12), ("Filial", 500, 130, 35, 12), ("Pagamento:", 540, 130, 70, 12),
     ("Data", 10, 160, 30, 12), ("Emissão:", 45, 160, 55, 12), ("Entrada:", 200, 160, 50, 12),
     ("Valor", 400, 190, 35, 12), ("Total", 440, 190, 35, 12), ("Documento:", 480, 190, 70, 12),
     ("Frete:", 10, 220, 40, 12),
     ("Integrar", 500, 300, 50, 12), ("Coleta", 600, 300, 40, 12), ("Frete", 645, 300, 35, 12),
     ("Item", 10, 370, 30, 12), ("Documento", 45, 370, 70, 12), ("Recebimento", 120, 370, 90, 12),
-    ("Item", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12),
+    ("tem", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12),
 ]
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
           "data": (110, 160, 170, 172), "valor_total": (560, 190, 650, 202), "frete": (60, 220, 110, 232)}
@@ -89,8 +91,11 @@ class SRP0236:
 def ambiente(srp, palavras=PALAVRAS):
     pasta = pathlib.Path(tempfile.mkdtemp())
     trocas = {
-        "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela, "capturar": lambda janela: None,
-        "palavras_tela": lambda imagem, t: list(palavras), "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
+        "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
+        "capturar": lambda janela: Image.new("RGB", (1366, 768), "white"),
+        # tela inteira: as palavras; recorte em volta do Integrar (relido antes do clique): o botao na posicao do recorte
+        "palavras_tela": lambda imagem, t: list(palavras) if imagem.size == (1366, 768) else [("Integrar", 300, 80, 50, 12)],
+        "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
         "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer", "mouse_no_canto": lambda: False,
         "janela_citrix": lambda trecho: simulador.Janela(), "problema_tela": lambda retangulo, imagem: None,
         "pasta_logs": lambda: pasta, "caixas_cor": lambda imagem, cor: [],
@@ -194,7 +199,7 @@ class PassoAPasso(unittest.TestCase):
         passos = [a for a in avisos if a.startswith("Passo a passo:")]
         enters = sum(n for _, n in snac0236.SEQ_CABECALHO + snac0236.SEQ_ITEM)
         self.assertEqual(len(passos), 12 + enters + 1)  # 12 campos, cada Enter e o Integrar
-        self.assertIn("Passo a passo: digitar '30' em Filial Fiscal (1a parte)", passos)
+        self.assertIn("Passo a passo: digitar '30' em Filial Fisica (1a parte)", passos)
         self.assertEqual(passos[-1], "Passo a passo: clicar em Integrar")
         self.assertGreater(__import__("time").time() - inicio, 0.01 * len(passos) * 0.9)
 

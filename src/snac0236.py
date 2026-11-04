@@ -1,7 +1,7 @@
 """SNAC0236 (Digitacao Documento Recebimento): planilha, validacao e preenchimento pelo Citrix.
 
 O SRP anda entre os campos com Enter. Sequencia por nota (combinada com o usuario em 04/11/2026):
-  Chave NF + 5 Enter, Filial (2 partes: 1a + 1 Enter, 2a + 2 Enter), Data Emissao + 7 Enter,
+  Chave NF + 5 Enter, Filial (nos campos Filial Fisica; 2 partes: 1a + 1 Enter, 2a + 2 Enter), Data Emissao + 7 Enter,
   Valor Total Documento + 1 Enter, Frete + 10 Enter (chega no Item da grade); por item:
   Item + 1 Enter (abre o Rateio), Oper SPM + 1 Enter, Qtd Fiscal + 2 Enter, Valor Unit + 1 Enter,
   Valor do ICMS + 7 Enter, ICMS Terceiro + 1 Enter; no fim da nota, clique em Integrar.
@@ -33,7 +33,9 @@ VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro")
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
 SEQ_ITEM = (("item", 1), ("oper", 1), ("qtd", 2), ("unit", 1), ("icms", 7), ("icms_terceiro", 1))
-NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fiscal (1a parte)", "filial2": "Filial Fiscal (2a parte)",
+# a FILIAL FISCAL da planilha vai nos campos "Filial Fisica" da tela: depois da Chave + 5 Enter o SRP preenche CNPJ,
+# Serie e Docto e o cursor cai na Filial Fisica (visto na tela real em 04/11/2026, monitor 4K)
+NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fisica (1a parte)", "filial2": "Filial Fisica (2a parte)",
         "data": "Data Emissao", "valor_total": "Valor Total Documento", "frete": "Frete", "item": "Item",
         "oper": "Oper SPM", "qtd": "Qtd Fiscal", "unit": "Valor Unit", "icms": "Valor do ICMS",
         "icms_terceiro": "ICMS Terceiro"}
@@ -243,7 +245,7 @@ def localizar_rotulos(palavras):
 
     regras = {
         "chave": lambda t: t.startswith("chave"),
-        "filial": lambda t: t.startswith("filial fiscal"),
+        "filial": lambda t: t.startswith("filial fisica"),
         "data": lambda t: t.startswith("data emiss"),
         "valor_total": lambda t: t.startswith("valor total"),
         "frete": lambda t: t == "frete",
@@ -255,10 +257,25 @@ def localizar_rotulos(palavras):
             achados[campo] = caixa
     descricoes = [caixa for texto, caixa in lista if texto.startswith("descri")]
     for texto, caixa in lista:
-        if texto == "item" and any(abs((caixa[1] + caixa[3]) / 2 - (d[1] + d[3]) / 2) <= 14 for d in descricoes):
+        # em 4K o Tesseract le o "Item" do cabecalho da grade como "tem"
+        if texto in ("item", "tem", "ltem", "1tem") and any(abs((caixa[1] + caixa[3]) / 2 - (d[1] + d[3]) / 2) <= 14 for d in descricoes):
             achados["item"] = caixa
             break
     return achados
+
+
+def binarizar(imagem, limiar=80):
+    """Texto escuro em preto, o resto em branco: os botoes do SRP (texto preto em fundo cinza) so sao lidos assim."""
+    return imagem.convert("L").point(lambda v: 0 if v < limiar else 255).convert("RGB")
+
+
+def ler_rotulos(imagem, tesseract):
+    """localizar_rotulos com uma segunda leitura (imagem binarizada) para os rotulos que faltarem (ex.: Integrar)."""
+    rotulos = localizar_rotulos(core.palavras_tela(imagem, tesseract))
+    if any(c not in rotulos for c in ("chave", "filial", "data", "valor_total", "frete", "item", "integrar")):
+        for campo, caixa in localizar_rotulos(core.palavras_tela(binarizar(imagem), tesseract)).items():
+            rotulos.setdefault(campo, caixa)
+    return rotulos
 
 
 def ao_lado(caixa, rotulo, distancia=60):
@@ -401,7 +418,16 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         if not tesseract:
             return None
         try:
-            achado = localizar_rotulos(core.palavras_tela(core.capturar(janela), tesseract)).get("integrar")
+            # le so a faixa em volta de onde o botao estava no inicio (mais rapido); sem posicao inicial, a tela toda
+            tela_agora = core.capturar(janela)
+            antes = rotulos.get("integrar")
+            if antes:
+                esq, topo = max(antes[0] - 300, 0), max(antes[1] - 80, 0)
+                recorte = tela_agora.crop((esq, topo, min(antes[2] + 300, tela_agora.width), min(antes[3] + 80, tela_agora.height)))
+                caixa = localizar_rotulos(core.palavras_tela(binarizar(recorte), tesseract)).get("integrar")
+                achado = (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
+            else:
+                achado = ler_rotulos(tela_agora, tesseract).get("integrar")
         except Exception as erro:
             registrar(f"  leitura do botao Integrar falhou: {erro}", mostrar=False)
             return None
@@ -439,7 +465,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         rotulos = {}
         if tesseract:
             try:
-                rotulos = localizar_rotulos(core.palavras_tela(tela, tesseract))
+                rotulos = ler_rotulos(tela, tesseract)
             except Exception as erro:
                 registrar(f"  leitura dos rotulos falhou: {erro}", mostrar=False)
         registrar(f"  rotulos lidos: {rotulos}", mostrar=False)
