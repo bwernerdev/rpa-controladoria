@@ -74,7 +74,7 @@ class SRP0236:
     def titulo(self):
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
-        return [{"icms": ("Vlr ICMS Item Doc Forn", 0, 0, 50, 10)}.get(
+        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10)}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):

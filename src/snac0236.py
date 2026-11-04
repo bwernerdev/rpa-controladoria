@@ -421,7 +421,8 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
 
 # texto esperado no titulo da coluna, acima do campo em foco, nas colunas que so aparecem depois que a grade rola
 # (o Valor Unit fica amarelo, sem ciano: nao ha caixa para ler o titulo acima; ver entrar_no_valor_unit)
-TITULO_COLUNA = {"icms": ("icms",)}
+# em 4K o Tesseract leu "Vlr ICMS Item Doc Forn" como "vir oms tem doc forn" (04/11/2026)
+TITULO_COLUNA = {"icms": ("icms", "cms", "oms", "doc forn", "forn")}
 
 
 def titulo_acima(imagem, caixa, tesseract):
