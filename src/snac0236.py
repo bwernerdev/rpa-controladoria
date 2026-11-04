@@ -345,7 +345,9 @@ def ler_estado(janela, fixos=()):
     return foco_unido(imagem), core.icone_aviso(imagem, fixos) is not None
 
 
-def aguardar(janela, referencia, limite, fixos=(), sem_cor=0.8):
+# 2 s: ao entrar no Valor Unit a grade rola para a direita e o ciano demora a voltar (04/11/2026: com 0,8 s o robo
+# achou que era campo sem cor, deu mais um Enter e digitou o Valor Unit no Vlr ICMS)
+def aguardar(janela, referencia, limite, fixos=(), sem_cor=2.0):
     """Depois de um Enter: a nova caixa do foco; "aviso" se o aviso do SRP aparecer; "sem_cor" se nenhum campo ficar
     ciano por `sem_cor` s (listas como o Lemg so ganham borda pontilhada); None se o foco nao andar em `limite` s.
     Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta."""
@@ -407,12 +409,28 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
         if not rotulo or not anterior:
             return None
         return abs((caixa[1] + caixa[3]) / 2 - (anterior[1] + anterior[3]) / 2) <= 6 and caixa[0] > anterior[2]
-    if campo in ("item", "oper", "qtd", "unit"):  # colunas da grade
+    if campo in ("item", "oper", "qtd"):  # colunas da grade visiveis no inicio (depois do Valor Unit a grade rola)
         return na_coluna(caixa, rotulos[campo]) if campo in rotulos else None
+    if campo in ("unit", "icms", "icms_terceiro"):  # grade ja rolada: posicao do inicio nao vale (titulo_acima confere)
+        return None
     chave = "filial" if campo == "filial1" else campo
     if chave in rotulos:
         return ao_lado(caixa, rotulos[chave], lista)
     return None
+
+
+# texto esperado no titulo da coluna, acima do campo em foco, nas colunas que so aparecem depois que a grade rola
+TITULO_COLUNA = {"unit": ("unitario",), "icms": ("icms",)}
+
+
+def titulo_acima(imagem, caixa, tesseract):
+    """Texto (normalizado) do titulo da coluna logo acima do campo em foco, lido na hora (a grade pode ter rolado)."""
+    altura = caixa[3] - caixa[1]
+    area = (max(caixa[0] - 10, 0), max(caixa[1] - 4 * altura, 0), min(caixa[2] + 10, imagem.width), max(caixa[1] - 2, 1))
+    if area[2] <= area[0] or area[3] <= area[1]:
+        return ""
+    recorte = imagem.crop(area)
+    return normalizar(" ".join(p[0] for p in core.palavras_tela(recorte, tesseract)))
 
 
 def clicar(x, y):
@@ -660,9 +678,14 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                             raise Travou(campo, f"o cursor esta num campo sem cor antes do {NOME[campo]}; nao digito sem ver o campo")
                         if posicao_ok(campo, foco, rotulos, None, lidas) is False:
                             raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]}{local(foco)}")
+                        if campo in TITULO_COLUNA and tesseract:
+                            titulo = titulo_acima(core.capturar(janela), foco, tesseract)
+                            registrar(f"  titulo acima do {NOME[campo]}: {titulo!r}", mostrar=False)
+                            if not any(t in titulo for t in TITULO_COLUNA[campo]):
+                                raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]} (titulo acima: '{titulo}')")
                         digitar(r[campo], campo)
                         alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
-                        if alvo in ("oper", "qtd", "unit"):  # colunas visiveis no inicio: Enter ate a coluna certa
+                        if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                             foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
                         else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
                             foco = enters(campo, quantos, foco)

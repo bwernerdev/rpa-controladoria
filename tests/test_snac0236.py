@@ -70,6 +70,12 @@ class SRP0236:
             return f"{nome}{k}", (x, 430 + 20 * k, x + 60, 442 + 20 * k)
         return (f"{nome}{k}" if nome else None), (1400, 500 + 15 * j, 1460, 510 + 15 * j)
 
+    def titulo(self):
+        """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
+        nome = (self.onde()[0] or "").rstrip("0123456789")
+        return [{"unit": ("Unitario Fiscal", 0, 0, 50, 10), "icms": ("Vlr ICMS Item Doc Forn", 0, 0, 50, 10)}.get(
+            nome, ("Outra", 0, 0, 30, 10))]
+
     def caixa(self, _janela=None):
         return None if self.indice in self.sem_cor else self.onde()[1]
 
@@ -102,9 +108,10 @@ def ambiente(srp, palavras=PALAVRAS):
     pasta = pathlib.Path(tempfile.mkdtemp())
     trocas = {
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
-        "capturar": lambda janela: Image.new("RGB", (1366, 768), "white"),
-        # tela inteira: as palavras; recorte em volta do Integrar (relido antes do clique): o botao na posicao do recorte
-        "palavras_tela": lambda imagem, t: list(palavras) if imagem.size == (1366, 768) else [("Integrar", 300, 80, 50, 12)],
+        "capturar": lambda janela: Image.new("RGB", (1600, 900), "white"),
+        # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
+        "palavras_tela": lambda imagem, t: (list(palavras) if imagem.size == (1600, 900) else
+                                            srp.titulo() if imagem.height < 60 else [("Integrar", 300, 80, 50, 12)]),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
         "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer", "mouse_no_canto": lambda: False,
         "janela_citrix": lambda trecho: simulador.Janela(), "problema_tela": lambda retangulo, imagem: None,
