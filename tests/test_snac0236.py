@@ -28,7 +28,15 @@ PALAVRAS = [
     ("tem", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12), ("Spm", 900, 400, 30, 12), ("Nat", 990, 385, 30, 12),
     ("Oper", 990, 400, 30, 12), ("(ltd.", 1050, 400, 40, 12), ("Fiscal", 1095, 400, 40, 12), ("Unitario", 1180, 400, 60, 12),
     ("Fiscal", 1245, 400, 40, 12),
+    # Rateio (grade de tributos e botao); no simulador a tela inteira sempre devolve estas palavras
+    ("Ident", 800, 560, 40, 12), ("Tributo", 800, 575, 50, 12), ("Base", 990, 575, 35, 12), ("Calculo", 1030, 575, 50, 12),
+    ("Aliquota", 1100, 575, 55, 12), ("Lancamento", 1190, 575, 75, 12), ("COFINS", 150, 600, 50, 12),
+    ("ALIQUOTA", 205, 600, 60, 12), ("ZERO", 270, 600, 35, 12), ("ICMS", 150, 660, 35, 12), ("TERCEIROS", 190, 660, 75, 12),
+    ("Tributos", 700, 800, 55, 12), ("OK", 760, 800, 20, 12),
 ]
+TRIBUTOS_OK = (700, 800, 780, 812)
+LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
+COLUNAS_TRIBUTO = {"ident": 800, "base": 1000, "aliquota": 1100, "lancamento": 1200}
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
           "data": (110, 160, 170, 172), "valor_total": (560, 190, 650, 202), "frete": (60, 220, 110, 232)}
 INTEGRAR = (500, 300, 550, 312)
@@ -37,7 +45,9 @@ INTEGRAR = (500, 300, 550, 312)
 class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
-    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=(), extras_rateio=0):
+    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=(), extras_rateio=0,
+                 colunas_tributo=tuple(COLUNAS_TRIBUTO)):
+        self.colunas_tributo = colunas_tributo  # campos de cada linha de tributo em que o Enter para
         self.extras_rateio = extras_rateio  # Enter a mais (alem dos 7) ate o Rateio abrir
         self.parado = set(parado)  # nomes de campo em que o Enter nao faz nada (nem aviso)
         self.sem_cor = set(sem_cor)  # indices do cabecalho cujo foco nao fica ciano (ex.: a lista Lemg)
@@ -51,7 +61,8 @@ class SRP0236:
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
-        rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * (6 + self.extras_rateio) + ["icms_terceiro"]
+        tributos = [f"t{cod}{col}" for cod in LINHAS_TRIBUTO for col in self.colunas_tributo]
+        rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * (6 + self.extras_rateio) + tributos
         return cab, rateio
 
     def onde(self):
@@ -70,8 +81,9 @@ class SRP0236:
         if nome in colunas:
             x = colunas[nome]
             return f"{nome}{k}", (x, 430 + 20 * k, x + 60, 442 + 20 * k)
-        if nome == "icms_terceiro":  # janela do Rateio: outra altura da tela
-            return f"{nome}{k}", (1400, 700, 1460, 710)
+        if nome and nome.startswith("t1"):  # grade de tributos do Rateio
+            x, y = COLUNAS_TRIBUTO[nome[4:]], LINHAS_TRIBUTO[nome[1:4]]
+            return f"{nome}{k}", (x, y, x + 60, y + 12)
         if j > 5:  # depois do Valor Unit a grade rola: o foco fica parado na borda direita (como no SRP real em 4K)
             return (f"{nome}{k}" if nome else None), (1400, 500, 1460, 510)
         return (f"{nome}{k}" if nome else None), (1400, 500 + 15 * j, 1460, 510 + 15 * j)
@@ -79,8 +91,7 @@ class SRP0236:
     def titulo(self):
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
-        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10),
-                 "icms_terceiro": ("Base de Calculo ICMS Terceiro", 0, 0, 50, 10)}.get(
+        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10)}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
@@ -109,8 +120,16 @@ class SRP0236:
             elif nome:
                 self.atual[nome] = self.atual.get(nome, "") + texto.replace("{,}", ",")
 
+    def rateio_aberto(self):
+        return (self.onde()[0] or "").startswith("t1")
+
     def clicar(self, x, y):
         with self.lock:
+            if TRIBUTOS_OK[0] <= x <= TRIBUTOS_OK[2] and TRIBUTOS_OK[1] <= y <= TRIBUTOS_OK[3] and self.rateio_aberto():
+                cab, rateio = self.campos()  # fecha o Rateio: foco no Item da proxima linha da grade
+                k = (self.indice - len(cab)) // (1 + len(rateio))
+                self.indice = len(cab) + (k + 1) * (1 + len(rateio))
+                return
             if INTEGRAR[0] <= x <= INTEGRAR[2] and INTEGRAR[1] <= y <= INTEGRAR[3]:
                 self.integradas.append(self.atual)
                 self.atual = {}
@@ -126,7 +145,9 @@ def ambiente(srp, palavras=PALAVRAS):
         "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
         "palavras_tela": lambda imagem, t: (list(palavras) if imagem.size == (1600, 900) else
-                                            srp.titulo() if imagem.height < 60 else [("Integrar", 300, 80, 50, 12)]),
+                                            srp.titulo() if imagem.height < 60 else
+                                            [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
+                                            [("Integrar", 300, 80, 50, 12)]),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
         "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer", "mouse_no_canto": lambda: False,
         "janela_citrix": lambda trecho: simulador.Janela(), "problema_tela": lambda retangulo, imagem: None,
@@ -149,8 +170,8 @@ def nota(chave, itens, filial=("30", "46"), data="01/11/2026", total="47407.28",
     return notas[0]
 
 
-def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="21"):
-    return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t}
+def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="0", base="0"):
+    return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t, "base_icms": base}
 
 
 def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0):
@@ -177,7 +198,7 @@ class Planilha(unittest.TestCase):
         wb = Workbook()
         ws = wb.active
         ws.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
-                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIRO (BASE DE CALCULO NF)"])
+                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIROS (BASE DE CALCULO NF)", "BASE CALC. ICMS"])
         for linha in linhas:
             ws.append(linha)
         caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
@@ -186,7 +207,7 @@ class Planilha(unittest.TestCase):
 
     def test_formatos_e_agrupamento(self):
         caminho = self.gravar([
-            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "cif", 900135, "5101", 2, 10.5, 1.89, 21],
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "cif", 900135, "5101", 2, 10.5, 1.89, 21, 1500.5],
             [CHAVE_A, None, None, None, None, "900266", 5101, 1.25, "3,75", None, None],
             [CHAVE_B, "30 47", "02/11/2026", "1200", "FOB", 900135, 5102, 1, 1200, 0, 0],
         ])
@@ -197,11 +218,14 @@ class Planilha(unittest.TestCase):
         self.assertEqual((a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]), ("30", "46", "01/11/2026", "47407.28", "CIF"))
         self.assertEqual((a["itens"][1]["qtd"], a["itens"][1]["unit"], a["itens"][1]["icms"]), ("1.25", "3.75", ""))
         self.assertEqual(notas[1]["frete"], "FOB")
+        self.assertEqual(snac0236.valores_rateio(a["itens"][0]), {"ident": "1", "base": "1500.5"})
+        self.assertEqual(snac0236.valores_rateio(a["itens"][1]),
+                         {"ident": "0", "base": "0", "aliquota": "0", "lancamento": "0"})
 
     def test_erros(self):
         caminho = self.gravar([
             [1.11e43, "3046", "31/02/2026", "47.407,28", 150, "900135", None, 1, 1, 0, 0],
-            [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 5, 0],
             [CHAVE_A, "30 47", "01/11/2026", 10, None, "900266", "5101", 1, 1, 0, 0],
             [CHAVE_B, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
             [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
@@ -210,7 +234,8 @@ class Planilha(unittest.TestCase):
         texto = "\n".join(erros)
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
                        "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
-                       "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco"):
+                       "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco",
+                       "linha 3: ICMS TERCEIROS (BASE DE CALCULO NF) e BASE CALC. ICMS precisam ser os dois 0"):
             self.assertIn(trecho, texto)
 
     def test_coluna_faltando(self):
@@ -232,7 +257,9 @@ class PassoAPasso(unittest.TestCase):
         self.assertEqual(codigo, 0, avisos)
         passos = [a for a in avisos if a.startswith("Passo a passo:")]
         enters = sum(n for _, n in snac0236.SEQ_CABECALHO + snac0236.SEQ_ITEM)
-        self.assertEqual(len(passos), 12 + enters + 1)  # 12 campos, cada Enter e o Integrar
+        # 11 campos + 4 do ICMS TERCEIROS, os Enter combinados, os Enter ate o Rateio e na linha, Tributos OK e Integrar
+        self.assertGreater(len(passos), 15 + enters + 2)
+        self.assertIn("Passo a passo: clicar em Tributos OK", passos)
         self.assertIn("Passo a passo: digitar '30' em Filial Fisica (1a parte)", passos)
         self.assertEqual(passos[-1], "Passo a passo: clicar em Integrar")
         self.assertGreater(__import__("time").time() - inicio, 0.01 * len(passos) * 0.9)
@@ -288,8 +315,8 @@ class Fluxo(unittest.TestCase):
         a = srp.integradas[0]
         self.assertEqual((a["chave"], a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]),
                          (CHAVE_A, "30", "46", "01/11/2026", "47407.28", "CIF"))
-        self.assertEqual((a["item0"], a["oper0"], a["qtd0"], a["unit0"], a["icms0"], a["icms_terceiro0"]),
-                         ("900135", "5101", "2", "10.5", "1.89", "21"))
+        self.assertEqual((a["item0"], a["oper0"], a["qtd0"], a["unit0"], a["icms0"], a["t114ident0"]),
+                         ("900135", "5101", "2", "10.5", "1.89", "0"))
         self.assertEqual((a["item1"], a["qtd1"]), ("900266", "1.25"))
         self.assertEqual(srp.integradas[1]["chave"], CHAVE_B)
         self.assertEqual(estados[-1], (4, "ok"))
@@ -318,12 +345,37 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
 
-    def test_rateio_com_mais_enters(self):
-        srp = SRP0236(extras_rateio=3)  # 10 Enter ate o Rateio em vez de 7
+    def test_rateio_sem_imposto(self):
+        srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados
         with ambiente(srp):
-            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", icms_t="21")])])
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
-        self.assertEqual(srp.integradas[0]["icms_terceiro0"], "21")
+        nota_srp = srp.integradas[0]
+        self.assertEqual({c: nota_srp.get(f"t114{c}0") for c in COLUNAS_TRIBUTO}, dict.fromkeys(COLUNAS_TRIBUTO, "0"))
+        self.assertFalse([n for n in nota_srp if n.startswith(("t199", "t198"))])  # COFINS e PIS: nao mexe
+
+    def test_rateio_com_imposto(self):
+        srp = SRP0236()
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", icms_t="21", base="1500.5")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
+                         {"t114ident0": "1", "t114base0": "1500.5"})
+
+    def test_rateio_dois_itens(self):
+        srp = SRP0236()
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135"), item("900266", icms_t="2", base="30")])])
+        self.assertEqual(codigo, 0, avisos)
+        nota_srp = srp.integradas[0]
+        self.assertEqual((nota_srp["t114ident0"], nota_srp["t114ident1"], nota_srp["t114base1"]), ("0", "1", "30"))
+
+    def test_rateio_sem_o_campo_pausa(self):
+        srp = SRP0236(colunas_tributo=("ident", "base", "aliquota"))  # Lancamento nao para: pausa, sem Tributos OK
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("Lancamento" in a for a in avisos), avisos)
 
     def test_valor_unit_amarelo(self):
         srp = SRP0236()  # o Valor Unit nao fica ciano: o robo confere a entrada pela rolagem da grade
@@ -376,11 +428,12 @@ class Fluxo(unittest.TestCase):
 
     def test_sem_rotulos_so_conta_enters(self):
         srp = SRP0236()
-        with ambiente(srp, palavras=[("Integrar", 500, 300, 50, 12)]):
+        rateio = PALAVRAS[PALAVRAS.index(("Ident", 800, 560, 40, 12)):]  # o Rateio e lido quando abre
+        with ambiente(srp, palavras=[("Integrar", 500, 300, 50, 12)] + rateio):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertTrue(any("nao li na tela os rotulos" in a for a in avisos))
-        self.assertEqual(srp.integradas[0]["icms_terceiro0"], "21")
+        self.assertEqual(srp.integradas[0]["t114ident0"], "0")
 
 
 if __name__ == "__main__":

@@ -21,25 +21,28 @@ import core
 # coluna da planilha (normalizada) -> chave
 COLUNAS = {"chave nf": "chave", "filial fiscal": "filial", "data emissao": "data", "valor total documento": "valor_total",
            "frete": "frete", "item": "item", "oper spm": "oper", "qtd fiscal": "qtd", "valor unit": "unit",
-           "valor do icms": "icms", "icms terceiro": "icms_terceiro"}
+           "valor do icms": "icms", "icms terceiro": "icms_terceiro", "base calc. icms": "base_icms"}
 TITULOS = {"chave": "CHAVE NF", "filial": "FILIAL FISCAL", "data": "DATA EMISSÃO", "valor_total": "VALOR TOTAL DOCUMENTO",
            "frete": "FRETE", "item": "ITEM", "oper": "OPER SPM", "qtd": "QTD FISCAL", "unit": "VALOR UNIT",
-           "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIRO"}
+           "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIROS (BASE DE CALCULO NF)", "base_icms": "BASE CALC. ICMS"}
 CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da nota (repetidos ou so na 1a linha)
 OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
 FRETES = ("CIF", "FOB")  # o campo Frete do SRP recebe o tipo de frete, nao valor
-VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro")
+VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro", "base_icms")
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
 # depois do Oper SPM o 1o Enter cai no Nat Oper (ja preenchido; nao mexer) e o 2o no Qtd Fiscal (04/11/2026)
-SEQ_ITEM = (("item", 1), ("oper", 2), ("qtd", 2), ("unit", 1), ("icms", 7), ("icms_terceiro", 1))
+# depois do Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio (`preencher_rateio`, sem contagem fixa)
+SEQ_ITEM = (("item", 1), ("oper", 2), ("qtd", 2), ("unit", 1), ("icms", 0))
 # a FILIAL FISCAL da planilha vai nos campos "Filial Fisica" da tela: depois da Chave + 5 Enter o SRP preenche CNPJ,
 # Serie e Docto e o cursor cai na Filial Fisica (visto na tela real em 04/11/2026, monitor 4K)
 NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fisica (1a parte)", "filial2": "Filial Fisica (2a parte)",
         "data": "Data Emissao", "valor_total": "Valor Total Documento", "frete": "Frete", "item": "Item",
         "oper": "Oper SPM", "qtd": "Qtd Fiscal", "unit": "Valor Unit", "icms": "Valor do ICMS",
-        "icms_terceiro": "ICMS Terceiro"}
+        "icms_terceiro": "ICMS Terceiro", "rateio": "Rateio", "ident": "Ident Tributo (ICMS TERCEIROS)",
+        "base": "Base Calculo (ICMS TERCEIROS)", "aliquota": "Aliquota (ICMS TERCEIROS)",
+        "lancamento": "Lancamento (ICMS TERCEIROS)"}
 
 
 def normalizar(texto):
@@ -49,8 +52,10 @@ def normalizar(texto):
 
 def chave_coluna(titulo):
     nome = normalizar(titulo)
-    if nome.startswith("icms terceiro"):  # "ICMS TERCEIRO (BASE DE CALCULO NF)"
+    if nome.startswith("icms terceiro"):  # "ICMS TERCEIROS (BASE DE CALCULO NF)"
         return "icms_terceiro"
+    if nome.startswith("base calc") and "icms" in nome:  # "BASE CALC. ICMS"
+        return "base_icms"
     return COLUNAS.get(nome)
 
 
@@ -195,6 +200,10 @@ def validar(registros, notas):
             for campo in ("item", "oper", "qtd", "unit"):
                 if not r[campo]:
                     erros.append(f"linha {r['linha']}: {TITULOS[campo]} em branco")
+            terceiro, base = (Decimal(r.get(c) or "0") != 0 for c in ("icms_terceiro", "base_icms"))
+            if terceiro != base:
+                erros.append(f"linha {r['linha']}: {TITULOS['icms_terceiro']} e {TITULOS['base_icms']} precisam ser os dois 0 "
+                             "(sem imposto) ou os dois diferentes de 0 (com imposto)")
     return erros
 
 
@@ -213,7 +222,9 @@ def descrever(nota):
     """Sequencia de teclas da nota, para o Simular."""
     partes = [f"'{nota[c]}' {n}xENTER" for c, n in SEQ_CABECALHO]
     for r in nota["itens"]:
-        partes.append(f"| linha {r['linha']}: " + " ".join(f"'{r[c]}' {n}xENTER" for c, n in SEQ_ITEM))
+        partes.append(f"| linha {r['linha']}: " + " ".join(f"'{r[c]}' {n}xENTER" for c, n in SEQ_ITEM)
+                      + " ENTER ate ICMS TERCEIROS no Rateio: "
+                      + " ".join(f"{NOME_RATEIO[c]}='{v}'" for c, v in valores_rateio(r).items()) + " | Tributos OK")
     return " ".join(partes) + " | clicar Integrar"
 
 
@@ -455,21 +466,76 @@ def mudou_acima(antes, agora, caixa):
     return sum(diferenca.point(lambda v: 255 if v > 40 else 0).histogram()[255:]) > 50
 
 
-# Depois do Valor do ICMS: Enter ate a janela do Rateio abrir (7 ou mais; o usuario contou 7, "mas pode ser mais",
-# 04/11/2026). Chegou = o foco saiu da linha da grade. Antes de digitar, o rotulo perto do campo tem que ser do ICMS
-# Terceiro (BASE DE CALCULO NF).
-MAX_ATE_RATEIO = 15
-ROTULO_TERCEIRO = ("terceiro", "base", "calculo", "calc")
+# ---------- Rateio (janela "Rateios", abre com Enter depois do Valor do ICMS) ----------
+# Grade "Rateio Item Documento Recebimento Tributo": as linhas COFINS e PIS ficam como o SRP preencheu; na linha
+# ICMS TERCEIROS (combinado com o usuario em 04/11/2026):
+#   sem imposto (ICMS TERCEIROS e BASE CALC. ICMS da planilha = 0): Ident Tributo 0, Base Calculo 0, Aliquota 0, Lancamento 0
+#   com imposto (os dois diferentes de 0): Ident Tributo 1, Base Calculo = BASE CALC. ICMS (o resto como o SRP pos)
+# Depois clica em "Tributos OK" (fecha o Rateio) e, no fim da nota, em Integrar.
+# O usuario contou 7 Enter ate o Rateio abrir ("mas pode ser mais"); no SRP real (log de 04/11) o foco passou pela parte
+# de cima do Rateio e chegou na grade de tributos no 10o Enter; cada linha de tributo teve 3 paradas.
+MAX_ATE_RATEIO = 20  # Enter depois do Valor do ICMS ate o Ident Tributo da linha ICMS TERCEIROS
+LER_RATEIO_DESDE = 6  # a partir deste Enter, le a tela procurando o Rateio
+COLUNAS_RATEIO = ("ident", "base", "aliquota", "lancamento")  # na ordem da tela
+NOME_RATEIO = {"ident": "Ident Tributo", "base": "Base Calculo", "aliquota": "Aliquota", "lancamento": "Lancamento"}
 
 
-def rotulo_perto(imagem, caixa, tesseract):
-    """Texto (normalizado) a esquerda e logo acima do campo em foco (rotulo do campo no Rateio)."""
-    altura = caixa[3] - caixa[1]
-    area = (max(caixa[0] - 700, 0), max(caixa[1] - 3 * altura, 0), min(caixa[2] + 10, imagem.width),
-            min(caixa[3] + altura, imagem.height))
-    if area[2] <= area[0] or area[3] <= area[1]:
-        return ""
-    return normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract)))
+def tem_imposto(r):
+    """Os dois valores da planilha diferentes de 0 = nota com imposto (vazio conta como 0)."""
+    return Decimal(r.get("icms_terceiro") or "0") != 0 and Decimal(r.get("base_icms") or "0") != 0
+
+
+def valores_rateio(r):
+    """O que digitar na linha ICMS TERCEIROS, por coluna (na ordem da tela)."""
+    if tem_imposto(r):
+        return {"ident": "1", "base": r["base_icms"]}
+    return {"ident": "0", "base": "0", "aliquota": "0", "lancamento": "0"}
+
+
+def localizar_rateio(palavras):
+    """Rotulos do Rateio lidos no OCR: linha ICMS TERCEIROS, colunas da grade de tributos e botao Tributos OK."""
+    lista = frases(palavras)
+    testes = {
+        "terceiros": lambda t: "terceiros" in t or "icms tercei" in t,
+        "ident": lambda t: t.startswith("ident"),
+        "base": lambda t: t.startswith("base calc") or t == "base",
+        "aliquota": lambda t: t.startswith("aliquota") and "zero" not in t,  # nao a linha "COFINS ALIQUOTA ZERO"
+        "lancamento": lambda t: t.startswith("lancamento"),
+        "tributos_ok": lambda t: "tributos" in t,  # botao; "Nome Tributo"/"Ident Tributo" sao no singular
+    }
+    achados = {}
+    for chave, teste in testes.items():
+        caixa = next((c for texto, c in lista if teste(texto)), None)
+        if caixa:
+            achados[chave] = caixa
+    return achados
+
+
+def ler_rateio(imagem, tesseract):
+    """localizar_rateio na tela; 2a leitura binarizada para o que faltar (texto preto em botao cinza)."""
+    achados = localizar_rateio(core.palavras_tela(imagem, tesseract))
+    if any(c not in achados for c in ("terceiros", "tributos_ok") + COLUNAS_RATEIO):
+        for chave, caixa in localizar_rateio(core.palavras_tela(binarizar(imagem), tesseract)).items():
+            achados.setdefault(chave, caixa)
+    return achados
+
+
+def coluna_rateio(caixa, rateio):
+    """Coluna da grade de tributos (pelo titulo mais perto na horizontal) ou None se longe de todos."""
+    if caixa is None:
+        return None
+    centro, largura = (caixa[0] + caixa[2]) / 2, caixa[2] - caixa[0]
+    perto = [(abs(centro - (rateio[c][0] + rateio[c][2]) / 2), c) for c in COLUNAS_RATEIO if c in rateio]
+    if not perto:
+        return None
+    distancia, coluna = min(perto)
+    titulo = rateio[coluna]
+    return coluna if distancia <= max(largura, titulo[2] - titulo[0]) * 0.75 else None
+
+
+def na_linha(caixa, rotulo):
+    """O campo em foco esta na mesma linha do rotulo (ex.: a linha ICMS TERCEIROS)?"""
+    return caixa is not None and abs((caixa[1] + caixa[3]) / 2 - (rotulo[1] + rotulo[3]) / 2) <= max(8, (caixa[3] - caixa[1]) / 2 + 4)
 
 
 def clicar(x, y):
@@ -599,19 +665,84 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             time.sleep(0.05)
         raise Travou("unit", "o cursor nao saiu do Qtd.Fisica no Enter 2 depois do Qtd Fiscal (a grade nao rolou)")
 
-    def ate_o_rateio(foco):
-        """Depois do Valor do ICMS: Enter ate o foco sair da linha da grade (abriu o Rateio), no maximo MAX_ATE_RATEIO."""
-        linha = (foco[1] + foco[3]) / 2
+    def enter_rateio(campo, vez, foco):
+        checar_parada()
+        antes = core.capturar(janela) if foco is not None else None
+        core.send_keys("{ENTER}", pause=0.03)
+        return depois_do_enter(campo, vez, foco, antes)
+
+    def achar_botao(chave, antes):
+        """Rele o botao (`chave` de localizar_rateio) na faixa em volta de onde estava; None se nao estiver a vista."""
+        tela_agora = core.capturar(janela)
+        esq, topo = max(antes[0] - 300, 0), max(antes[1] - 80, 0)
+        recorte = tela_agora.crop((esq, topo, min(antes[2] + 300, tela_agora.width), min(antes[3] + 80, tela_agora.height)))
+        caixa = localizar_rateio(core.palavras_tela(binarizar(recorte), tesseract)).get(chave)
+        return (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
+
+    def preencher_rateio(r, foco):
+        """Depois do Valor do ICMS: Enter ate o Ident Tributo da linha ICMS TERCEIROS (lida no OCR quando o Rateio abre),
+        digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
+        if not tesseract:
+            raise Travou("rateio", "sem o Tesseract nao consigo achar a linha ICMS TERCEIROS no Rateio")
+        rateio = None
         for vez in range(MAX_ATE_RATEIO):
+            devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
+            foco = enter_rateio("icms", vez, foco)
+            if rateio is None and vez + 1 >= LER_RATEIO_DESDE:
+                lido = ler_rateio(core.capturar(janela), tesseract)
+                if "terceiros" in lido and "tributos_ok" in lido:
+                    rateio = lido
+                    registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
+                    faltam = [NOME_RATEIO[c] for c in COLUNAS_RATEIO if c not in rateio and c in valores_rateio(r) or
+                              c == "ident" and c not in rateio]
+                    if faltam:
+                        raise Travou("rateio", f"nao li no Rateio a(s) coluna(s) {', '.join(faltam)}")
+            if rateio and na_linha(foco, rateio["terceiros"]) and coluna_rateio(foco, rateio) == "ident":
+                registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
+                break
+            if rateio and foco is not None and foco[1] > rateio["terceiros"][3] + (foco[3] - foco[1]):
+                raise Travou("rateio", "passei da linha ICMS TERCEIROS no Rateio sem parar no Ident Tributo")
+        else:
+            raise Travou("rateio", f"nao cheguei no Ident Tributo da linha ICMS TERCEIROS com {MAX_ATE_RATEIO} Enter depois "
+                         "do Valor do ICMS" + ("" if rateio else " (nao achei o Rateio na tela)"))
+        valores = valores_rateio(r)
+        registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto: {valores}", mostrar=False)
+        pendentes = [c for c in COLUNAS_RATEIO if c in valores]
+        digitar(valores["ident"], "ident")
+        pendentes.remove("ident")
+        for vez in range(len(COLUNAS_RATEIO) + 2):
+            if not pendentes:
+                break
+            devagar(f"Enter {vez + 1} na linha ICMS TERCEIROS (procurando {NOME_RATEIO[pendentes[0]]})")
+            foco = enter_rateio("rateio", vez, foco)
+            if not na_linha(foco, rateio["terceiros"]):
+                raise Travou("rateio", f"o cursor saiu da linha ICMS TERCEIROS antes do campo {NOME_RATEIO[pendentes[0]]}"
+                                       f"{local(foco)}; confira os campos dessa linha")
+            coluna = coluna_rateio(foco, rateio)
+            registrar(f"  Enter {vez + 1} na linha ICMS TERCEIROS: foco={foco} coluna={coluna}", mostrar=False)
+            if coluna in pendentes:
+                if coluna != pendentes[0]:
+                    raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
+                digitar(valores[coluna], coluna)
+                pendentes.remove(coluna)
+        if pendentes:
+            raise Travou("rateio", f"nao cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
+        botao = achar_botao("tributos_ok", rateio["tributos_ok"])
+        if not botao:
+            raise Travou("rateio", "nao achei o botao Tributos OK na tela")
+        ret = janela.rectangle()
+        checar_parada()
+        devagar("clicar em Tributos OK")
+        clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
+        registrar(f"  linha {r['linha']}: clique em Tributos OK", mostrar=False)
+        prazo = time.time() + 2 * render
+        while time.time() < prazo:
             checar_parada()
-            devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando o Rateio)")
-            antes = core.capturar(janela) if foco is not None else None
-            core.send_keys("{ENTER}", pause=0.03)
-            foco = depois_do_enter("icms", vez, foco, antes)
-            if foco is not None and abs((foco[1] + foco[3]) / 2 - linha) > 1.5 * (foco[3] - foco[1]):
-                registrar(f"  Rateio: cheguei com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
-                return foco
-        raise Travou("icms_terceiro", f"nao cheguei no Rateio com {MAX_ATE_RATEIO} Enter depois do Valor do ICMS")
+            time.sleep(0.3)
+            if not achar_botao("tributos_ok", rateio["tributos_ok"]):
+                time.sleep(0.3)
+                return foco_tela(janela)
+        raise Travou("rateio", "o Rateio nao fechou depois do Tributos OK (aviso do SRP?)")
 
     def esperar_continuar():
         retomar.clear()
@@ -763,17 +894,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                             registrar(f"  titulo acima do {NOME[campo]}: {titulo!r}", mostrar=False)
                             if not any(t in titulo for t in TITULO_COLUNA[campo]):
                                 raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]} (titulo acima: '{titulo}')")
-                        if campo == "icms_terceiro" and tesseract:
-                            rotulo = rotulo_perto(core.capturar(janela), foco, tesseract)
-                            registrar(f"  rotulo perto do ICMS Terceiro: {rotulo!r}", mostrar=False)
-                            if not any(t in rotulo for t in ROTULO_TERCEIRO):
-                                raise Travou(campo, f"o cursor nao esta no campo ICMS Terceiro (perto: '{rotulo}')")
                         digitar(r[campo], campo)
                         alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
                         if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                             foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
-                        elif alvo == "icms_terceiro":  # Enter ate abrir o Rateio (7 ou mais)
-                            foco = ate_o_rateio(foco)
+                        elif alvo is None:  # Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio
+                            foco = preencher_rateio(r, foco)
                         elif alvo == "unit":  # Enter no Qtd.Fisica (ciano), Enter no Valor Unit (amarelo, grade rola)
                             foco = entrar_no_valor_unit(enters(campo, quantos - 1, foco))
                         else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
