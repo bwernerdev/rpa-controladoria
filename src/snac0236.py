@@ -544,7 +544,8 @@ ENTERS_DEPOIS_INTEGRAR = 7
 # aviso que pode aparecer depois do 2o Integrar; o robo fecha com Enter (usuario, 04/11/2026). Outros avisos: nao mexe.
 # "Atencao: Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF. [OK]"
 AVISO_FRETE_CIF = ("icms pago", "alterado o frete", "frete para cif")
-LEITURAS_AVISO = 3  # leituras da tela procurando o aviso depois do 2o Integrar
+LEITURAS_AVISO = 3  # leituras seguidas esperando uma janela ja tratada fechar
+MAX_PASSOS_INTEGRAR = 30  # leituras da tela no maximo depois do 1o Integrar
 
 
 def aviso_frete_cif(texto):
@@ -872,21 +873,68 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         return True
 
     def integrar(nota):
-        """Integrar, ENTERS_DEPOIS_INTEGRAR Enter e Integrar de novo (combinado com o usuario em 04/11/2026).
-        Devolve quantos cliques deu (0, 1 ou 2) ou 3 se o SRP disse "Documento Integrado com Sucesso"."""
+        """Integrar e o que vem depois (usuario, 04/11/2026), lendo a tela antes de cada passo:
+        aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
+        janela "Centro de Custo e Conta Contabil para Frete LTCC" -> CLIQUE em "Frete LTCC" (Enter ali roda sem fim);
+        "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Sem nenhuma dessas janelas: Enter, ate
+        ENTERS_DEPOIS_INTEGRAR, e depois Integrar de novo. Janela ja tratada que continua aberta: espera, sem Enter.
+        Devolve 0 (nao achei o Integrar), 1 (nao achei o 2o Integrar), 2 (sem "Integrado com Sucesso") ou 3 (sucesso)."""
         if not clicar_integrar(nota, 1):
             return 0
-        for vez in range(ENTERS_DEPOIS_INTEGRAR):
-            checar_parada()
-            devagar(f"Enter {vez + 1} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
-            core.send_keys("{ENTER}", pause=0.03)
-            time.sleep(0.4)
-        if not clicar_integrar(nota, 2):
+        if not tesseract:
             return 1
-        if fechar_aviso_frete(nota):
-            registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
-            return 3
-        registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'. Confira no SRP.")
+        etiqueta = f"nota ...{nota['chave'][-6:]}"
+        feitos, enters, cliques, esperas = [], 0, 1, 0
+        for _ in range(MAX_PASSOS_INTEGRAR):
+            checar_parada()
+            imagem = core.capturar(janela)
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract)))
+            janelas = [nome for nome, teste in (("frete", aviso_frete_cif), ("resumo", resumo_tributos),
+                                                 ("ltcc", janela_ltcc), ("sucesso", integrado_com_sucesso)) if teste(texto)]
+            nova = next((nome for nome in janelas if nome not in feitos), None)
+            if nova == "ltcc":
+                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem), tesseract)))
+                if not botao:
+                    registrar(f"Nota ...{nota['chave'][-6:]}: nao achei o botao Frete LTCC. Clique em Frete LTCC no SRP.")
+                    return 2
+                devagar("clicar em Frete LTCC")
+                ret = janela.rectangle()
+                clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
+            elif nova:
+                devagar({"frete": "Enter no aviso 'frete alterado para CIF' (OK)",
+                         "resumo": "Enter no 'Resumo dos Tributos do Documento' (Confirmar)",
+                         "sucesso": "Enter em 'Documento Integrado com Sucesso' (OK)"}[nova])
+                core.send_keys("{ENTER}", pause=0.03)
+            if nova:
+                registrar(f"  {etiqueta}: {nova} tratado", mostrar=False)
+                feitos.append(nova)
+                esperas = 0
+                if nova == "sucesso":
+                    registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
+                    time.sleep(0.5)
+                    return 3
+                time.sleep(0.5)
+                continue
+            if janelas or (cliques == 2 and enters >= ENTERS_DEPOIS_INTEGRAR):
+                # janela ja tratada ainda aberta, ou ja integrei 2 vezes: so espera (Enter aqui pode rodar sem fim)
+                esperas += 1
+                if esperas >= LEITURAS_AVISO:
+                    break
+                time.sleep(0.5)
+                continue
+            if enters < ENTERS_DEPOIS_INTEGRAR:
+                enters += 1
+                devagar(f"Enter {enters} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
+                core.send_keys("{ENTER}", pause=0.03)
+                time.sleep(0.3)
+                continue
+            if not clicar_integrar(nota, 2):
+                registrar(f"Nota ...{nota['chave'][-6:]}: dei {ENTERS_DEPOIS_INTEGRAR} Enter depois do Integrar, mas nao "
+                          "achei o Integrar de novo. Termine a integracao no SRP.")
+                return 1
+            cliques = 2
+        registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'"
+                  + (f" (janela ainda aberta: {', '.join(janelas)})" if janelas else "") + ". Confira no SRP.")
         return 2
 
     def ir_para_chave():
@@ -915,49 +963,6 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         registrar(f"  cliquei na Chave Acesso NF-e, mas o foco nao foi para la (foco={novo})", mostrar=False)
         return None
 
-    def fechar_aviso_frete(nota):
-        """Depois do 2o Integrar (usuario, 04/11/2026), na ordem em que aparecerem, cada um uma vez:
-        aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
-        janela "Centro de Custo e Conta Contabil para Frete LTCC" -> clique em "Frete LTCC";
-        "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Para tambem depois de LEITURAS_AVISO leituras seguidas
-        sem nenhum deles. Outros avisos: nao mexe. Devolve True se viu o "Integrado com Sucesso"."""
-        if not tesseract:
-            return False
-        feitos, vazias = [], 0
-        while vazias < LEITURAS_AVISO and "sucesso" not in feitos:
-            checar_parada()
-            imagem = core.capturar(janela)
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract)))
-            botao = None
-            if "frete" not in feitos and aviso_frete_cif(texto):
-                feito, acao = "frete", "Enter no aviso 'frete alterado para CIF' (OK)"
-            elif "resumo" not in feitos and resumo_tributos(texto):
-                feito, acao = "resumo", "Enter no 'Resumo dos Tributos do Documento' (Confirmar)"
-            elif "ltcc" not in feitos and janela_ltcc(texto):
-                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem), tesseract)))
-                if not botao:
-                    registrar(f"Nota ...{nota['chave'][-6:]}: nao achei o botao Frete LTCC. Clique em Frete LTCC no SRP.")
-                    return False
-                feito, acao = "ltcc", "clicar em Frete LTCC"
-            elif integrado_com_sucesso(texto):
-                feito, acao = "sucesso", "Enter em 'Documento Integrado com Sucesso' (OK)"
-            else:
-                vazias += 1
-                time.sleep(0.5)
-                continue
-            devagar(acao)
-            if botao:
-                ret = janela.rectangle()
-                clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
-            else:
-                core.send_keys("{ENTER}", pause=0.03)
-            registrar(f"  nota ...{nota['chave'][-6:]}: {acao}", mostrar=False)
-            feitos.append(feito)
-            vazias = 0
-            time.sleep(0.5)
-        if not feitos:
-            registrar(f"  nota ...{nota['chave'][-6:]}: nenhum aviso depois do 2o Integrar", mostrar=False)
-        return "sucesso" in feitos
 
     try:
         tesseract = core.caminho_tesseract()
@@ -1071,12 +1076,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             cliques = integrar(nota)
             clicou = cliques >= 2
             registrar(f"OK {etiqueta}: {len(linhas)} item(ns) em {time.time() - t0:.1f}s" +
-                      (f"; cliquei em Integrar, dei {ENTERS_DEPOIS_INTEGRAR} Enter e cliquei em Integrar de novo." if clicou else "."))
+                      ("; integrada com sucesso." if cliques == 3 else "."))
             if cliques == 0:
                 registrar(f"{etiqueta}: nao achei o botao Integrar na tela. Clique em Integrar no SRP.")
-            elif cliques == 1:
-                registrar(f"{etiqueta}: cliquei em Integrar e dei {ENTERS_DEPOIS_INTEGRAR} Enter, mas nao achei o Integrar "
-                          "de novo. Clique em Integrar no SRP.")
             marcar(linhas, "ok")
             if ultima:
                 if not clicou and retomar is not None:

@@ -68,7 +68,7 @@ class SRP0236:
         self.com_aviso_frete, self.aviso_frete, self.fechou_aviso = False, False, 0
         self.resumo, self.confirmou = False, 0  # "Resumo dos Tributos do Documento", depois do aviso do frete
         self.ltcc, self.sucesso, self.sucessos = False, False, 0  # janela do Frete LTCC e "Integrado com Sucesso"
-        self.cliques_chave = 0
+        self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -128,6 +128,9 @@ class SRP0236:
             if texto == "{ENTER}" and self.resumo:  # Confirmar no Resumo: vem a janela do Frete LTCC
                 self.resumo, self.confirmou, self.ltcc = False, self.confirmou + 1, True
                 return
+            if texto == "{ENTER}" and self.ltcc:  # no SRP real o Enter roda sem fim nessa janela
+                self.enter_no_ltcc += 1
+                return
             if texto == "{ENTER}" and self.sucesso:  # OK no "Integrado com Sucesso": tela vazia, foco no CNPJ
                 self.sucesso, self.sucessos, self.indice = False, self.sucessos + 1, 1
                 return
@@ -165,6 +168,7 @@ class SRP0236:
                     self.indice, self.alerta = 0, False
                     return
                 self.integradas.append(self.atual)
+                self.aviso_frete = self.avisos_no_1o  # janelas logo depois do 1o Integrar (sem o 2o)
                 self.atual = {}
                 if self.volta:
                     self.indice, self.alerta = 0, False
@@ -394,6 +398,16 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(srp.cliques_chave, 1)
         self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
         self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_A, CHAVE_B])
+
+    def test_janelas_logo_depois_do_1o_integrar(self):
+        srp = SRP0236()
+        srp.avisos_no_1o = True  # aviso, Resumo, Frete LTCC e Sucesso aparecem durante os 7 Enter
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.reintegrou, srp.enter_no_ltcc), (2, 2, 2, 0, 0))
+        self.assertEqual(srp.cliques_chave, 1)
+        self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
 
     def test_rateio_sem_imposto(self):
         srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados
