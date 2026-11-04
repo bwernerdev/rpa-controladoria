@@ -668,6 +668,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     log = open(core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log", "w", encoding="utf-8")
     trava_log = threading.Lock()
     rateio_salvo = [None]
+    confia_barra = [True]  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
     ultimo_log = [time.time()]
     atual = []  # linhas marcadas 'executando'
 
@@ -782,6 +783,18 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         novo = aguardar(janela, foco, render, fixos)
         if novo == "aviso":
             raise Travou("item", "apareceu um aviso do SRP depois do clique no Item da grade")
+        if novo is not None and not (isinstance(novo, tuple) and posicao_ok("item", novo, rotulos, None, lidas)):
+            # o SRP mostra o foco passando por outro campo (Codigo Observacao) antes de chegar no Item (04/11/2026 19:20):
+            # espera assentar antes de seguir com Enter
+            prazo = time.time() + render
+            while time.time() < prazo:
+                checar_parada()
+                time.sleep(0.15)
+                atual = foco_tela(janela)
+                if atual and posicao_ok("item", atual, rotulos, None, lidas):
+                    registrar(f"  o foco passou por {novo} antes de chegar no Item", mostrar=False)
+                    novo = atual
+                    break
         if isinstance(novo, tuple) and posicao_ok("item", novo, rotulos, None, lidas):
             registrar(f"  cliquei no Item da grade em ({x:.0f}, {y:.0f}) depois de {vez} Enter no Frete: foco={novo}",
                       mostrar=False)
@@ -1056,22 +1069,29 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         if not tesseract:
             return 1
         etiqueta = f"nota ...{nota['chave'][-6:]}"
-        feitos, enters, cliques, esperas = [], 0, 1, 0
+        feitos, enters, cliques, esperas, desde_clique = [], 0, 1, 0, 0
         for _ in range(MAX_PASSOS_INTEGRAR):
             checar_parada()
             imagem = core.capturar(janela)
             t_leitura = time.time()
             # So o recorte das janelas por cima (barra de titulo azul): ~0,6 s em vez de ~2,2 s da tela inteira. Sem
-            # barra, entre uma janela tratada e a seguinte, nem le (so espera a tela mudar); na ultima espera e antes
-            # de qualquer Enter as cegas le a tela inteira, como antes. Recorte sem janela conhecida: tela inteira.
+            # barra nem le (so a busca da barra, ~0,07 s), menos na 1a leitura depois de cada clique no Integrar e na
+            # ultima espera, que leem a tela inteira para conferir a barra: janela achada ali sem barra = daqui em diante
+            # sempre a tela inteira (`confia_barra`). Antes, a tela inteira antes de cada um dos 7 Enter custou ~33 s
+            # numa nota (04/11/2026 19:21). Recorte sem janela conhecida: tela inteira.
             barras = barras_dialogo(imagem)
             area, janelas = None, []
             if barras:
                 area = area_dialogo(imagem, barras)
                 janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract))))
-            if not janelas and (barras or not feitos or esperas >= LEITURAS_AVISO - 1):
+            if not janelas and (barras or not confia_barra[0] or desde_clique == 0 or esperas >= LEITURAS_AVISO - 1):
                 area = (0, 0, imagem.width, imagem.height)
                 janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract))))
+                if janelas and not barras and confia_barra[0]:
+                    confia_barra[0] = False
+                    registrar(f"  janela {janelas} sem barra de titulo azul: daqui em diante leio sempre a tela inteira",
+                              mostrar=False)
+            desde_clique += 1
             onde = "nao li (nenhuma barra de janela)" if area is None else (
                 "tela inteira" if area == (0, 0, imagem.width, imagem.height) else f"recorte {area}")
             registrar(f"  leitura depois do Integrar: {time.time() - t_leitura:.1f}s, {onde}, janelas={janelas}", mostrar=False)
@@ -1117,7 +1137,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 registrar(f"Nota ...{nota['chave'][-6:]}: dei {ENTERS_DEPOIS_INTEGRAR} Enter depois do Integrar, mas nao "
                           "achei o Integrar de novo. Termine a integracao no SRP.")
                 return 1
-            cliques = 2
+            cliques, desde_clique = 2, 0
         registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'"
                   + (f" (janela ainda aberta: {', '.join(janelas)})" if janelas else "") + ". Confira no SRP.")
         return 2

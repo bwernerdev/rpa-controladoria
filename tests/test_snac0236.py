@@ -74,6 +74,7 @@ class SRP0236:
         self.leituras, self.recortes = 0, 0
         self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
         self.ignora_cliques = False  # cliques no Item e no Ident Tributo que nao mudam o foco
+        self.clique_item_passa = False  # o foco passa por outro campo antes de chegar no Item (SRP real, 04/11 19:20)
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
 
     def campos(self):
@@ -190,7 +191,14 @@ class SRP0236:
             cab, rateio = self.campos()
             if self.indice < len(cab) and self.indice > cab.index("frete") and 235 <= x <= 290 and 430 <= y <= 442:
                 self.cliques_item += 1  # 1a linha da grade, coluna Item
-                if not self.ignora_cliques:
+                if self.clique_item_passa:
+                    self.indice = cab.index("frete") + 3
+
+                    def chegar():
+                        with self.lock:
+                            self.indice = len(cab)
+                    threading.Timer(0.1, chegar).start()
+                elif not self.ignora_cliques:
                     self.indice = len(cab)
                 return
             if self.rateio_aberto():
@@ -475,6 +483,28 @@ class Fluxo(unittest.TestCase):
         self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])
         self.assertNotIn("t199ident0", srp.integradas[0])
 
+    def test_clique_no_item_com_foco_passando_por_outro_campo(self):
+        srp = SRP0236()
+        srp.clique_item_passa = True
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertIn("antes de chegar no Item", log)
+        self.assertNotIn("sigo com Enter", log)
+        self.assertEqual(srp.integradas[0]["item0"], "900135")
+
+    def test_sem_janela_depois_do_1o_integrar_nao_le_a_tela_inteira_a_cada_enter(self):
+        srp = SRP0236()
+        srp.com_aviso_frete = True  # janelas so depois do 2o Integrar: 7 Enter sem janela antes
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.reintegrou, 1)
+        self.assertEqual(log.count("tela inteira, janelas=[]"), 1)  # so a 1a leitura depois do 1o clique
+        self.assertGreaterEqual(log.count("nao li (nenhuma barra de janela)"), 7)
+
     def test_cliques_que_nao_andam_seguem_com_enter(self):
         sem, com = SRP0236(), SRP0236()
         com.ignora_cliques = True
@@ -502,11 +532,13 @@ class Fluxo(unittest.TestCase):
         # barra de titulo nao achada (outra cor): le a tela inteira antes de dar Enter e na ultima espera
         srp = SRP0236()
         srp.com_aviso_frete, srp.sem_barra = True, True
-        with ambiente(srp):
+        with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.enter_no_ltcc), (1, 1, 1, 0))
         self.assertEqual(srp.recortes, 0)
+        self.assertIn("sem barra de titulo azul: daqui em diante leio sempre a tela inteira", log)
 
     def test_janelas_pos_integrar_recorte_sem_texto(self):
         # barra achada, mas o recorte nao reconhece a janela: le a tela inteira (nunca Enter as cegas com janela aberta)
