@@ -38,6 +38,11 @@ TRIBUTOS_OK = (700, 800, 780, 812)
 AVISO = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate(
     "Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF.".split())]
 RESUMO = [(p, 300 + 60 * i, 480, 55, 12) for i, p in enumerate("ae dos Tributos Documento Confirmar Cancelar".split())]
+LTCC = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate("Informe o Centro de Custo e Conta Contabil para Frete LTCC".split())] + [
+    ("Frete", 1000, 470, 50, 12), ("LTCC", 1055, 470, 45, 12),  # cabecalho da grade (nao e o botao)
+    ("Voltar", 430, 700, 90, 12), ("Frete", 1000, 700, 50, 12), ("LTC", 1055, 700, 45, 12)]
+BOTAO_LTCC = (1000, 700, 1100, 712)
+SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
 LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
 COLUNAS_TRIBUTO = {"ident": 800, "base": 1000, "aliquota": 1100, "lancamento": 1200}
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
@@ -62,6 +67,7 @@ class SRP0236:
         self.atual, self.integradas, self.reintegrou = {}, [], 0
         self.com_aviso_frete, self.aviso_frete, self.fechou_aviso = False, False, 0
         self.resumo, self.confirmou = False, 0  # "Resumo dos Tributos do Documento", depois do aviso do frete
+        self.ltcc, self.sucesso, self.sucessos = False, False, 0  # janela do Frete LTCC e "Integrado com Sucesso"
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -118,8 +124,11 @@ class SRP0236:
             if texto == "{ENTER}" and self.aviso_frete:  # OK no aviso do frete: vem o Resumo dos Tributos
                 self.aviso_frete, self.fechou_aviso, self.resumo = False, self.fechou_aviso + 1, True
                 return
-            if texto == "{ENTER}" and self.resumo:  # Confirmar no Resumo
-                self.resumo, self.confirmou = False, self.confirmou + 1
+            if texto == "{ENTER}" and self.resumo:  # Confirmar no Resumo: vem a janela do Frete LTCC
+                self.resumo, self.confirmou, self.ltcc = False, self.confirmou + 1, True
+                return
+            if texto == "{ENTER}" and self.sucesso:  # OK no "Integrado com Sucesso"
+                self.sucesso, self.sucessos = False, self.sucessos + 1
                 return
             if texto == "{ENTER}":
                 if base in self.recusar:
@@ -136,6 +145,9 @@ class SRP0236:
 
     def clicar(self, x, y):
         with self.lock:
+            if self.ltcc and BOTAO_LTCC[0] <= x <= BOTAO_LTCC[2] and BOTAO_LTCC[1] <= y <= BOTAO_LTCC[3]:
+                self.ltcc, self.sucesso = False, True
+                return
             if TRIBUTOS_OK[0] <= x <= TRIBUTOS_OK[2] and TRIBUTOS_OK[1] <= y <= TRIBUTOS_OK[3] and self.rateio_aberto():
                 cab, rateio = self.campos()  # fecha o Rateio: foco no Item da proxima linha da grade
                 k = (self.indice - len(cab)) // (1 + len(rateio))
@@ -160,7 +172,8 @@ def ambiente(srp, palavras=PALAVRAS):
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
         "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
-        "palavras_tela": lambda imagem, t: (list(palavras) + (AVISO if srp.aviso_frete else []) + (RESUMO if srp.resumo else []) if imagem.size == (1600, 900) else
+        "palavras_tela": lambda imagem, t: (list(palavras) + (AVISO if srp.aviso_frete else []) + (RESUMO if srp.resumo else []) + (LTCC if srp.ltcc else [])
+                                            + (SUCESSO if srp.sucesso else []) if imagem.size == (1600, 900) else
                                             srp.titulo() if imagem.height < 60 else
                                             [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
                                             [("Integrar", 300, 80, 50, 12)]),
@@ -370,6 +383,8 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.reintegrou, srp.fechou_aviso, srp.aviso_frete), (2, 2, False))
         self.assertEqual((srp.confirmou, srp.resumo), (2, False))
+        self.assertEqual((srp.sucessos, srp.ltcc, srp.sucesso), (2, False, False))  # clicou Frete LTCC e deu OK
+        self.assertTrue(any("Integrado com Sucesso" in a for a in avisos))
 
     def test_rateio_sem_imposto(self):
         srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados

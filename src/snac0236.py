@@ -558,6 +558,28 @@ def resumo_tributos(texto):
     return "dos tributos" in texto and "confirmar" in texto
 
 
+def janela_ltcc(texto):
+    """Janela "Centro de Custo e Conta Contabil para Frete LTCC" (vem depois do Resumo dos Tributos); o robo clica no
+    botao "Frete LTCC" (usuario, 04/11/2026)."""
+    return "informe o centro de custo" in texto or ("centro de custo" in texto and "frete ltcc" in texto)
+
+
+def botao_frete_ltcc(lista):
+    """Botao "Frete LTCC" nas frases do OCR binarizado: na linha do "Voltar" e a direita dele (o titulo e os cabecalhos
+    da grade tambem dizem "Frete LTCC"). Em 4K sai "frete ltc"."""
+    voltar = next((c for t, c in lista if t.startswith("voltar")), None)
+    if not voltar:
+        return None
+    altura = voltar[3] - voltar[1]
+    return next((c for t, c in lista if t.startswith("frete ltc") and c[0] > voltar[2]
+                 and abs((c[1] + c[3]) / 2 - (voltar[1] + voltar[3]) / 2) <= max(10, altura)), None)
+
+
+def integrado_com_sucesso(texto):
+    """Aviso final "Documento Integrado com Sucesso. [OK]": o robo da Enter."""
+    return "integrado com sucesso" in texto
+
+
 def tela_mudou(antes, agora):
     if antes.size != agora.size:
         return True
@@ -861,36 +883,55 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             time.sleep(0.4)
         if not clicar_integrar(nota, 2):
             return 1
-        fechar_aviso_frete(nota)
+        if fechar_aviso_frete(nota):
+            registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
+        else:
+            registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'. Confira no SRP.")
         return 2
 
     def fechar_aviso_frete(nota):
-        """Depois do 2o Integrar: aviso do frete alterado para CIF -> Enter (OK); depois "Resumo dos Tributos do
-        Documento" -> Enter (Confirmar). Cada um no maximo uma vez; para depois do Resumo ou de LEITURAS_AVISO leituras
-        seguidas sem nenhum dos dois. Outros avisos: nao mexe."""
+        """Depois do 2o Integrar (usuario, 04/11/2026), na ordem em que aparecerem, cada um uma vez:
+        aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
+        janela "Centro de Custo e Conta Contabil para Frete LTCC" -> clique em "Frete LTCC";
+        "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Para tambem depois de LEITURAS_AVISO leituras seguidas
+        sem nenhum deles. Outros avisos: nao mexe. Devolve True se viu o "Integrado com Sucesso"."""
         if not tesseract:
-            return
-        fechados, vazias = [], 0
-        while vazias < LEITURAS_AVISO and "resumo" not in fechados:
+            return False
+        feitos, vazias = [], 0
+        while vazias < LEITURAS_AVISO and "sucesso" not in feitos:
             checar_parada()
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(core.capturar(janela), tesseract)))
-            if "frete" not in fechados and aviso_frete_cif(texto):
-                fechado, acao = "frete", "Enter no aviso 'frete alterado para CIF' (OK)"
-            elif resumo_tributos(texto):
-                fechado, acao = "resumo", "Enter no 'Resumo dos Tributos do Documento' (Confirmar)"
+            imagem = core.capturar(janela)
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract)))
+            botao = None
+            if "frete" not in feitos and aviso_frete_cif(texto):
+                feito, acao = "frete", "Enter no aviso 'frete alterado para CIF' (OK)"
+            elif "resumo" not in feitos and resumo_tributos(texto):
+                feito, acao = "resumo", "Enter no 'Resumo dos Tributos do Documento' (Confirmar)"
+            elif "ltcc" not in feitos and janela_ltcc(texto):
+                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem), tesseract)))
+                if not botao:
+                    registrar(f"Nota ...{nota['chave'][-6:]}: nao achei o botao Frete LTCC. Clique em Frete LTCC no SRP.")
+                    return False
+                feito, acao = "ltcc", "clicar em Frete LTCC"
+            elif integrado_com_sucesso(texto):
+                feito, acao = "sucesso", "Enter em 'Documento Integrado com Sucesso' (OK)"
             else:
                 vazias += 1
                 time.sleep(0.5)
                 continue
             devagar(acao)
-            core.send_keys("{ENTER}", pause=0.03)
+            if botao:
+                ret = janela.rectangle()
+                clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
+            else:
+                core.send_keys("{ENTER}", pause=0.03)
             registrar(f"  nota ...{nota['chave'][-6:]}: {acao}", mostrar=False)
-            fechados.append(fechado)
+            feitos.append(feito)
             vazias = 0
             time.sleep(0.5)
-        if not fechados:
-            registrar(f"  nota ...{nota['chave'][-6:]}: sem aviso do frete nem Resumo dos Tributos depois do 2o Integrar",
-                      mostrar=False)
+        if not feitos:
+            registrar(f"  nota ...{nota['chave'][-6:]}: nenhum aviso depois do 2o Integrar", mostrar=False)
+        return "sucesso" in feitos
 
     try:
         tesseract = core.caminho_tesseract()
