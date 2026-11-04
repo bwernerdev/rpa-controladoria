@@ -27,7 +27,8 @@ TITULOS = {"chave": "CHAVE NF", "filial": "FILIAL FISCAL", "data": "DATA EMISSÃ
            "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIRO"}
 CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da nota (repetidos ou so na 1a linha)
 OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
-VALORES = ("valor_total", "frete", "qtd", "unit", "icms", "icms_terceiro")
+FRETES = ("CIF", "FOB")  # o campo Frete do SRP recebe o tipo de frete, nao valor
+VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro")
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
@@ -139,6 +140,9 @@ def ler_planilha(caminho):
         problemas.append(erro)
         r["data"], erro = formatar_data(bruto["data"])
         problemas.append(erro)
+        r["frete"] = core.texto(bruto["frete"]).upper()
+        if r["frete"] and r["frete"] not in FRETES:
+            problemas.append(f"FRETE invalido: {bruto['frete']!r} (use CIF ou FOB)")
         for campo in VALORES:
             r[campo], erro = formatar_valor(bruto[campo])
             problemas.append(f"{TITULOS[campo]}: {erro}" if erro else None)
@@ -179,7 +183,7 @@ def validar(registros, notas):
     erros = []
     for nota in notas:
         primeira = nota["itens"][0]["linha"]
-        for campo in ("chave", "data", "valor_total"):
+        for campo in ("chave", "data", "valor_total", "frete"):
             if not nota[campo]:
                 erros.append(f"linha {primeira}: {TITULOS[campo]} em branco")
         if not nota["filial1"]:

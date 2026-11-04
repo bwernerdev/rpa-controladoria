@@ -102,7 +102,7 @@ def ambiente(srp, palavras=PALAVRAS):
         yield pasta
 
 
-def nota(chave, itens, filial=("30", "46"), data="01/11/2026", total="47407.28", frete="150.5"):
+def nota(chave, itens, filial=("30", "46"), data="01/11/2026", total="47407.28", frete="CIF"):
     regs = [{"linha": 2 + i, "chave": chave, "filial1": filial[0], "filial2": filial[1], "data": data, "valor_total": total,
              "frete": frete, **item} for i, item in enumerate(itens)]
     notas, erros = snac0236.agrupar_notas(regs)
@@ -147,21 +147,21 @@ class Planilha(unittest.TestCase):
 
     def test_formatos_e_agrupamento(self):
         caminho = self.gravar([
-            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, 150.5, 900135, "5101", 2, 10.5, 1.89, 21],
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "cif", 900135, "5101", 2, 10.5, 1.89, 21],
             [CHAVE_A, None, None, None, None, "900266", 5101, 1.25, "3,75", None, None],
-            [CHAVE_B, "30 47", "02/11/2026", "1200", None, 900135, 5102, 1, 1200, 0, 0],
+            [CHAVE_B, "30 47", "02/11/2026", "1200", "FOB", 900135, 5102, 1, 1200, 0, 0],
         ])
         registros, notas, erros = snac0236.carregar(caminho)
         self.assertEqual(erros, [])
         self.assertEqual([len(n["itens"]) for n in notas], [2, 1])
         a = notas[0]
-        self.assertEqual((a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]), ("30", "46", "01/11/2026", "47407.28", "150.5"))
+        self.assertEqual((a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]), ("30", "46", "01/11/2026", "47407.28", "CIF"))
         self.assertEqual((a["itens"][1]["qtd"], a["itens"][1]["unit"], a["itens"][1]["icms"]), ("1.25", "3.75", ""))
-        self.assertEqual(notas[1]["frete"], "")
+        self.assertEqual(notas[1]["frete"], "FOB")
 
     def test_erros(self):
         caminho = self.gravar([
-            [1.11e43, "3046", "31/02/2026", "47.407,28", None, "900135", None, 1, 1, 0, 0],
+            [1.11e43, "3046", "31/02/2026", "47.407,28", 150, "900135", None, 1, 1, 0, 0],
             [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
             [CHAVE_A, "30 47", "01/11/2026", 10, None, "900266", "5101", 1, 1, 0, 0],
             [CHAVE_B, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
@@ -170,7 +170,7 @@ class Planilha(unittest.TestCase):
         _, _, erros = snac0236.carregar(caminho)
         texto = "\n".join(erros)
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
-                       "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente",
+                       "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
                        "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco"):
             self.assertIn(trecho, texto)
 
@@ -207,7 +207,7 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(len(srp.integradas), 2)
         a = srp.integradas[0]
         self.assertEqual((a["chave"], a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]),
-                         (CHAVE_A, "30", "46", "01/11/2026", "47407.28", "150.5"))
+                         (CHAVE_A, "30", "46", "01/11/2026", "47407.28", "CIF"))
         self.assertEqual((a["item0"], a["oper0"], a["qtd0"], a["unit0"], a["icms0"], a["icms_terceiro0"]),
                          ("900135", "5101", "2", "10.5", "1.89", "21"))
         self.assertEqual((a["item1"], a["qtd1"]), ("900266", "1.25"))
