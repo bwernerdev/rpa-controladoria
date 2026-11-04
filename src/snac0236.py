@@ -16,6 +16,8 @@ import unicodedata
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
+from PIL import Image
+
 import core
 
 # coluna da planilha (normalizada) -> chave
@@ -330,7 +332,10 @@ def foco_unido(imagem):
     if not caixas:
         # campo ja preenchido pelo SRP (Data Emissao): fundo branco e o texto todo selecionado em azul escuro, sem ciano.
         # Bordas de 1 px da janela tem o mesmo azul: so blocos de 8 px ou mais nos dois sentidos.
-        caixas = [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
+        # em meia escala (NEAREST mantem as cores puras): na tela 4K inteira levava 0,27 s a cada consulta sem ciano
+        meia = imagem.resize((max(imagem.width // 2, 1), max(imagem.height // 2, 1)), Image.NEAREST)
+        caixas = [(c[0] * 2, c[1] * 2, c[2] * 2, c[3] * 2) for c in core.caixas_cor(meia, "selecao")
+                  if c[3] - c[1] >= 4 and c[2] - c[0] >= 4]
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
@@ -550,6 +555,7 @@ ENTERS_DEPOIS_INTEGRAR = 7
 # "Atencao: Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF. [OK]"
 AVISO_FRETE_CIF = ("icms pago", "alterado o frete", "frete para cif")
 LEITURAS_AVISO = 3  # leituras seguidas esperando uma janela ja tratada fechar
+PIXELS_JANELA = 2000  # mudanca minima na tela para contar como janela abrindo/fechando (cursor piscando: ~60 px)
 MAX_PASSOS_INTEGRAR = 30  # leituras da tela no maximo depois do 1o Integrar
 
 
@@ -586,11 +592,13 @@ def integrado_com_sucesso(texto):
     return "integrado com sucesso" in texto
 
 
-def tela_mudou(antes, agora):
+def tela_mudou(antes, agora, minimo=1):
+    """Mais de `minimo` pixels diferentes entre as capturas (use um minimo alto para nao contar o cursor piscando)."""
     if antes.size != agora.size:
         return True
     from PIL import ImageChops
-    return ImageChops.difference(antes.convert("L"), agora.convert("L")).point(lambda v: 255 if v > 40 else 0).getbbox() is not None
+    diferenca = ImageChops.difference(antes.convert("L"), agora.convert("L")).point(lambda v: 255 if v > 40 else 0)
+    return diferenca.histogram()[255] >= minimo
 
 
 def clicar(x, y):
@@ -612,6 +620,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     core.limpar_logs()
     log = open(core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log", "w", encoding="utf-8")
     trava_log = threading.Lock()
+    rateio_salvo = [None]
     ultimo_log = [time.time()]
     atual = []  # linhas marcadas 'executando'
 
@@ -717,8 +726,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             sumiu = (sumiu or time.time()) if atual is None else None
             rolou = foco is not None and mudou_acima(antes, core.capturar(janela), foco)
             if andou or rolou or (sumiu and time.time() - sumiu >= min(0.3, render / 2)):
-                time.sleep(0.4)  # a grade termina de rolar
-                atual, _ = ler_estado(janela, fixos)
+                time.sleep(0.3)  # a grade termina de rolar
+                if andou or rolou:  # sem ciano (o normal: Valor Unit amarelo) nao precisa reler
+                    atual, _ = ler_estado(janela, fixos)
                 registrar(f"  Enter 2 depois do Qtd Fiscal: no Valor Unit (andou={andou}, rolou={rolou}, "
                           f"sem ciano={bool(sumiu)}); ciano agora={atual}", mostrar=False)
                 return atual
@@ -739,16 +749,40 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         caixa = localizar_rateio(core.palavras_tela(binarizar(recorte), tesseract)).get(chave)
         return (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
 
+    def confirma_terceiros(rateio):
+        """Le so o recorte em volta do rotulo ICMS TERCEIROS (~0,5 s, contra ~5 s da tela inteira)."""
+        c = rateio["terceiros"]
+        h = c[3] - c[1]
+        imagem = core.capturar(janela)
+        recorte = imagem.crop((max(c[0] - 2 * h, 0), max(c[1] - h, 0), min(c[2] + 2 * h, imagem.width),
+                               min(c[3] + h, imagem.height)))
+        for img in (recorte, binarizar(recorte)):
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, tesseract)))
+            if "tercei" in texto:
+                return True
+        registrar(f"  recorte do ICMS TERCEIROS nao confere: {texto!r}", mostrar=False)
+        return False
+
     def preencher_rateio(r, foco):
         """Depois do Valor do ICMS: Enter ate o Ident Tributo da linha ICMS TERCEIROS (lida no OCR quando o Rateio abre),
         digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
         if not tesseract:
             raise Travou("rateio", "sem o Tesseract nao consigo achar a linha ICMS TERCEIROS no Rateio")
         rateio = None
+        salvo = rateio_salvo[0]  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
         for vez in range(MAX_ATE_RATEIO):
             devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
             foco = enter_rateio("icms", vez, foco)
-            if rateio is None and vez + 1 >= LER_RATEIO_DESDE:
+            if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and coluna_rateio(foco, salvo) == "ident":
+                if confirma_terceiros(salvo):
+                    rateio = salvo
+                    registrar(f"  Rateio: posicoes da nota anterior; ICMS TERCEIROS conferido no recorte (Enter {vez + 1})",
+                              mostrar=False)
+                else:
+                    salvo = None  # le a tela inteira de novo
+            if salvo and rateio is None and vez + 1 >= LER_RATEIO_DESDE + 10:
+                salvo = None  # nao bateu com as posicoes salvas: le a tela inteira
+            if rateio is None and not salvo and vez + 1 >= LER_RATEIO_DESDE:
                 t_leitura = time.time()
                 lido = ler_rateio(core.capturar(janela), tesseract)
                 registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
@@ -759,10 +793,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                               c == "ident" and c not in rateio]
                     if faltam:
                         raise Travou("rateio", f"nao li no Rateio a(s) coluna(s) {', '.join(faltam)}")
+                    rateio_salvo[0] = rateio
             if rateio and na_linha(foco, rateio["terceiros"]) and coluna_rateio(foco, rateio) == "ident":
                 registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
-            if rateio and foco is not None and foco[1] > rateio["terceiros"][3] + (foco[3] - foco[1]):
+            linha = (rateio or salvo or {}).get("terceiros")
+            if linha and foco is not None and foco[1] > linha[3] + (foco[3] - foco[1]):
                 raise Travou("rateio", "passei da linha ICMS TERCEIROS no Rateio sem parar no Ident Tributo")
         else:
             raise Travou("rateio", f"nao cheguei no Ident Tributo da linha ICMS TERCEIROS com {MAX_ATE_RATEIO} Enter depois "
@@ -884,6 +920,19 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         time.sleep(0.3)
         return True
 
+    def esperar_tela(antes, limite):
+        """Espera a tela mudar em relacao a `antes` e parar de mudar (janela terminou de abrir/fechar), no maximo
+        `limite` s. Evita ler a tela de novo (~2,5 s em 4K) antes de ela mudar."""
+        prazo, anterior = time.time() + limite, None
+        while time.time() < prazo:
+            checar_parada()
+            agora = core.capturar(janela)
+            if anterior is not None and tela_mudou(antes, agora, PIXELS_JANELA) and not tela_mudou(anterior, agora, PIXELS_JANELA):
+                return True
+            anterior = agora
+            time.sleep(0.15)
+        return False
+
     def integrar(nota):
         """Integrar e o que vem depois (usuario, 04/11/2026), lendo a tela antes de cada passo:
         aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
@@ -925,22 +974,23 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 esperas = 0
                 if nova == "sucesso":
                     registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
-                    time.sleep(0.5)
+                    esperar_tela(imagem, 1.5)
                     return 3
-                time.sleep(0.5)
+                esperar_tela(imagem, render)
                 continue
-            if janelas or (cliques == 2 and enters >= ENTERS_DEPOIS_INTEGRAR):
-                # janela ja tratada ainda aberta, ou ja integrei 2 vezes: so espera (Enter aqui pode rodar sem fim)
+            if janelas or feitos or (cliques == 2 and enters >= ENTERS_DEPOIS_INTEGRAR):
+                # janela ja tratada ainda aberta, entre uma janela e outra, ou ja integrei 2 vezes: so espera a tela
+                # mudar (Enter aqui pode cair na janela seguinte; na do Frete LTCC roda sem fim)
                 esperas += 1
                 if esperas >= LEITURAS_AVISO:
                     break
-                time.sleep(0.5)
+                esperar_tela(imagem, render)
                 continue
             if enters < ENTERS_DEPOIS_INTEGRAR:
                 enters += 1
                 devagar(f"Enter {enters} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
                 core.send_keys("{ENTER}", pause=0.03)
-                time.sleep(0.3)
+                esperar_tela(imagem, 1.0)
                 continue
             if not clicar_integrar(nota, 2):
                 registrar(f"Nota ...{nota['chave'][-6:]}: dei {ENTERS_DEPOIS_INTEGRAR} Enter depois do Integrar, mas nao "

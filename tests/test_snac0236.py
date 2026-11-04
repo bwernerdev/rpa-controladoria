@@ -103,7 +103,8 @@ class SRP0236:
     def titulo(self):
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
-        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10)}.get(
+        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10),
+                 "t114ident": ("ICMS TERCEIROS", 0, 0, 60, 10)}.get(  # recorte do rotulo da linha (nota seguinte)
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
@@ -426,6 +427,18 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
                          {"t114ident0": "1", "t114base0": "1500.5"})
+
+    def test_rateio_reaproveita_posicoes(self):
+        srp = SRP0236()
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, notas)
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(log.count("Rateio lido no Enter"), 1)  # tela inteira so na 1a nota
+        self.assertIn("Rateio: posicoes da nota anterior", log)
+        self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])
 
     def test_rateio_dois_itens(self):
         srp = SRP0236()
