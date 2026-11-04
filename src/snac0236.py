@@ -300,10 +300,14 @@ def onde_esta(caixa, lista):
 
 
 def foco_unido(imagem):
-    """Campo em foco (ciano) inteiro: une os pedacos da mesma linha. Com texto selecionado no campo (ex.: a Data
+    """Campo em foco (ciano; sem ciano, o texto selecionado) inteiro: une os pedacos da mesma linha. Com texto selecionado no campo (ex.: a Data
     Emissao que o SRP preenche), o ciano se parte e o maior pedaco podia ser so a sobra da direita. Ignora blocos
     com menos de 8 px de altura (ha um traco ciano de 23x2 no alto da tela do Citrix)."""
     caixas = [c for c in core.caixas_cor(imagem, "ciano") if c[3] - c[1] >= 8]  # altura: pedacos estreitos valem
+    if not caixas:
+        # campo ja preenchido pelo SRP (Data Emissao): fundo branco e o texto todo selecionado em azul escuro, sem ciano.
+        # Bordas de 1 px da janela tem o mesmo azul: so blocos de 8 px ou mais nos dois sentidos.
+        caixas = [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))

@@ -102,6 +102,9 @@ def descrever(r):
 CORES = {
     "ciano": (lambda v: v < 40, lambda v: v > 215, lambda v: v > 215),     # campo em foco
     "vermelho": (lambda v: v > 215, lambda v: v < 40, lambda v: v < 40),  # icone dos avisos do SRP
+    # texto selecionado no campo em foco (SNAC0236: a Data Emissao que o SRP preenche fica branca com a data selecionada,
+    # sem ciano); medido (72, 100, 141) na tela 4K em 04/11/2026
+    "selecao": (lambda v: 60 <= v <= 85, lambda v: 88 <= v <= 112, lambda v: 128 <= v <= 155),
 }
 
 

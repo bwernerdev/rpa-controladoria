@@ -219,6 +219,11 @@ class Tela(unittest.TestCase):
         self.assertLessEqual(caixa[0], 52)
         self.assertGreaterEqual(caixa[2], 157)
         self.assertIsNone(snac0236.foco_unido(Image.new("RGB", (50, 50), "white")))
+        selecionado = Image.new("RGB", (400, 100), "white")  # campo branco com o texto selecionado (Data preenchida)
+        selecionado.paste((72, 100, 141), (60, 20, 160, 40))
+        selecionado.paste((72, 100, 141), (0, 0, 1, 100))  # borda de 1 px da janela, mesmo azul: nao e foco
+        caixa = snac0236.foco_unido(selecionado)
+        self.assertTrue(caixa and caixa[0] <= 64 and caixa[2] >= 156, caixa)
 
     def test_rotulo_mais_perto_a_esquerda(self):
         rotulos, lista = snac0236.localizar_rotulos(PALAVRAS), snac0236.frases(PALAVRAS)
