@@ -395,7 +395,7 @@ class Fluxo(unittest.TestCase):
         self.assertEqual((srp.sucessos, srp.ltcc, srp.sucesso), (2, False, False))  # clicou Frete LTCC e deu OK
         self.assertTrue(any("Integrado com Sucesso" in a for a in avisos))
         # integrada com sucesso: clica na Chave e segue sem pausar; so a ultima nota termina com Concluido
-        self.assertEqual(srp.cliques_chave, 1)
+        self.assertEqual(srp.cliques_chave, 2)  # depois de cada nota integrada, tambem a ultima
         self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
         self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_A, CHAVE_B])
 
@@ -406,7 +406,7 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.reintegrou, srp.enter_no_ltcc), (2, 2, 2, 0, 0))
-        self.assertEqual(srp.cliques_chave, 1)
+        self.assertEqual(srp.cliques_chave, 2)  # depois de cada nota integrada, tambem a ultima
         self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
 
     def test_rateio_sem_imposto(self):

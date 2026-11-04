@@ -334,7 +334,11 @@ def foco_unido(imagem):
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
-    caixas = caixas + [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
+    # texto selecionado so na faixa da linha do campo (procurar na tela 4K inteira levava 0,27 s a cada consulta)
+    faixa_topo = max(topo - 6, 0)
+    faixa = imagem.crop((0, faixa_topo, imagem.width, min(base + 6, imagem.height)))
+    caixas = caixas + [(c[0], c[1] + faixa_topo, c[2], c[3] + faixa_topo) for c in core.caixas_cor(faixa, "selecao")
+                       if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
     folga = max(300, 8 * (base - topo))  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
     mesma_linha = sorted(c for c in caixas if abs(c[1] - topo) <= 4 and abs(c[3] - base) <= 4)
     for c in mesma_linha:  # da esquerda para a direita, colando os pedacos vizinhos a direita
@@ -356,9 +360,10 @@ def ler_estado(janela, fixos=()):
     return foco_unido(imagem), core.icone_aviso(imagem, fixos) is not None
 
 
-# 2 s: ao entrar no Valor Unit a grade rola para a direita e o ciano demora a voltar (04/11/2026: com 0,8 s o robo
-# achou que era campo sem cor, deu mais um Enter e digitou o Valor Unit no Vlr ICMS)
-def aguardar(janela, referencia, limite, fixos=(), sem_cor=2.0, antes=None):
+# 1,2 s sem ciano = campo sem cor (lista Lemg...). Ja foi 0,8 s (04/11/2026: na rolagem da grade o robo achou que era
+# campo sem cor e digitou o Valor Unit no Vlr ICMS) e 2 s; hoje o Valor Unit tem entrada propria (entrar_no_valor_unit)
+# e a grade rolada e conferida pela faixa acima do foco. Cada campo sem cor custava 2 s parado.
+def aguardar(janela, referencia, limite, fixos=(), sem_cor=1.2, antes=None):
     """Depois de um Enter: a nova caixa do foco; "aviso" se o aviso do SRP aparecer; "sem_cor" se nenhum campo ficar
     ciano por `sem_cor` s (listas como o Lemg so ganham borda pontilhada); None se o foco nao andar em `limite` s.
     Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta. Com `antes` (captura de antes
@@ -476,7 +481,7 @@ def mudou_acima(antes, agora, caixa):
 # O usuario contou 7 Enter ate o Rateio abrir ("mas pode ser mais"); no SRP real (log de 04/11) o foco passou pela parte
 # de cima do Rateio e chegou na grade de tributos no 10o Enter; cada linha de tributo teve 3 paradas.
 MAX_ATE_RATEIO = 20  # Enter depois do Valor do ICMS ate o Ident Tributo da linha ICMS TERCEIROS
-LER_RATEIO_DESDE = 6  # a partir deste Enter, le a tela procurando o Rateio
+LER_RATEIO_DESDE = 8  # a partir deste Enter, le a tela procurando o Rateio (lido no 9o nos testes de 04/11; ~5 s cada)
 COLUNAS_RATEIO = ("ident", "base", "aliquota", "lancamento")  # na ordem da tela
 NOME_RATEIO = {"ident": "Ident Tributo", "base": "Base Calculo", "aliquota": "Aliquota", "lancamento": "Lancamento"}
 
@@ -1089,6 +1094,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             if cliques == 0:
                 registrar(f"{etiqueta}: nao achei o botao Integrar na tela. Clique em Integrar no SRP.")
             marcar(linhas, "ok")
+            if cliques == 3:  # integrada com sucesso: clica na Chave (tambem na ultima nota, para a proxima planilha)
+                foco_chave = ir_para_chave()
             if ultima:
                 if not clicou and retomar is not None:
                     registrar("Depois de integrar, clique em Continuar para encerrar.")
@@ -1096,10 +1103,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     esperar_continuar()
                     marcar(linhas, "ok")
                 break
-            if cliques == 3:  # integrada com sucesso: clica na Chave e segue com a proxima nota, sem pausa
-                foco = ir_para_chave()
-                if foco:
-                    continue
+            if cliques == 3 and foco_chave:  # integrada com sucesso e cursor na Chave: proxima nota, sem pausa
+                foco = foco_chave
+                continue
             if retomar is None:
                 registrar("Sem o botao Continuar o robo para aqui: confira a integracao e inicie de novo pela proxima nota.")
                 return 1
