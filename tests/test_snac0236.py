@@ -73,6 +73,8 @@ class SRP0236:
         self.sem_barra, self.recorte_vazio = False, False  # barra azul nao achada / recorte sem as palavras da janela
         self.leituras, self.recortes = 0, 0
         self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
+        self.ignora_cliques = False  # cliques no Item e no Ident Tributo que nao mudam o foco
+        self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -158,6 +160,7 @@ class SRP0236:
                 self.sucesso, self.sucessos, self.indice = False, self.sucessos + 1, 1
                 return
             if texto == "{ENTER}":
+                self.enters += 1
                 if base in self.recusar:
                     self.alerta = True
                     return
@@ -184,6 +187,22 @@ class SRP0236:
                 k = (self.indice - len(cab)) // (1 + len(rateio))
                 self.indice = len(cab) + (k + 1) * (1 + len(rateio))
                 return
+            cab, rateio = self.campos()
+            if self.indice < len(cab) and self.indice > cab.index("frete") and 235 <= x <= 290 and 430 <= y <= 442:
+                self.cliques_item += 1  # 1a linha da grade, coluna Item
+                if not self.ignora_cliques:
+                    self.indice = len(cab)
+                return
+            if self.rateio_aberto():
+                for nome in rateio:
+                    if nome and nome.startswith("t1"):
+                        cx, cy = COLUNAS_TRIBUTO[nome[4:]], LINHAS_TRIBUTO[nome[1:4]]
+                        if cx <= x <= cx + 60 and cy <= y <= cy + 12:
+                            self.cliques_ident += 1
+                            if not self.ignora_cliques:
+                                k = (self.indice - len(cab)) // (1 + len(rateio))
+                                self.indice = len(cab) + k * (1 + len(rateio)) + 1 + rateio.index(nome)
+                            return
             if INTEGRAR[0] <= x <= INTEGRAR[2] and INTEGRAR[1] <= y <= INTEGRAR[3]:
                 if not self.atual:  # 2o clique (depois dos 7 Enter): conta, mas nao e outra nota
                     self.reintegrou += 1
@@ -443,6 +462,29 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_cliques_no_item_e_no_ident_terceiros(self):
+        srp = SRP0236()
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.cliques_item, srp.cliques_ident), (2, 2))
+        self.assertIn("cliquei no Item da grade", log)
+        self.assertIn("cliquei no Ident Tributo do ICMS TERCEIROS", log)
+        self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])
+        self.assertNotIn("t199ident0", srp.integradas[0])
+
+    def test_cliques_que_nao_andam_seguem_com_enter(self):
+        sem, com = SRP0236(), SRP0236()
+        com.ignora_cliques = True
+        for srp in (sem, com):
+            with ambiente(srp):
+                codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((com.cliques_item, com.cliques_ident), (1, 1))
+        self.assertEqual(com.integradas[0]["t114ident0"], "0")
+        self.assertGreater(com.enters, sem.enters + 8)  # Enter pelos campos que o clique pularia
 
     def test_janelas_pos_integrar_lidas_no_recorte(self):
         srp = SRP0236()

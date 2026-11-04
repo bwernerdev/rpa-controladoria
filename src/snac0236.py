@@ -756,6 +756,40 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 return foco
         raise Travou(alvo, f"nao cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{local(foco)}")
 
+    def ir_para_item(foco):
+        """Depois do Frete: Enter ate sair do campo Frete (o 1o Enter fica nele, confirmando a lista; no maximo 3) e
+        clique na 1a linha da grade, coluna Item (logo abaixo do titulo lido no inicio), em vez dos ~9 Enter por Marcas,
+        Observacoes, Cond. Pagamento e um campo sem cor (~9 s no log de 04/11/2026; usuario, 04/11/2026). Clique que
+        nao leva ao Item: segue com Enter procurando o Item, como antes."""
+        rotulo = rotulos.get("item")
+        if not rotulo or "frete" not in rotulos:
+            return ir_ate("frete", "item", 10, foco, anterior=foco)
+        vez = 0
+        while foco is None or ao_lado(foco, rotulos["frete"], lidas):
+            if vez >= 3:
+                raise Travou("frete", f"o cursor nao saiu do campo Frete com 3 Enter{local(foco)}")
+            checar_parada()
+            devagar(f"Enter {vez + 1} depois do Frete (saindo do campo)")
+            core.send_keys("{ENTER}", pause=0.03)
+            foco = depois_do_enter("frete", vez, foco)
+            vez += 1
+        # 1a linha da grade: no SRP real (4K) o titulo Item tem 24 px e o centro da celula fica 37 px abaixo dele
+        x, y = (rotulo[0] + rotulo[2]) / 2, rotulo[3] + 1.55 * (rotulo[3] - rotulo[1])
+        ret = janela.rectangle()
+        checar_parada()
+        devagar("clicar na 1a linha da grade, coluna Item")
+        clicar(ret.left + x, ret.top + y)
+        novo = aguardar(janela, foco, render, fixos)
+        if novo == "aviso":
+            raise Travou("item", "apareceu um aviso do SRP depois do clique no Item da grade")
+        if isinstance(novo, tuple) and posicao_ok("item", novo, rotulos, None, lidas):
+            registrar(f"  cliquei no Item da grade em ({x:.0f}, {y:.0f}) depois de {vez} Enter no Frete: foco={novo}",
+                      mostrar=False)
+            return novo
+        registrar(f"  cliquei no Item da grade, mas o foco nao foi para la (foco={novo}): sigo com Enter", mostrar=False)
+        foco = novo if isinstance(novo, tuple) else (None if novo == "sem_cor" else foco)
+        return ir_ate("frete", "item", max(10 - vez, 1), foco, anterior=foco)
+
     def entrar_no_valor_unit(foco):
         """2o Enter depois do Qtd Fiscal: sai do Qtd.Fisica e entra no Valor Unit, que fica AMARELO (sem ciano) e faz a
         grade rolar para a direita. Conta como entrou se o ciano andar ou sumir, ou se a faixa acima do campo mudar
@@ -810,6 +844,26 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         registrar(f"  recorte do ICMS TERCEIROS nao confere: {texto!r}", mostrar=False)
         return False
 
+    def clicar_ident_terceiros(pos, foco, vez):
+        """Com o Rateio aberto e o foco no Ident Tributo de uma linha acima (199/198): clique no Ident Tributo da linha
+        ICMS TERCEIROS, em vez dos ~6 Enter pelas linhas de cima (usuario, 04/11/2026). Foco que nao anda: segue com
+        Enter, como antes."""
+        t = pos["terceiros"]
+        x, y = (foco[0] + foco[2]) / 2, (t[1] + t[3]) / 2
+        ret = janela.rectangle()
+        checar_parada()
+        devagar("clicar no Ident Tributo da linha ICMS TERCEIROS")
+        clicar(ret.left + x, ret.top + y)
+        novo = aguardar(janela, foco, render, fixos)
+        if novo == "aviso":
+            raise Travou("rateio", "apareceu um aviso do SRP depois do clique no Ident Tributo do ICMS TERCEIROS")
+        if isinstance(novo, tuple):
+            registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS em ({x:.0f}, {y:.0f}) no Enter {vez + 1}: foco={novo}",
+                      mostrar=False)
+            return novo
+        registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS, mas o foco nao andou ({novo}): sigo com Enter", mostrar=False)
+        return None if novo == "sem_cor" else foco
+
     def preencher_rateio(r, foco):
         """Depois do Valor do ICMS: Enter ate o Ident Tributo da linha ICMS TERCEIROS (lida no OCR quando o Rateio abre),
         digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
@@ -817,9 +871,18 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             raise Travou("rateio", "sem o Tesseract nao consigo achar a linha ICMS TERCEIROS no Rateio")
         rateio = None
         salvo = rateio_salvo[0]  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
+        clicou = False
         for vez in range(MAX_ATE_RATEIO):
             devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
             foco = enter_rateio("icms", vez, foco)
+            pos = rateio or salvo
+            # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
+            # de cima (na grade principal o campo nessa altura e largo: 635 px contra 107 px da celula Ident, 4K)
+            if (pos and not clicou and foco is not None and coluna_rateio(foco, pos) == "ident"
+                    and foco[2] - foco[0] <= 2 * (pos["ident"][2] - pos["ident"][0])
+                    and foco[1] > pos["ident"][3] and foco[3] < pos["terceiros"][1]):
+                clicou = True
+                foco = clicar_ident_terceiros(pos, foco, vez)
             if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and coluna_rateio(foco, salvo) == "ident":
                 if confirma_terceiros(salvo):
                     rateio = salvo
@@ -1151,8 +1214,10 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     if foco is None:
                         raise Travou(campo, f"nao sei em que campo o cursor esta antes do {NOME[campo]}{local(foco)}")
                     digitar(nota[campo], campo)
-                    alvo = SEQ_CABECALHO[indice + 1][0] if indice + 1 < len(SEQ_CABECALHO) else "item"
-                    foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
+                    if campo == "frete":  # ultimo do cabecalho: Enter ate sair do Frete e clique no Item da grade
+                        foco = ir_para_item(foco)
+                        continue
+                    foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
                 for indice, r in enumerate(nota["itens"]):
                     marcar([r["linha"]], "executando")
                     if posicao_ok("item", foco, rotulos, None, lidas) is False:
