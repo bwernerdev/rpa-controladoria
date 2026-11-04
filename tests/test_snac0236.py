@@ -56,7 +56,7 @@ class SRP0236:
         self.volta = integrar_volta_para_chave
         self.lock = threading.Lock()
         self.indice, self.linha_grade, self.alerta = 0, 0, False
-        self.atual, self.integradas = {}, []
+        self.atual, self.integradas, self.reintegrou = {}, [], 0
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -131,6 +131,10 @@ class SRP0236:
                 self.indice = len(cab) + (k + 1) * (1 + len(rateio))
                 return
             if INTEGRAR[0] <= x <= INTEGRAR[2] and INTEGRAR[1] <= y <= INTEGRAR[3]:
+                if not self.atual:  # 2o clique (depois dos 7 Enter): conta, mas nao e outra nota
+                    self.reintegrou += 1
+                    self.indice, self.alerta = 0, False
+                    return
                 self.integradas.append(self.atual)
                 self.atual = {}
                 if self.volta:
@@ -261,7 +265,7 @@ class PassoAPasso(unittest.TestCase):
         self.assertGreater(len(passos), 15 + enters + 2)
         self.assertIn("Passo a passo: clicar em Tributos OK", passos)
         self.assertIn("Passo a passo: digitar '30' em Filial Fisica (1a parte)", passos)
-        self.assertEqual(passos[-1], "Passo a passo: clicar em Integrar")
+        self.assertEqual(passos[-9:], ["Passo a passo: clicar em Integrar"] + [f"Passo a passo: Enter {i} de 7 depois do Integrar" for i in range(1, 8)] + ["Passo a passo: clicar em Integrar de novo"])
         self.assertGreater(__import__("time").time() - inicio, 0.01 * len(passos) * 0.9)
 
 
@@ -312,6 +316,7 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, estados = rodar(srp, notas)
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(len(srp.integradas), 2)
+        self.assertEqual(srp.reintegrou, 2)  # Integrar, 7 Enter e Integrar de novo em cada nota
         a = srp.integradas[0]
         self.assertEqual((a["chave"], a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]),
                          (CHAVE_A, "30", "46", "01/11/2026", "47407.28", "CIF"))

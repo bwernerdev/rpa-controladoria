@@ -539,6 +539,17 @@ def na_linha(caixa, rotulo):
     return caixa is not None and abs((caixa[1] + caixa[3]) / 2 - (rotulo[1] + rotulo[3]) / 2) <= max(8, (caixa[3] - caixa[1]) / 2 + 4)
 
 
+# depois do 1o clique em Integrar: 7 Enter e Integrar de novo (usuario, 04/11/2026)
+ENTERS_DEPOIS_INTEGRAR = 7
+
+
+def tela_mudou(antes, agora):
+    if antes.size != agora.size:
+        return True
+    from PIL import ImageChops
+    return ImageChops.difference(antes.convert("L"), agora.convert("L")).point(lambda v: 255 if v > 40 else 0).getbbox() is not None
+
+
 def clicar(x, y):
     """Clique na tela (coordenadas fisicas)."""
     from pywinauto import mouse
@@ -804,7 +815,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             return None
         return achado
 
-    def integrar(nota):
+    def clicar_integrar(nota, vez):
         """Clica em Integrar se o botao estiver a vista (confere de novo pelo OCR antes de clicar). True = clicou."""
         botao = localizar_integrar()
         if not botao:
@@ -812,10 +823,28 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         ret = janela.rectangle()
         x, y = ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2
         checar_parada()
-        devagar("clicar em Integrar")
+        devagar("clicar em Integrar" + (" de novo" if vez > 1 else ""))
+        antes = core.capturar(janela)
         clicar(x, y)
-        registrar(f"  nota ...{nota['chave'][-6:]}: clique em Integrar em ({x:.0f}, {y:.0f})", mostrar=False)
+        registrar(f"  nota ...{nota['chave'][-6:]}: clique {vez} em Integrar em ({x:.0f}, {y:.0f})", mostrar=False)
+        prazo = time.time() + render  # espera a tela reagir ao clique antes do proximo passo
+        while time.time() < prazo and not tela_mudou(antes, core.capturar(janela)):
+            checar_parada()
+            time.sleep(0.1)
+        time.sleep(0.3)
         return True
+
+    def integrar(nota):
+        """Integrar, ENTERS_DEPOIS_INTEGRAR Enter e Integrar de novo (combinado com o usuario em 04/11/2026).
+        Devolve quantos cliques deu (0, 1 ou 2)."""
+        if not clicar_integrar(nota, 1):
+            return 0
+        for vez in range(ENTERS_DEPOIS_INTEGRAR):
+            checar_parada()
+            devagar(f"Enter {vez + 1} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
+            core.send_keys("{ENTER}", pause=0.03)
+            time.sleep(0.4)
+        return 2 if clicar_integrar(nota, 2) else 1
 
     try:
         tesseract = core.caminho_tesseract()
@@ -926,11 +955,15 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 registrar(f"OK {etiqueta}: terminada a mao.")
                 marcar(linhas, "ok")
                 continue
-            clicou = integrar(nota)
+            cliques = integrar(nota)
+            clicou = cliques == 2
             registrar(f"OK {etiqueta}: {len(linhas)} item(ns) em {time.time() - t0:.1f}s" +
-                      ("; cliquei em Integrar." if clicou else "."))
-            if not clicou:
+                      (f"; cliquei em Integrar, dei {ENTERS_DEPOIS_INTEGRAR} Enter e cliquei em Integrar de novo." if clicou else "."))
+            if cliques == 0:
                 registrar(f"{etiqueta}: nao achei o botao Integrar na tela. Clique em Integrar no SRP.")
+            elif cliques == 1:
+                registrar(f"{etiqueta}: cliquei em Integrar e dei {ENTERS_DEPOIS_INTEGRAR} Enter, mas nao achei o Integrar "
+                          "de novo. Clique em Integrar no SRP.")
             marcar(linhas, "ok")
             if ultima:
                 if not clicou and retomar is not None:
