@@ -552,6 +552,12 @@ def aviso_frete_cif(texto):
     return sum(t in texto for t in AVISO_FRETE_CIF) >= 2
 
 
+def resumo_tributos(texto):
+    """Janela "Resumo dos Tributos do Documento" (COFINS/PIS ... [Confirmar] [Cancelar]), que vem depois do aviso do frete;
+    o robo confirma com Enter (usuario, 04/11/2026). Em 4K o titulo (branco no azul) sai pela metade: "ae dos tributos"."""
+    return "dos tributos" in texto and "confirmar" in texto
+
+
 def tela_mudou(antes, agora):
     if antes.size != agora.size:
         return True
@@ -859,20 +865,32 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         return 2
 
     def fechar_aviso_frete(nota):
-        """Depois do 2o Integrar: se aparecer o aviso do frete alterado para CIF, Enter (= OK)."""
+        """Depois do 2o Integrar: aviso do frete alterado para CIF -> Enter (OK); depois "Resumo dos Tributos do
+        Documento" -> Enter (Confirmar). Cada um no maximo uma vez; para depois do Resumo ou de LEITURAS_AVISO leituras
+        seguidas sem nenhum dos dois. Outros avisos: nao mexe."""
         if not tesseract:
             return
-        for leitura in range(LEITURAS_AVISO):
+        fechados, vazias = [], 0
+        while vazias < LEITURAS_AVISO and "resumo" not in fechados:
             checar_parada()
             texto = normalizar(" ".join(p[0] for p in core.palavras_tela(core.capturar(janela), tesseract)))
-            if aviso_frete_cif(texto):
-                devagar("Enter no aviso 'frete alterado para CIF' (OK)")
-                core.send_keys("{ENTER}", pause=0.03)
-                registrar(f"  nota ...{nota['chave'][-6:]}: aviso do frete alterado para CIF fechado com Enter", mostrar=False)
+            if "frete" not in fechados and aviso_frete_cif(texto):
+                fechado, acao = "frete", "Enter no aviso 'frete alterado para CIF' (OK)"
+            elif resumo_tributos(texto):
+                fechado, acao = "resumo", "Enter no 'Resumo dos Tributos do Documento' (Confirmar)"
+            else:
+                vazias += 1
                 time.sleep(0.5)
-                return
+                continue
+            devagar(acao)
+            core.send_keys("{ENTER}", pause=0.03)
+            registrar(f"  nota ...{nota['chave'][-6:]}: {acao}", mostrar=False)
+            fechados.append(fechado)
+            vazias = 0
             time.sleep(0.5)
-        registrar(f"  nota ...{nota['chave'][-6:]}: sem aviso do frete depois do 2o Integrar", mostrar=False)
+        if not fechados:
+            registrar(f"  nota ...{nota['chave'][-6:]}: sem aviso do frete nem Resumo dos Tributos depois do 2o Integrar",
+                      mostrar=False)
 
     try:
         tesseract = core.caminho_tesseract()

@@ -37,6 +37,7 @@ PALAVRAS = [
 TRIBUTOS_OK = (700, 800, 780, 812)
 AVISO = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate(
     "Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF.".split())]
+RESUMO = [(p, 300 + 60 * i, 480, 55, 12) for i, p in enumerate("ae dos Tributos Documento Confirmar Cancelar".split())]
 LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
 COLUNAS_TRIBUTO = {"ident": 800, "base": 1000, "aliquota": 1100, "lancamento": 1200}
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
@@ -60,6 +61,7 @@ class SRP0236:
         self.indice, self.linha_grade, self.alerta = 0, 0, False
         self.atual, self.integradas, self.reintegrou = {}, [], 0
         self.com_aviso_frete, self.aviso_frete, self.fechou_aviso = False, False, 0
+        self.resumo, self.confirmou = False, 0  # "Resumo dos Tributos do Documento", depois do aviso do frete
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -113,8 +115,11 @@ class SRP0236:
         with self.lock:
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
-            if texto == "{ENTER}" and self.aviso_frete:  # OK no aviso do frete
-                self.aviso_frete, self.fechou_aviso = False, self.fechou_aviso + 1
+            if texto == "{ENTER}" and self.aviso_frete:  # OK no aviso do frete: vem o Resumo dos Tributos
+                self.aviso_frete, self.fechou_aviso, self.resumo = False, self.fechou_aviso + 1, True
+                return
+            if texto == "{ENTER}" and self.resumo:  # Confirmar no Resumo
+                self.resumo, self.confirmou = False, self.confirmou + 1
                 return
             if texto == "{ENTER}":
                 if base in self.recusar:
@@ -155,7 +160,7 @@ def ambiente(srp, palavras=PALAVRAS):
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
         "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
-        "palavras_tela": lambda imagem, t: (list(palavras) + (AVISO if srp.aviso_frete else []) if imagem.size == (1600, 900) else
+        "palavras_tela": lambda imagem, t: (list(palavras) + (AVISO if srp.aviso_frete else []) + (RESUMO if srp.resumo else []) if imagem.size == (1600, 900) else
                                             srp.titulo() if imagem.height < 60 else
                                             [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
                                             [("Integrar", 300, 80, 50, 12)]),
@@ -364,6 +369,7 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.reintegrou, srp.fechou_aviso, srp.aviso_frete), (2, 2, False))
+        self.assertEqual((srp.confirmou, srp.resumo), (2, False))
 
     def test_rateio_sem_imposto(self):
         srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados
