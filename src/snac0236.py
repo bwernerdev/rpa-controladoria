@@ -541,6 +541,15 @@ def na_linha(caixa, rotulo):
 
 # depois do 1o clique em Integrar: 7 Enter e Integrar de novo (usuario, 04/11/2026)
 ENTERS_DEPOIS_INTEGRAR = 7
+# aviso que pode aparecer depois do 2o Integrar; o robo fecha com Enter (usuario, 04/11/2026). Outros avisos: nao mexe.
+# "Atencao: Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF. [OK]"
+AVISO_FRETE_CIF = ("icms pago", "alterado o frete", "frete para cif")
+LEITURAS_AVISO = 3  # leituras da tela procurando o aviso depois do 2o Integrar
+
+
+def aviso_frete_cif(texto):
+    """O texto (normalizado) lido na tela tem o aviso do frete alterado para CIF?"""
+    return sum(t in texto for t in AVISO_FRETE_CIF) >= 2
 
 
 def tela_mudou(antes, agora):
@@ -844,7 +853,26 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             devagar(f"Enter {vez + 1} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
             core.send_keys("{ENTER}", pause=0.03)
             time.sleep(0.4)
-        return 2 if clicar_integrar(nota, 2) else 1
+        if not clicar_integrar(nota, 2):
+            return 1
+        fechar_aviso_frete(nota)
+        return 2
+
+    def fechar_aviso_frete(nota):
+        """Depois do 2o Integrar: se aparecer o aviso do frete alterado para CIF, Enter (= OK)."""
+        if not tesseract:
+            return
+        for leitura in range(LEITURAS_AVISO):
+            checar_parada()
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(core.capturar(janela), tesseract)))
+            if aviso_frete_cif(texto):
+                devagar("Enter no aviso 'frete alterado para CIF' (OK)")
+                core.send_keys("{ENTER}", pause=0.03)
+                registrar(f"  nota ...{nota['chave'][-6:]}: aviso do frete alterado para CIF fechado com Enter", mostrar=False)
+                time.sleep(0.5)
+                return
+            time.sleep(0.5)
+        registrar(f"  nota ...{nota['chave'][-6:]}: sem aviso do frete depois do 2o Integrar", mostrar=False)
 
     try:
         tesseract = core.caminho_tesseract()
