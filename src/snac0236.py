@@ -17,8 +17,6 @@ import unicodedata
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from PIL import Image
-
 import core
 
 # coluna da planilha (normalizada) -> chave
@@ -333,10 +331,9 @@ def foco_unido(imagem):
     if not caixas:
         # campo ja preenchido pelo SRP (Data Emissao): fundo branco e o texto todo selecionado em azul escuro, sem ciano.
         # Bordas de 1 px da janela tem o mesmo azul: so blocos de 8 px ou mais nos dois sentidos.
-        # em meia escala (NEAREST mantem as cores puras): na tela 4K inteira levava 0,27 s a cada consulta sem ciano
-        meia = imagem.resize((max(imagem.width // 2, 1), max(imagem.height // 2, 1)), Image.NEAREST)
-        caixas = [(c[0] * 2, c[1] * 2, c[2] * 2, c[3] * 2) for c in core.caixas_cor(meia, "selecao")
-                  if c[3] - c[1] >= 4 and c[2] - c[0] >= 4]
+        # Resolucao inteira: em meia escala o texto branco da data partia o bloco azul e sobrava so uma faixa de 8 px
+        # no alto do campo; o robo nao reconheceu a Data Emissao e passou dela (04/11/2026 18:51).
+        caixas = [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))

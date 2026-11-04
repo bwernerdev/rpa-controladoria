@@ -306,6 +306,16 @@ class PassoAPasso(unittest.TestCase):
 
 
 class Tela(unittest.TestCase):
+    def test_foco_data_selecionada_com_texto(self):
+        # Data Emissao preenchida pelo SRP: sem ciano, fundo azul da selecao com a data em branco por cima
+        imagem = Image.new("RGB", (800, 300), "white")
+        imagem.paste((72, 100, 141), (400, 100, 560, 138))
+        for x in range(410, 550, 7):  # tracos brancos do texto
+            imagem.paste((255, 255, 255), (x, 108, x + 2, 130))
+        caixa = snac0236.foco_unido(imagem)
+        self.assertGreaterEqual(caixa[3] - caixa[1], 30, caixa)  # o campo inteiro, nao so uma faixa no alto
+        self.assertLessEqual(abs((caixa[1] + caixa[3]) / 2 - 119), 3, caixa)
+
     def test_foco_unido(self):
         imagem = Image.new("RGB", (400, 100), "white")
         for x0, x1 in ((50, 60), (140, 160)):  # sobras do ciano a esquerda e a direita do texto selecionado
