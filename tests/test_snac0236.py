@@ -25,7 +25,9 @@ PALAVRAS = [
     ("Frete:", 10, 220, 40, 12),
     ("Integrar", 500, 300, 50, 12), ("Coleta", 600, 300, 40, 12), ("Frete", 645, 300, 35, 12),
     ("Item", 10, 370, 30, 12), ("Documento", 45, 370, 70, 12), ("Recebimento", 120, 370, 90, 12),
-    ("tem", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12),
+    ("tem", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12), ("Spm", 900, 400, 30, 12), ("Nat", 990, 385, 30, 12),
+    ("Oper", 990, 400, 30, 12), ("(ltd.", 1050, 400, 40, 12), ("Fiscal", 1095, 400, 40, 12), ("Unitario", 1180, 400, 60, 12),
+    ("Fiscal", 1245, 400, 40, 12),
 ]
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
           "data": (110, 160, 170, 172), "valor_total": (560, 190, 650, 202), "frete": (60, 220, 110, 232)}
@@ -47,7 +49,7 @@ class SRP0236:
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
-        rateio = ["oper", "qtd", None, "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
+        rateio = ["oper", "natoper", "qtd", None, "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
         return cab, rateio
 
     def onde(self):
@@ -61,7 +63,12 @@ class SRP0236:
         k, j = divmod(resto, ciclo)
         if j == 0:
             return f"item{k}", (235, 430 + 20 * k, 290, 442 + 20 * k)
-        return f"{rateio[j - 1] or 'x'}{k}" if rateio[j - 1] else None, (900, 500 + 15 * j, 960, 510 + 15 * j)
+        colunas = {"oper": 885, "natoper": 975, "qtd": 1070, "unit": 1200}  # x da coluna na grade (linha k)
+        nome = rateio[j - 1]
+        if nome in colunas:
+            x = colunas[nome]
+            return f"{nome}{k}", (x, 430 + 20 * k, x + 60, 442 + 20 * k)
+        return (f"{nome}{k}" if nome else None), (1400, 500 + 15 * j, 1460, 510 + 15 * j)
 
     def caixa(self, _janela=None):
         return None if self.indice in self.sem_cor else self.onde()[1]
@@ -235,7 +242,7 @@ class Tela(unittest.TestCase):
 
     def test_rotulos(self):
         rotulos = snac0236.localizar_rotulos(PALAVRAS)
-        self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar"})
+        self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar", "oper", "qtd", "unit"})
         self.assertEqual(rotulos["item"][:2], (240, 400))  # cabecalho da coluna, nao o titulo "Item Documento Recebimento"
         self.assertEqual(rotulos["frete"][:2], (10, 220))  # rotulo, nao o botao "Coleta Frete"
         self.assertTrue(snac0236.posicao_ok("chave", CAIXAS["chave"], rotulos))

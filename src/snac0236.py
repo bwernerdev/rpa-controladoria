@@ -32,7 +32,8 @@ VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro")
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
-SEQ_ITEM = (("item", 1), ("oper", 1), ("qtd", 2), ("unit", 1), ("icms", 7), ("icms_terceiro", 1))
+# depois do Oper SPM o 1o Enter cai no Nat Oper (ja preenchido; nao mexer) e o 2o no Qtd Fiscal (04/11/2026)
+SEQ_ITEM = (("item", 1), ("oper", 2), ("qtd", 2), ("unit", 1), ("icms", 7), ("icms_terceiro", 1))
 # a FILIAL FISCAL da planilha vai nos campos "Filial Fisica" da tela: depois da Chave + 5 Enter o SRP preenche CNPJ,
 # Serie e Docto e o cursor cai na Filial Fisica (visto na tela real em 04/11/2026, monitor 4K)
 NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fisica (1a parte)", "filial2": "Filial Fisica (2a parte)",
@@ -256,11 +257,22 @@ def localizar_rotulos(palavras):
         if caixa:
             achados[campo] = caixa
     descricoes = [caixa for texto, caixa in lista if texto.startswith("descri")]
-    for texto, caixa in lista:
-        # em 4K o Tesseract le o "Item" do cabecalho da grade como "tem"
-        if texto in ("item", "tem", "ltem", "1tem") and any(abs((caixa[1] + caixa[3]) / 2 - (d[1] + d[3]) / 2) <= 14 for d in descricoes):
-            achados["item"] = caixa
-            break
+
+    def na_linha_da_grade(caixa):
+        return any(abs((caixa[1] + caixa[3]) / 2 - (d[1] + d[3]) / 2) <= 14 for d in descricoes)
+
+    # cabecalhos da grade (linha de baixo dos titulos em 2 linhas), como o Tesseract le em 4K:
+    # "tem" (Item), "spm" (Oper Spm), "(ltd. fiscal" (Qtd.Fiscal), "unitario fiscal" (Valor Unitario Fiscal)
+    grade = {
+        "item": lambda t: t in ("item", "tem", "ltem", "1tem"),
+        "oper": lambda t: t == "spm" or t.endswith(" spm"),
+        "qtd": lambda t: "fiscal" in t and "td" in t and "unit" not in t,
+        "unit": lambda t: "unitario" in t,
+    }
+    for campo, pred in grade.items():
+        caixa = next((c for texto, c in lista if pred(texto) and na_linha_da_grade(c)), None)
+        if caixa:
+            achados[campo] = caixa
     return achados
 
 
@@ -311,6 +323,7 @@ def foco_unido(imagem):
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
+    caixas = caixas + [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
     folga = max(300, 8 * (base - topo))  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
     mesma_linha = sorted(c for c in caixas if abs(c[1] - topo) <= 4 and abs(c[3] - base) <= 4)
     for c in mesma_linha:  # da esquerda para a direita, colando os pedacos vizinhos a direita
@@ -394,8 +407,8 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
         if not rotulo or not anterior:
             return None
         return abs((caixa[1] + caixa[3]) / 2 - (anterior[1] + anterior[3]) / 2) <= 6 and caixa[0] > anterior[2]
-    if campo == "item":
-        return na_coluna(caixa, rotulos["item"]) if "item" in rotulos else None
+    if campo in ("item", "oper", "qtd", "unit"):  # colunas da grade
+        return na_coluna(caixa, rotulos[campo]) if campo in rotulos else None
     chave = "filial" if campo == "filial1" else campo
     if chave in rotulos:
         return ao_lado(caixa, rotulos[chave], lista)
@@ -597,7 +610,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             except Exception as erro:
                 registrar(f"  leitura dos rotulos falhou: {erro}", mostrar=False)
         registrar(f"  rotulos lidos: {rotulos}", mostrar=False)
-        faltam = [NOME.get(c, c) for c in ("chave", "filial", "data", "valor_total", "frete", "item") if c not in rotulos]
+        faltam = [NOME.get(c, c) for c in ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "qtd", "unit")
+                  if c not in rotulos]
         if faltam:
             aviso(f"ATENCAO: nao li na tela os rotulos {', '.join(faltam)}: nesses campos o robo so conta os Enter, sem conferir a posicao.")
         if "integrar" not in rotulos:
@@ -641,11 +655,17 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         if retomar is None:
                             raise Travou("item", f"o cursor nao esta no Item da grade{local(foco)}")
                         foco = esperar_no_item(r)
-                    for campo, quantos in SEQ_ITEM:
+                    for posicao, (campo, quantos) in enumerate(SEQ_ITEM):
                         if foco is None:
                             raise Travou(campo, f"o cursor esta num campo sem cor antes do {NOME[campo]}; nao digito sem ver o campo")
+                        if posicao_ok(campo, foco, rotulos, None, lidas) is False:
+                            raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]}{local(foco)}")
                         digitar(r[campo], campo)
-                        foco = enters(campo, quantos, foco)
+                        alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
+                        if alvo in ("oper", "qtd", "unit"):  # colunas visiveis no inicio: Enter ate a coluna certa
+                            foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
+                        else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
+                            foco = enters(campo, quantos, foco)
                     registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)
                     if indice < len(nota["itens"]) - 1:
                         marcar([r["linha"]], "ok")
