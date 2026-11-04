@@ -15,6 +15,7 @@ from PIL import ImageTk
 
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
+from gui_snac0236 import Pagina0236
 from icone import desenhar
 from versao import NOME, VERSAO
 
@@ -46,7 +47,7 @@ FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "ex
 MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
 # telas do SRP, uma aba cada: (chave, codigo, nome no SRP, subtitulo da janela)
 TELAS = (("snac0234", "SNAC0234", "Requisição Suprimento", "Preenchimento de requisições do SRP a partir da planilha"),
-         ("snac0236", "SNAC0236", "Documento Recebimento", "Digitação de documento de recebimento no SRP"))
+         ("snac0236", "SNAC0236", "Documento Recebimento", "Digitação de documentos de recebimento a partir da planilha"))
 COR = dict(PALETAS["claro"])
 FONTE = "Segoe UI"
 FONTE_FORTE = "Segoe UI Semibold"
@@ -220,6 +221,7 @@ class App(RaizTk):
         if DND_FILES:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._soltou)
+        self.p0236 = Pagina0236(self, sys.modules[__name__])
         self._construir()
         self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
@@ -523,23 +525,10 @@ class App(RaizTk):
         self.tabela.bind("<Leave>", lambda _e: self._esconder_dica())
 
     def _montar_snac0236(self):
-        """Aba da SNAC0236 (Digitacao Documento Recebimento): so o layout; o preenchimento ainda sera definido."""
+        """Aba da SNAC0236 (Digitacao Documento Recebimento): pagina propria (gui_snac0236), estado em self.p0236."""
         pagina = tk.Frame(self, bg=COR["fundo"])
         self.paginas["snac0236"] = pagina
-        cartao = self._cartao(pagina)
-        cartao.pack(fill="both", expand=True)
-        meio = tk.Frame(cartao, bg=COR["cartao"])
-        meio.place(relx=0.5, rely=0.45, anchor="center")
-        tk.Label(meio, text="◷", bg=COR["cartao"], fg=COR["borda_forte"], font=fonte(30)).pack()
-        tk.Label(meio, text="SNAC0236 · Digitação Documento Recebimento", bg=COR["cartao"], fg=COR["texto"],
-                 font=fonte(12, forte=True)).pack(pady=(px(6), px(4)))
-        tk.Label(meio, text="Em preparação: os passos do preenchimento desta tela ainda vão ser configurados.\n"
-                            "Enquanto isso, use a aba SNAC0234.", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
-                 justify="center").pack()
-        self._link(meio, "Ir para SNAC0234", lambda: self.trocar_aba("snac0234"), bg=COR["cartao"]).pack(pady=(px(12), 0))
-        rodape = tk.Frame(pagina, bg=COR["fundo"])
-        rodape.pack(side="bottom", fill="x", pady=(px(8), 0))
-        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
+        self.p0236.montar(pagina)
 
     def _pintar_abas(self, sobre=None):
         for chave, (codigo, nome, traco) in self.abas.items():
@@ -1058,8 +1047,8 @@ class App(RaizTk):
 
     def _soltou(self, evento):
         arquivos = self.tk.splitlist(evento.data)
-        if arquivos and self.aba != "snac0234":
-            messagebox.showinfo("SNAC0236", "A SNAC0236 ainda não recebe planilha. Para a requisição, abra a aba SNAC0234.")
+        if arquivos and self.aba == "snac0236":
+            self.p0236.carregar(arquivos[0])
             return
         if arquivos:
             self.carregar(arquivos[0])

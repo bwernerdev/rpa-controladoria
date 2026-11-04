@@ -1,0 +1,261 @@
+"""SNAC0236: planilha (formatos, agrupamento por chave) e preenchimento com um SRP simulado (Enter entre campos)."""
+import contextlib
+import pathlib
+import tempfile
+import threading
+import unittest
+from datetime import datetime
+from unittest import mock
+
+import simulador  # noqa: F401  (poe src no sys.path)
+import core
+import snac0236
+
+CHAVE_A = "1" * 40 + "0001"  # chaves ficticias
+CHAVE_B = "2" * 40 + "0002"
+
+# palavras da tela (texto, esq, topo, larg, alt), como o palavras_tela devolve
+PALAVRAS = [
+    ("Chave", 10, 100, 40, 12), ("Acesso", 55, 100, 45, 12), ("NF-e", 105, 100, 25, 12),
+    ("Filial", 10, 130, 35, 12), ("Fiscal:", 50, 130, 40, 12), ("Filial", 500, 130, 35, 12), ("Pagamento:", 540, 130, 70, 12),
+    ("Data", 10, 160, 30, 12), ("Emissão:", 45, 160, 55, 12), ("Entrada:", 200, 160, 50, 12),
+    ("Valor", 400, 190, 35, 12), ("Total", 440, 190, 35, 12), ("Documento:", 480, 190, 70, 12),
+    ("Frete:", 10, 220, 40, 12),
+    ("Integrar", 500, 300, 50, 12), ("Coleta", 600, 300, 40, 12), ("Frete", 645, 300, 35, 12),
+    ("Item", 10, 370, 30, 12), ("Documento", 45, 370, 70, 12), ("Recebimento", 120, 370, 90, 12),
+    ("Item", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12),
+]
+CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
+          "data": (110, 160, 170, 172), "valor_total": (560, 190, 650, 202), "frete": (60, 220, 110, 232)}
+INTEGRAR = (500, 300, 550, 312)
+
+
+class SRP0236:
+    """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
+
+    def __init__(self, recusar=(), integrar_volta_para_chave=True):
+        self.recusar = set(recusar)  # nomes de campo em que o Enter nao avanca (aviso)
+        self.volta = integrar_volta_para_chave
+        self.lock = threading.Lock()
+        self.indice, self.linha_grade, self.alerta = 0, 0, False
+        self.atual, self.integradas = {}, []
+
+    def campos(self):
+        cab = ["chave", None, None, None, None, "filial1", "filial2", None, "data"] + [None] * 6 + ["valor_total", "frete"] + [None] * 9
+        rateio = ["oper", "qtd", None, "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
+        return cab, rateio
+
+    def onde(self):
+        """(nome do campo ou None, caixa)."""
+        cab, rateio = self.campos()
+        if self.indice < len(cab):
+            nome = cab[self.indice]
+            return nome, CAIXAS.get(nome) or (700, 20 + self.indice * 15, 760, 30 + self.indice * 15)
+        resto = self.indice - len(cab)
+        ciclo = 1 + len(rateio)
+        k, j = divmod(resto, ciclo)
+        if j == 0:
+            return f"item{k}", (235, 430 + 20 * k, 290, 442 + 20 * k)
+        return f"{rateio[j - 1] or 'x'}{k}" if rateio[j - 1] else None, (900, 500 + 15 * j, 960, 510 + 15 * j)
+
+    def caixa(self, _janela=None):
+        return self.onde()[1]
+
+    def tela(self, _janela=None, _fixos=()):
+        return self.caixa(), self.alerta
+
+    def teclas(self, texto, pause=0):
+        with self.lock:
+            nome = self.onde()[0]
+            base = nome.rstrip("0123456789") if nome else None
+            if texto == "{ENTER}":
+                if base in self.recusar:
+                    self.alerta = True
+                    return
+                self.indice += 1
+            elif nome:
+                self.atual[nome] = self.atual.get(nome, "") + texto.replace("{,}", ",")
+
+    def clicar(self, x, y):
+        with self.lock:
+            if INTEGRAR[0] <= x <= INTEGRAR[2] and INTEGRAR[1] <= y <= INTEGRAR[3]:
+                self.integradas.append(self.atual)
+                self.atual = {}
+                if self.volta:
+                    self.indice, self.alerta = 0, False
+
+
+@contextlib.contextmanager
+def ambiente(srp, palavras=PALAVRAS):
+    pasta = pathlib.Path(tempfile.mkdtemp())
+    trocas = {
+        "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela, "capturar": lambda janela: None,
+        "palavras_tela": lambda imagem, t: list(palavras), "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
+        "titulo_janela_ativa": lambda: "Corporativo - Desktop Viewer", "mouse_no_canto": lambda: False,
+        "janela_citrix": lambda trecho: simulador.Janela(), "problema_tela": lambda retangulo, imagem: None,
+        "pasta_logs": lambda: pasta, "caixas_cor": lambda imagem, cor: [],
+    }
+    with contextlib.ExitStack() as pilha:
+        for nome, valor in trocas.items():
+            pilha.enter_context(mock.patch.object(core, nome, valor))
+        pilha.enter_context(mock.patch.object(snac0236, "clicar", srp.clicar))
+        yield pasta
+
+
+def nota(chave, itens, filial=("30", "46"), data="01/11/2026", total="47407.28", frete="150.5"):
+    regs = [{"linha": 2 + i, "chave": chave, "filial1": filial[0], "filial2": filial[1], "data": data, "valor_total": total,
+             "frete": frete, **item} for i, item in enumerate(itens)]
+    notas, erros = snac0236.agrupar_notas(regs)
+    assert not erros, erros
+    return notas[0]
+
+
+def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="21"):
+    return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t}
+
+
+def rodar(srp, notas, com_continuar=True, ao_pausar=None):
+    avisos, estados = [], []
+    retomar = threading.Event() if com_continuar else None
+
+    def estado(linha, nome):
+        estados.append((linha, nome))
+        if nome == "pausado" and com_continuar:
+            def soltar():
+                if ao_pausar:
+                    ao_pausar(srp)
+                retomar.set()
+            threading.Timer(0.05, soltar).start()
+
+    with mock.patch.object(snac0236.time, "sleep", lambda s: None if s >= 0.1 else threading.Event().wait(s)):
+        codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar)
+    return codigo, avisos, estados
+
+
+class Planilha(unittest.TestCase):
+    def gravar(self, linhas):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
+                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIRO (BASE DE CALCULO NF)"])
+        for linha in linhas:
+            ws.append(linha)
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
+        wb.save(caminho)
+        return caminho
+
+    def test_formatos_e_agrupamento(self):
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, 150.5, 900135, "5101", 2, 10.5, 1.89, 21],
+            [CHAVE_A, None, None, None, None, "900266", 5101, 1.25, "3,75", None, None],
+            [CHAVE_B, "30 47", "02/11/2026", "1200", None, 900135, 5102, 1, 1200, 0, 0],
+        ])
+        registros, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual([len(n["itens"]) for n in notas], [2, 1])
+        a = notas[0]
+        self.assertEqual((a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]), ("30", "46", "01/11/2026", "47407.28", "150.5"))
+        self.assertEqual((a["itens"][1]["qtd"], a["itens"][1]["unit"], a["itens"][1]["icms"]), ("1.25", "3.75", ""))
+        self.assertEqual(notas[1]["frete"], "")
+
+    def test_erros(self):
+        caminho = self.gravar([
+            [1.11e43, "3046", "31/02/2026", "47.407,28", None, "900135", None, 1, 1, 0, 0],
+            [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_A, "30 47", "01/11/2026", 10, None, "900266", "5101", 1, 1, 0, 0],
+            [CHAVE_B, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+        ])
+        _, _, erros = snac0236.carregar(caminho)
+        texto = "\n".join(erros)
+        for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
+                       "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente",
+                       "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco"):
+            self.assertIn(trecho, texto)
+
+    def test_coluna_faltando(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.active.append(["CHAVE NF", "ITEM"])
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "x.xlsx"
+        wb.save(caminho)
+        with self.assertRaises(ValueError):
+            snac0236.ler_planilha(caminho)
+
+
+class Tela(unittest.TestCase):
+    def test_rotulos(self):
+        rotulos = snac0236.localizar_rotulos(PALAVRAS)
+        self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar"})
+        self.assertEqual(rotulos["item"][:2], (240, 400))  # cabecalho da coluna, nao o titulo "Item Documento Recebimento"
+        self.assertEqual(rotulos["frete"][:2], (10, 220))  # rotulo, nao o botao "Coleta Frete"
+        self.assertTrue(snac0236.posicao_ok("chave", CAIXAS["chave"], rotulos))
+        self.assertFalse(snac0236.posicao_ok("chave", CAIXAS["data"], rotulos))
+        self.assertTrue(snac0236.posicao_ok("filial2", CAIXAS["filial2"], rotulos, CAIXAS["filial1"]))
+        self.assertIsNone(snac0236.posicao_ok("data", CAIXAS["data"], {}))
+
+
+class Fluxo(unittest.TestCase):
+    def test_duas_notas(self):
+        srp = SRP0236()
+        notas = [nota(CHAVE_A, [item("900135"), item("900266", qtd="1.25")]), nota(CHAVE_B, [item("900135")])]
+        notas[1]["itens"][0]["linha"] = 4
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, notas)
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(len(srp.integradas), 2)
+        a = srp.integradas[0]
+        self.assertEqual((a["chave"], a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]),
+                         (CHAVE_A, "30", "46", "01/11/2026", "47407.28", "150.5"))
+        self.assertEqual((a["item0"], a["oper0"], a["qtd0"], a["unit0"], a["icms0"], a["icms_terceiro0"]),
+                         ("900135", "5101", "2", "10.5", "1.89", "21"))
+        self.assertEqual((a["item1"], a["qtd1"]), ("900266", "1.25"))
+        self.assertEqual(srp.integradas[1]["chave"], CHAVE_B)
+        self.assertEqual(estados[-1], (4, "ok"))
+        self.assertTrue(any("PAUSADO: confira a integracao" in a for a in avisos))
+
+    def test_cursor_fora_da_chave_nao_digita(self):
+        srp = SRP0236()
+        srp.indice = 8  # Data Emissao
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 1)
+        self.assertIn("Nada foi digitado", avisos[-1])
+        self.assertEqual(srp.atual, {})
+
+    def test_aviso_pausa_e_usuario_termina(self):
+        srp = SRP0236(recusar={"data"})
+
+        def usuario(srp):  # termina a nota a mao e volta o cursor para a Chave
+            srp.atual, srp.indice, srp.alerta = {}, 0, False
+            srp.recusar.clear()
+
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, notas, ao_pausar=usuario)
+        self.assertEqual(codigo, 0, avisos)
+        self.assertTrue(any("apareceu um aviso do SRP" in a and "Data Emissao" in a for a in avisos))
+        self.assertIn((2, "pausado"), estados)
+        self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_B])
+
+    def test_sem_continuar_interrompe(self):
+        srp = SRP0236(recusar={"qtd"})
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertIn("Interrompido", avisos[-1])
+        self.assertIn((2, "erro"), estados)
+
+    def test_sem_rotulos_so_conta_enters(self):
+        srp = SRP0236()
+        with ambiente(srp, palavras=[("Integrar", 500, 300, 50, 12)]):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertTrue(any("nao li na tela os rotulos" in a for a in avisos))
+        self.assertEqual(srp.integradas[0]["icms_terceiro0"], "21")
+
+
+if __name__ == "__main__":
+    unittest.main()
