@@ -178,9 +178,14 @@ def icone_aviso(imagem, fixos=()):
     uma faixa vermelha que o logo corta, e o pedaco da esquerda (~17x21 px, na borda) parecia um icone; na v1.8.0 isso
     fazia o robo pausar em todo campo. Tambem descarta blocos encostados na borda da janela."""
     largura, altura = imagem.size
-    candidatos = [c for c in caixas_cor(imagem, "vermelho")
+    caixas = caixas_cor(imagem, "vermelho")
+    # faixa do titulo do SRP (bloco vermelho largo): os pedacos picotados pelo logo/letras ao lado dela nao sao icone.
+    # Visto em 04/11/2026 na SNAC0236 em monitor 4K: um pedaco 8x8 entre o logo e a faixa barrava o inicio.
+    faixas = [c for c in caixas if c[2] - c[0] >= 200]
+    candidatos = [c for c in caixas
                   if 8 <= c[2] - c[0] <= 60 and 8 <= c[3] - c[1] <= 60 and 0.6 <= (c[2] - c[0]) / (c[3] - c[1]) <= 1.6
-                  and c[0] > 3 and c[1] > 3 and c[2] < largura - 3 and c[3] < altura - 3 and not _sobrepoe(c, fixos)]
+                  and c[0] > 3 and c[1] > 3 and c[2] < largura - 3 and c[3] < altura - 3 and not _sobrepoe(c, fixos)
+                  and not _sobrepoe(c, faixas, folga=60)]
     return max(candidatos, key=lambda c: (c[2] - c[0]) * (c[3] - c[1])) if candidatos else None
 
 
