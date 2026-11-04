@@ -198,6 +198,7 @@ def ambiente(srp, palavras=PALAVRAS):
         pilha.enter_context(mock.patch.object(snac0236, "clicar", srp.clicar))
         pilha.enter_context(mock.patch.object(snac0236, "ler_estado", srp.tela))
         pilha.enter_context(mock.patch.object(snac0236, "foco_tela", srp.caixa))
+        pilha.enter_context(mock.patch.object(snac0236, "arquivo_posicoes", lambda: pasta / "posicoes_0236.json"))
         yield pasta
 
 
@@ -439,6 +440,18 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(log.count("Rateio lido no Enter"), 1)  # tela inteira so na 1a nota
         self.assertIn("Rateio: posicoes da nota anterior", log)
         self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])
+
+    def test_rateio_posicoes_da_execucao_anterior(self):
+        srp = SRP0236()
+        with ambiente(srp) as pasta:
+            rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            for log in pasta.glob("*snac0236.log"):
+                log.unlink()
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_B, [item("900266")])])  # outra execucao (outro planilha)
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertNotIn("Rateio lido no Enter", log)  # a 1a nota ja usou as posicoes salvas
+        self.assertIn("posicoes do Rateio da execucao anterior", log)
 
     def test_rateio_dois_itens(self):
         srp = SRP0236()

@@ -9,6 +9,7 @@ Linhas com a mesma CHAVE NF sao itens da mesma nota (cabecalho digitado uma vez)
 Cada Enter so conta se o foco (ciano) andar; antes dos campos do cabecalho e do Item o robo confere, pelo OCR feito
 no inicio, se o foco esta ao lado do rotulo certo. Qualquer duvida pausa (ou interrompe) sem digitar.
 """
+import json
 import re
 import threading
 import time
@@ -491,6 +492,30 @@ COLUNAS_RATEIO = ("ident", "base", "aliquota", "lancamento")  # na ordem da tela
 NOME_RATEIO = {"ident": "Ident Tributo", "base": "Base Calculo", "aliquota": "Aliquota", "lancamento": "Lancamento"}
 
 
+def arquivo_posicoes():
+    """Posicoes do Rateio lidas no OCR, guardadas entre execucoes (ao lado do exe; fora do git)."""
+    return core.pasta_base() / "posicoes_0236.json"
+
+
+def ler_posicoes(tamanho):
+    """Posicoes do Rateio salvas para uma janela do Citrix deste tamanho (outro tamanho/monitor = None)."""
+    try:
+        dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
+        if tuple(dados.get("janela", ())) == tuple(tamanho):
+            return {chave: tuple(caixa) for chave, caixa in dados["rateio"].items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def gravar_posicoes(tamanho, rateio):
+    try:
+        arquivo_posicoes().write_text(json.dumps({"janela": list(tamanho), "rateio": {c: list(v) for c, v in rateio.items()}}),
+                                      encoding="utf-8")
+    except OSError:
+        pass
+
+
 def tem_imposto(r):
     """Os dois valores da planilha diferentes de 0 = nota com imposto (vazio conta como 0)."""
     return Decimal(r.get("icms_terceiro") or "0") != 0 and Decimal(r.get("base_icms") or "0") != 0
@@ -794,6 +819,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     if faltam:
                         raise Travou("rateio", f"nao li no Rateio a(s) coluna(s) {', '.join(faltam)}")
                     rateio_salvo[0] = rateio
+                    gravar_posicoes(tamanho, rateio)
             if rateio and na_linha(foco, rateio["terceiros"]) and coluna_rateio(foco, rateio) == "ident":
                 registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
@@ -1032,6 +1058,11 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         tesseract = core.caminho_tesseract()
         janela = core.janela_citrix(janela_trecho)
         janela.set_focus()
+        ret0 = janela.rectangle()
+        tamanho = (ret0.right - ret0.left, ret0.bottom - ret0.top)
+        rateio_salvo[0] = ler_posicoes(tamanho)  # da execucao anterior: a 1a nota tambem nao le a tela inteira
+        if rateio_salvo[0]:
+            registrar("  posicoes do Rateio da execucao anterior (mesmo tamanho de janela)", mostrar=False)
         aviso(f"Clique no campo Chave Acesso NF-e. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
         inicio = time.time()
         tela = core.capturar(janela)

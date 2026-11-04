@@ -8,6 +8,7 @@ RPA-SRP.exe
 progresso.json
 logs/
 aprendizado.json
+posicoes_0236.json
 /tesseract/
 planilhas/*
 !planilhas/CLAUDE.md
