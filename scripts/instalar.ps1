@@ -31,6 +31,15 @@ try {
     if (Test-Path "$origem\planilhas\BASE PADRAO.xlsx") {
         Copy-Item "$origem\planilhas\BASE PADRAO.xlsx" "$Destino\planilhas" -Force
     }
+    # O zip baixado vem com a marca "da internet", que passa para o que é extraído e copiado; com ela o
+    # SmartScreen mostra a tela azul ao abrir o exe instalado. O usuário já escolheu instalar: tira a marca
+    # só do que este script instalou (o mesmo que "Desbloquear" nas Propriedades do arquivo).
+    try {
+        @(Get-Item "$Destino\RPA-SRP.exe") + @(Get-ChildItem "$Destino\tesseract" -Recurse -File) +
+            @(Get-ChildItem "$Destino\planilhas\BASE PADRAO.xlsx" -ErrorAction SilentlyContinue) | Unblock-File
+    } catch {
+        Write-Host "Aviso: não consegui desbloquear os arquivos ($($_.Exception.Message)). Se o Windows avisar ao abrir, clique em 'Mais informações' e 'Executar assim mesmo'."
+    }
 
     if (-not $SemAtalhos) {
         $shell = New-Object -ComObject WScript.Shell
