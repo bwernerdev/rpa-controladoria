@@ -607,12 +607,16 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     core.limpar_logs()
     log = open(core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log", "w", encoding="utf-8")
     trava_log = threading.Lock()
+    ultimo_log = [time.time()]
     atual = []  # linhas marcadas 'executando'
 
     def registrar(texto, mostrar=True):
+        """Linha no log com hora e o tempo desde a linha anterior (+s), para achar o que demora."""
         with trava_log:
             if not log.closed:
-                log.write(texto + "\n")
+                agora = time.time()
+                log.write(f"{datetime.now():%H:%M:%S} +{agora - ultimo_log[0]:5.1f}s {texto}\n")
+                ultimo_log[0] = agora
                 log.flush()
         if mostrar:
             aviso(texto)
@@ -632,6 +636,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         if intervalo <= 0:
             return
         aviso(f"Passo a passo: {texto}")
+        registrar(f"  passo a passo: {texto}", mostrar=False)
         fim = time.time() + intervalo
         while time.time() < fim:
             checar_parada()
@@ -739,7 +744,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
             foco = enter_rateio("icms", vez, foco)
             if rateio is None and vez + 1 >= LER_RATEIO_DESDE:
+                t_leitura = time.time()
                 lido = ler_rateio(core.capturar(janela), tesseract)
+                registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
                     registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
@@ -888,9 +895,11 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         for _ in range(MAX_PASSOS_INTEGRAR):
             checar_parada()
             imagem = core.capturar(janela)
+            t_leitura = time.time()
             texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract)))
             janelas = [nome for nome, teste in (("frete", aviso_frete_cif), ("resumo", resumo_tributos),
                                                  ("ltcc", janela_ltcc), ("sucesso", integrado_com_sucesso)) if teste(texto)]
+            registrar(f"  leitura da tela depois do Integrar: {time.time() - t_leitura:.1f}s, janelas={janelas}", mostrar=False)
             nova = next((nome for nome in janelas if nome not in feitos), None)
             if nova == "ltcc":
                 botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem), tesseract)))
