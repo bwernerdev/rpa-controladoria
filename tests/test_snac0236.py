@@ -159,6 +159,16 @@ class Planilha(unittest.TestCase):
         self.assertEqual((a["itens"][1]["qtd"], a["itens"][1]["unit"], a["itens"][1]["icms"]), ("1.25", "3.75", ""))
         self.assertEqual(notas[1]["frete"], "")
 
+    def test_filial_padrao(self):
+        caminho = self.gravar([
+            [CHAVE_A, None, "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_B, "30 47", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_B, None, None, None, None, "900266", "5101", 1, 1, 0, 0],
+        ])
+        _, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual([(n["filial1"], n["filial2"]) for n in notas], [("30", "46"), ("30", "47")])
+
     def test_erros(self):
         caminho = self.gravar([
             [1.11e43, "3046", "31/02/2026", "47.407,28", None, "900135", None, 1, 1, 0, 0],

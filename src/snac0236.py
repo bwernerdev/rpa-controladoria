@@ -26,7 +26,8 @@ TITULOS = {"chave": "CHAVE NF", "filial": "FILIAL FISCAL", "data": "DATA EMISSÃ
            "frete": "FRETE", "item": "ITEM", "oper": "OPER SPM", "qtd": "QTD FISCAL", "unit": "VALOR UNIT",
            "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIRO"}
 CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da nota (repetidos ou so na 1a linha)
-OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
+FILIAL_PADRAO = ("30", "46")  # FILIAL FISCAL quando a coluna falta ou vem em branco na nota (pedido do usuario)
+OBRIGATORIOS = ("chave", "data", "valor_total", "item", "oper", "qtd", "unit")
 VALORES = ("valor_total", "frete", "qtd", "unit", "icms", "icms_terceiro")
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
@@ -122,7 +123,7 @@ def ler_planilha(caminho):
         chave = chave_coluna(titulo) if titulo is not None else None
         if chave and chave not in indices:
             indices[chave] = posicao
-    faltando = [TITULOS[c] for c in TITULOS if c not in indices]
+    faltando = [TITULOS[c] for c in TITULOS if c not in indices and c != "filial"]  # filial e opcional (padrao 30 46)
     if faltando:
         raise ValueError(f"Colunas ausentes no cabecalho: {', '.join(faltando)}")
     registros, erros = [], []
@@ -134,7 +135,7 @@ def ler_planilha(caminho):
         problemas = []
         r["chave"], erro = formatar_chave(bruto["chave"])
         problemas.append(erro)
-        (r["filial1"], r["filial2"]), erro = formatar_filial(bruto["filial"])
+        (r["filial1"], r["filial2"]), erro = formatar_filial(bruto.get("filial"))
         r["filial"] = f"{r['filial1']} {r['filial2']}".strip()
         problemas.append(erro)
         r["data"], erro = formatar_data(bruto["data"])
@@ -164,7 +165,10 @@ def agrupar_notas(registros):
                 erros.append(f"linha {r['linha']}: CHAVE NF em branco (repita a chave em todos os itens da nota)")
                 continue
             vistas.setdefault(r["chave"], r["linha"])
-            notas.append({c: r[c] for c in ("chave", "filial1", "filial2", "data", "valor_total", "frete")} | {"itens": [r]})
+            nota = {c: r[c] for c in ("chave", "filial1", "filial2", "data", "valor_total", "frete")} | {"itens": [r]}
+            if not nota["filial1"]:
+                nota["filial1"], nota["filial2"] = FILIAL_PADRAO
+            notas.append(nota)
             continue
         nota = notas[-1]
         for campo in ("filial1", "filial2", "data", "valor_total", "frete"):
@@ -182,8 +186,6 @@ def validar(registros, notas):
         for campo in ("chave", "data", "valor_total"):
             if not nota[campo]:
                 erros.append(f"linha {primeira}: {TITULOS[campo]} em branco")
-        if not nota["filial1"]:
-            erros.append(f"linha {primeira}: FILIAL FISCAL em branco")
         for r in nota["itens"]:
             for campo in ("item", "oper", "qtd", "unit"):
                 if not r[campo]:
