@@ -105,6 +105,9 @@ CORES = {
     # texto selecionado no campo em foco (SNAC0236: a Data Emissao que o SRP preenche fica branca com a data selecionada,
     # sem ciano); medido (72, 100, 141) na tela 4K em 04/11/2026
     "selecao": (lambda v: 60 <= v <= 85, lambda v: 88 <= v <= 112, lambda v: 128 <= v <= 155),
+    # barra de titulo das janelas do SRP (a principal e as que abrem por cima: avisos, Resumo dos Tributos, Frete LTCC);
+    # medido (45, 132, 197) uniforme nos prints e na tela 4K em 04/11/2026
+    "titulo_srp": (lambda v: 40 <= v <= 50, lambda v: 127 <= v <= 137, lambda v: 192 <= v <= 202),
 }
 
 

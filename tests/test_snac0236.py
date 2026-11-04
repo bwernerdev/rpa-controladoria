@@ -43,6 +43,8 @@ LTCC = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate("Informe o Centro d
     ("Voltar", 430, 700, 90, 12), ("Frete", 1000, 700, 50, 12), ("LTC", 1055, 700, 45, 12)]
 BOTAO_LTCC = (1000, 700, 1100, 712)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
+BARRA = (250, 400, 1300, 430)  # barra de titulo azul das janelas pos-Integrar
+AREA = (230, 395, 1320, 900)  # snac0236.area_dialogo da BARRA na tela 1600x900
 LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
 COLUNAS_TRIBUTO = {"ident": 800, "base": 1000, "aliquota": 1100, "lancamento": 1200}
 CAIXAS = {"chave": (140, 100, 400, 112), "filial1": (100, 130, 130, 142), "filial2": (140, 130, 170, 142),
@@ -68,6 +70,8 @@ class SRP0236:
         self.com_aviso_frete, self.aviso_frete, self.fechou_aviso = False, False, 0
         self.resumo, self.confirmou = False, 0  # "Resumo dos Tributos do Documento", depois do aviso do frete
         self.ltcc, self.sucesso, self.sucessos = False, False, 0  # janela do Frete LTCC e "Integrado com Sucesso"
+        self.sem_barra, self.recorte_vazio = False, False  # barra azul nao achada / recorte sem as palavras da janela
+        self.leituras, self.recortes = 0, 0
         self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
 
     def campos(self):
@@ -116,8 +120,26 @@ class SRP0236:
         """Tela muda a cada campo (no SRP real a grade rola ao entrar no Valor Unit)."""
         return Image.new("RGB", (1600, 900), ((self.indice * 97) % 256,) * 3)
 
-    def tela(self, _janela=None, _fixos=()):
+    def tela(self, _janela=None, _fixos=(), _imagem=None):
         return self.caixa(), self.alerta
+
+    def janela_por_cima(self):
+        return self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+
+    def palavras_janelas(self):
+        return ((AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
+                + (SUCESSO if self.sucesso else []))
+
+    def barras(self, imagem):
+        self.leituras += 1
+        return [BARRA] if self.janela_por_cima() and not self.sem_barra and imagem.size == (1600, 900) else []
+
+    def recorte(self):
+        """Palavras das janelas no recorte AREA (coordenadas do recorte)."""
+        self.recortes += 1
+        if self.recorte_vazio:
+            return []
+        return [(p, x - AREA[0], y - AREA[1], w, h) for p, x, y, w, h in self.palavras_janelas()]
 
     def teclas(self, texto, pause=0):
         with self.lock:
@@ -182,8 +204,8 @@ def ambiente(srp, palavras=PALAVRAS):
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
         "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
-        "palavras_tela": lambda imagem, t: (list(palavras) + (AVISO if srp.aviso_frete else []) + (RESUMO if srp.resumo else []) + (LTCC if srp.ltcc else [])
-                                            + (SUCESSO if srp.sucesso else []) if imagem.size == (1600, 900) else
+        "palavras_tela": lambda imagem, t: (list(palavras) + srp.palavras_janelas() if imagem.size == (1600, 900) else
+                                            srp.recorte() if imagem.size == (AREA[2] - AREA[0], AREA[3] - AREA[1]) else
                                             srp.titulo() if imagem.height < 60 else
                                             [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
                                             [("Integrar", 300, 80, 50, 12)]),
@@ -197,6 +219,7 @@ def ambiente(srp, palavras=PALAVRAS):
             pilha.enter_context(mock.patch.object(core, nome, valor))
         pilha.enter_context(mock.patch.object(snac0236, "clicar", srp.clicar))
         pilha.enter_context(mock.patch.object(snac0236, "ler_estado", srp.tela))
+        pilha.enter_context(mock.patch.object(snac0236, "barras_dialogo", srp.barras))
         pilha.enter_context(mock.patch.object(snac0236, "foco_tela", srp.caixa))
         pilha.enter_context(mock.patch.object(snac0236, "arquivo_posicoes", lambda: pasta / "posicoes_0236.json"))
         yield pasta
@@ -353,6 +376,31 @@ class Tela(unittest.TestCase):
         self.assertEqual(snac0236.onde_esta((235, 430, 290, 442), lista), "tem")
 
 
+class BarraDialogo(unittest.TestCase):
+    def test_resumo_dos_tributos_variantes_do_ocr(self):
+        self.assertTrue(snac0236.resumo_tributos("ae dos tributos documento confirmar cancelar"))
+        self.assertTrue(snac0236.resumo_tributos("resume dos tributes do documento cofins see conftirmar | cancelar |"))
+        self.assertFalse(snac0236.resumo_tributos("tributos ok integrar cancelar"))
+
+    def test_barra_da_janela_por_cima(self):
+        imagem = Image.new("RGB", (1600, 900), (240, 240, 240))
+        imagem.paste((45, 132, 197), (2, 10, 1598, 40))  # barra da tela principal (largura toda): fica de fora
+        imagem.paste((45, 132, 197), (300, 300, 900, 330))  # janela por cima
+        imagem.paste((45, 132, 197), (100, 600, 400, 603))  # borda fina: fica de fora
+        barras = snac0236.barras_dialogo(imagem)
+        self.assertEqual(len(barras), 1, barras)
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(barras[0], (300, 300, 900, 330))), 2, barras)
+        area = snac0236.area_dialogo(imagem, barras)
+        self.assertLessEqual(area[0], 300)
+        self.assertGreaterEqual(area[2], 898)
+        self.assertGreaterEqual(area[3], 300 + 0.6 * 600)  # janela de ate 0,6 da largura cabe no recorte
+
+    def test_sem_janela_por_cima(self):
+        imagem = Image.new("RGB", (1600, 900), (240, 240, 240))
+        imagem.paste((45, 132, 197), (2, 10, 1598, 40))
+        self.assertEqual(snac0236.barras_dialogo(imagem), [])
+
+
 class Fluxo(unittest.TestCase):
     def test_duas_notas(self):
         srp = SRP0236()
@@ -395,6 +443,37 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_janelas_pos_integrar_lidas_no_recorte(self):
+        srp = SRP0236()
+        srp.com_aviso_frete = True
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos), (1, 1, 1))
+        # frete, resumo, ltcc (texto + botao binarizado) e sucesso no recorte, nao na tela inteira
+        self.assertGreaterEqual(srp.recortes, 5)
+        self.assertIn(f"recorte {AREA}, janelas=['ltcc']", log)
+
+    def test_janelas_pos_integrar_sem_barra_azul(self):
+        # barra de titulo nao achada (outra cor): le a tela inteira antes de dar Enter e na ultima espera
+        srp = SRP0236()
+        srp.com_aviso_frete, srp.sem_barra = True, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.enter_no_ltcc), (1, 1, 1, 0))
+        self.assertEqual(srp.recortes, 0)
+
+    def test_janelas_pos_integrar_recorte_sem_texto(self):
+        # barra achada, mas o recorte nao reconhece a janela: le a tela inteira (nunca Enter as cegas com janela aberta)
+        srp = SRP0236()
+        srp.com_aviso_frete, srp.recorte_vazio = True, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.enter_no_ltcc), (1, 1, 1, 0))
 
     def test_aviso_frete_cif_depois_do_integrar(self):
         srp = SRP0236()

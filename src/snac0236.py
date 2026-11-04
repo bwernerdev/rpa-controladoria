@@ -357,9 +357,9 @@ def foco_tela(janela):
     return foco_unido(core.capturar(janela))
 
 
-def ler_estado(janela, fixos=()):
-    """(foco unido, ha aviso do SRP) numa captura so."""
-    imagem = core.capturar(janela)
+def ler_estado(janela, fixos=(), imagem=None):
+    """(foco unido, ha aviso do SRP) numa captura so (`imagem`: captura ja feita)."""
+    imagem = core.capturar(janela) if imagem is None else imagem
     return foco_unido(imagem), core.icone_aviso(imagem, fixos) is not None
 
 
@@ -374,10 +374,12 @@ def aguardar(janela, referencia, limite, fixos=(), sem_cor=1.2, antes=None):
     campo em foco fica sempre na borda direita e quem anda e a grade; 04/11/2026)."""
     prazo, sem_desde, sem_cor = time.time() + limite, None, min(sem_cor, limite / 2)
     while time.time() < prazo:
-        atual, tem_aviso = ler_estado(janela, fixos)
+        # na grade rolada a mesma captura serve para o foco e para a faixa acima dele (~0,16 s a menos por consulta)
+        imagem = core.capturar(janela) if antes is not None else None
+        atual, tem_aviso = ler_estado(janela, fixos, imagem)
         if atual and (referencia is None or abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
             return atual
-        if atual and antes is not None and mudou_acima(antes, core.capturar(janela), referencia):
+        if atual and antes is not None and mudou_acima(antes, imagem, referencia):
             time.sleep(0.3)  # a grade termina de rolar
             return ler_estado(janela, fixos)[0] or atual
         if tem_aviso:
@@ -588,8 +590,9 @@ def aviso_frete_cif(texto):
 
 def resumo_tributos(texto):
     """Janela "Resumo dos Tributos do Documento" (COFINS/PIS ... [Confirmar] [Cancelar]), que vem depois do aviso do frete;
-    o robo confirma com Enter (usuario, 04/11/2026). Em 4K o titulo (branco no azul) sai pela metade: "ae dos tributos"."""
-    return "dos tributos" in texto and "confirmar" in texto
+    o robo confirma com Enter (usuario, 04/11/2026). Em 4K o titulo (branco no azul) sai pela metade: "ae dos tributos";
+    no recorte da janela saiu "resume dos tributes ... conftirmar ... cancelar"."""
+    return "dos tribut" in texto and any(t in texto for t in ("confirmar", "nfirmar", "cancelar"))
 
 
 def janela_ltcc(texto):
@@ -612,6 +615,28 @@ def botao_frete_ltcc(lista):
 def integrado_com_sucesso(texto):
     """Aviso final "Documento Integrado com Sucesso. [OK]": o robo da Enter."""
     return "integrado com sucesso" in texto
+
+
+def barras_dialogo(imagem):
+    """Barras de titulo (azul `titulo_srp`) das janelas que o SRP abre por cima da tela principal; a da tela principal
+    (quase a largura toda) fica de fora. ~0,07 s na tela 4K, contra ~2,2 s do OCR da tela inteira."""
+    minimo = max(imagem.height // 100, 12)  # 4K: barra de 56 px
+    return [c for c in core.caixas_cor(imagem, "titulo_srp")
+            if c[3] - c[1] >= minimo and 250 <= c[2] - c[0] < 0.9 * imagem.width]
+
+
+def area_dialogo(imagem, barras):
+    """Recorte que cobre as janelas das `barras`. Nos prints de 04/11/2026 (aviso do frete, Resumo, Frete LTCC,
+    Integrado com Sucesso) cada janela tem altura de 0,46 a 0,6 da largura da barra: o recorte vai ate 0,8."""
+    base = max(b[1] + max(0.8 * (b[2] - b[0]), 15 * (b[3] - b[1])) for b in barras)
+    return (max(min(b[0] for b in barras) - 20, 0), max(min(b[1] for b in barras) - 5, 0),
+            min(max(b[2] for b in barras) + 20, imagem.width), min(int(base), imagem.height))
+
+
+def janelas_no_texto(texto):
+    """Janelas pos-Integrar reconhecidas no texto (normalizado) lido."""
+    return [nome for nome, teste in (("frete", aviso_frete_cif), ("resumo", resumo_tributos),
+                                     ("ltcc", janela_ltcc), ("sucesso", integrado_com_sucesso)) if teste(texto)]
 
 
 def tela_mudou(antes, agora, minimo=1):
@@ -973,19 +998,29 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             checar_parada()
             imagem = core.capturar(janela)
             t_leitura = time.time()
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract)))
-            janelas = [nome for nome, teste in (("frete", aviso_frete_cif), ("resumo", resumo_tributos),
-                                                 ("ltcc", janela_ltcc), ("sucesso", integrado_com_sucesso)) if teste(texto)]
-            registrar(f"  leitura da tela depois do Integrar: {time.time() - t_leitura:.1f}s, janelas={janelas}", mostrar=False)
+            # So o recorte das janelas por cima (barra de titulo azul): ~0,6 s em vez de ~2,2 s da tela inteira. Sem
+            # barra, entre uma janela tratada e a seguinte, nem le (so espera a tela mudar); na ultima espera e antes
+            # de qualquer Enter as cegas le a tela inteira, como antes. Recorte sem janela conhecida: tela inteira.
+            barras = barras_dialogo(imagem)
+            area, janelas = None, []
+            if barras:
+                area = area_dialogo(imagem, barras)
+                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract))))
+            if not janelas and (barras or not feitos or esperas >= LEITURAS_AVISO - 1):
+                area = (0, 0, imagem.width, imagem.height)
+                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract))))
+            onde = "nao li (nenhuma barra de janela)" if area is None else (
+                "tela inteira" if area == (0, 0, imagem.width, imagem.height) else f"recorte {area}")
+            registrar(f"  leitura depois do Integrar: {time.time() - t_leitura:.1f}s, {onde}, janelas={janelas}", mostrar=False)
             nova = next((nome for nome in janelas if nome not in feitos), None)
             if nova == "ltcc":
-                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem), tesseract)))
+                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem.crop(area)), tesseract)))
                 if not botao:
                     registrar(f"Nota ...{nota['chave'][-6:]}: nao achei o botao Frete LTCC. Clique em Frete LTCC no SRP.")
                     return 2
                 devagar("clicar em Frete LTCC")
                 ret = janela.rectangle()
-                clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
+                clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
             elif nova:
                 devagar({"frete": "Enter no aviso 'frete alterado para CIF' (OK)",
                          "resumo": "Enter no 'Resumo dos Tributos do Documento' (Confirmar)",
