@@ -420,7 +420,8 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
 
 
 # texto esperado no titulo da coluna, acima do campo em foco, nas colunas que so aparecem depois que a grade rola
-TITULO_COLUNA = {"unit": ("unitario",), "icms": ("icms",)}
+# (o Valor Unit fica amarelo, sem ciano: nao ha caixa para ler o titulo acima; ver entrar_no_valor_unit)
+TITULO_COLUNA = {"icms": ("icms",)}
 
 
 def titulo_acima(imagem, caixa, tesseract):
@@ -431,6 +432,17 @@ def titulo_acima(imagem, caixa, tesseract):
         return ""
     recorte = imagem.crop(area)
     return normalizar(" ".join(p[0] for p in core.palavras_tela(recorte, tesseract)))
+
+
+def mudou_acima(antes, agora, caixa):
+    """A faixa acima do campo (titulos e linhas de cima da grade) mudou entre as duas capturas? = a grade rolou."""
+    altura = caixa[3] - caixa[1]
+    area = (max(caixa[0] - 400, 0), max(caixa[1] - 6 * altura, 0), min(caixa[2] + 400, agora.width), max(caixa[1] - 2, 1))
+    if area[2] <= area[0] or area[3] <= area[1] or antes.size != agora.size:
+        return antes.size != agora.size
+    from PIL import ImageChops
+    diferenca = ImageChops.difference(antes.crop(area).convert("L"), agora.crop(area).convert("L"))
+    return sum(diferenca.point(lambda v: 255 if v > 40 else 0).histogram()[255:]) > 50
 
 
 def clicar(x, y):
@@ -532,6 +544,31 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
                 return foco
         raise Travou(alvo, f"nao cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{local(foco)}")
+
+    def entrar_no_valor_unit(foco):
+        """2o Enter depois do Qtd Fiscal: sai do Qtd.Fisica e entra no Valor Unit, que fica AMARELO (sem ciano) e faz a
+        grade rolar para a direita. Conta como entrou se o ciano andar ou sumir, ou se a faixa acima do campo mudar
+        (rolagem); nada disso em `render` s = Travou. Devolve o ciano que sobrar na tela (ou None)."""
+        checar_parada()
+        devagar("Enter 2 de 2 depois do Qtd Fiscal (entra no Valor Unit, que fica amarelo)")
+        antes = core.capturar(janela)
+        core.send_keys("{ENTER}", pause=0.03)
+        prazo, sumiu = time.time() + render, None
+        while time.time() < prazo:
+            atual, tem_aviso = ler_estado(janela, fixos)
+            if tem_aviso:
+                raise Travou("unit", "apareceu um aviso do SRP no Enter 2 depois do Qtd Fiscal")
+            andou = atual is not None and foco is not None and (abs(atual[0] - foco[0]) > 5 or abs(atual[1] - foco[1]) > 5)
+            sumiu = (sumiu or time.time()) if atual is None else None
+            rolou = foco is not None and mudou_acima(antes, core.capturar(janela), foco)
+            if andou or rolou or (sumiu and time.time() - sumiu >= min(0.3, render / 2)):
+                time.sleep(0.4)  # a grade termina de rolar
+                atual, _ = ler_estado(janela, fixos)
+                registrar(f"  Enter 2 depois do Qtd Fiscal: no Valor Unit (andou={andou}, rolou={rolou}, "
+                          f"sem ciano={bool(sumiu)}); ciano agora={atual}", mostrar=False)
+                return atual
+            time.sleep(0.05)
+        raise Travou("unit", "o cursor nao saiu do Qtd.Fisica no Enter 2 depois do Qtd Fiscal (a grade nao rolou)")
 
     def esperar_continuar():
         retomar.clear()
@@ -674,9 +711,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                             raise Travou("item", f"o cursor nao esta no Item da grade{local(foco)}")
                         foco = esperar_no_item(r)
                     for posicao, (campo, quantos) in enumerate(SEQ_ITEM):
-                        if foco is None:
+                        if foco is None and campo != "unit":  # o Valor Unit fica amarelo (conferido na entrada)
                             raise Travou(campo, f"o cursor esta num campo sem cor antes do {NOME[campo]}; nao digito sem ver o campo")
-                        if posicao_ok(campo, foco, rotulos, None, lidas) is False:
+                        if campo != "unit" and posicao_ok(campo, foco, rotulos, None, lidas) is False:
                             raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]}{local(foco)}")
                         if campo in TITULO_COLUNA and tesseract:
                             titulo = titulo_acima(core.capturar(janela), foco, tesseract)
@@ -687,6 +724,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
                         if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                             foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
+                        elif alvo == "unit":  # Enter no Qtd.Fisica (ciano), Enter no Valor Unit (amarelo, grade rola)
+                            foco = entrar_no_valor_unit(enters(campo, quantos - 1, foco))
                         else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
                             foco = enters(campo, quantos, foco)
                     registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)

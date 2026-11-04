@@ -37,7 +37,8 @@ INTEGRAR = (500, 300, 550, 312)
 class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
-    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=()):
+    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=()):
+        self.parado = set(parado)  # nomes de campo em que o Enter nao faz nada (nem aviso)
         self.sem_cor = set(sem_cor)  # indices do cabecalho cujo foco nao fica ciano (ex.: a lista Lemg)
         self.extras_filial = extras_filial  # campos a mais entre a 2a parte da filial e a Data (ex.: Filial Fiscal editavel)
         self.recusar = set(recusar)  # nomes de campo em que o Enter nao avanca (aviso)
@@ -49,7 +50,7 @@ class SRP0236:
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
-        rateio = ["oper", "natoper", "qtd", None, "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
+        rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
         return cab, rateio
 
     def onde(self):
@@ -73,11 +74,17 @@ class SRP0236:
     def titulo(self):
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
-        return [{"unit": ("Unitario Fiscal", 0, 0, 50, 10), "icms": ("Vlr ICMS Item Doc Forn", 0, 0, 50, 10)}.get(
+        return [{"icms": ("Vlr ICMS Item Doc Forn", 0, 0, 50, 10)}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
-        return None if self.indice in self.sem_cor else self.onde()[1]
+        nome = self.onde()[0] or ""
+        # Valor Unit: no SRP real fica amarelo (sem ciano)
+        return None if self.indice in self.sem_cor or nome.startswith("unit") else self.onde()[1]
+
+    def captura(self, _janela=None):
+        """Tela muda a cada campo (no SRP real a grade rola ao entrar no Valor Unit)."""
+        return Image.new("RGB", (1600, 900), (255, 255, (self.indice * 97) % 256))
 
     def tela(self, _janela=None, _fixos=()):
         return self.caixa(), self.alerta
@@ -89,6 +96,8 @@ class SRP0236:
             if texto == "{ENTER}":
                 if base in self.recusar:
                     self.alerta = True
+                    return
+                if base in self.parado:
                     return
                 self.indice += 1
             elif nome:
@@ -108,7 +117,7 @@ def ambiente(srp, palavras=PALAVRAS):
     pasta = pathlib.Path(tempfile.mkdtemp())
     trocas = {
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
-        "capturar": lambda janela: Image.new("RGB", (1600, 900), "white"),
+        "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
         "palavras_tela": lambda imagem, t: (list(palavras) if imagem.size == (1600, 900) else
                                             srp.titulo() if imagem.height < 60 else [("Integrar", 300, 80, 50, 12)]),
@@ -302,6 +311,22 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_valor_unit_amarelo(self):
+        srp = SRP0236()  # o Valor Unit nao fica ciano: o robo confere a entrada pela rolagem da grade
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", unit="8.5858")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.integradas[0]["unit0"], "8.5858")
+        self.assertNotIn("qtdfisica0", srp.integradas[0])
+
+    def test_enter_nao_entra_no_valor_unit(self):
+        srp = SRP0236(parado={"qtdfisica"})  # Enter no Qtd.Fisica nao anda e a grade nao rola: nao digita o Valor Unit
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", unit="8.5858")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("nao saiu do Qtd.Fisica" in a for a in avisos), avisos)
+        self.assertNotIn("qtdfisica0", srp.atual)
 
     def test_cursor_fora_da_chave_nao_digita(self):
         srp = SRP0236()
