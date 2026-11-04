@@ -44,6 +44,9 @@ TEMAS = {"auto": "Automático (igual ao Windows)", "claro": "Claro", "escuro": "
 FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
 MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
+# telas do SRP, uma aba cada: (chave, codigo, nome no SRP, subtitulo da janela)
+TELAS = (("snac0234", "SNAC0234", "Requisição Suprimento", "Preenchimento de requisições do SRP a partir da planilha"),
+         ("snac0236", "SNAC0236", "Documento Recebimento", "Digitação de documento de recebimento no SRP"))
 COR = dict(PALETAS["claro"])
 FONTE = "Segoe UI"
 FONTE_FORTE = "Segoe UI Semibold"
@@ -191,6 +194,7 @@ class App(RaizTk):
         self.trocas = {}  # linha -> conta da planilha, nas linhas em que o usuario aceitou a conta sugerida
         self.zebra = {}  # linha -> "par"/"impar" (fundo alternado na tabela)
         self.filtro = "todas"
+        self.aba = self.config_usuario.get("aba") if self.config_usuario.get("aba") in {t[0] for t in TELAS} else TELAS[0][0]
         self.console_aberto = bool(self.config_usuario.get("console_aberto", False))
         self.execucao = None  # andamento da execucao em curso (painel, estimativa e resumo do fim)
         self.ultima_mensagem, self.ultimo_erro, self.srp_por_linha = "", "", {}
@@ -378,16 +382,39 @@ class App(RaizTk):
         titulos = tk.Frame(topo, bg=COR["fundo"])
         titulos.pack(side="left", fill="x", expand=True)
         tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").pack(fill="x")
-        tk.Label(titulos, text="Preenchimento de requisições do SRP a partir da planilha", bg=COR["fundo"],
-                 fg=COR["suave"], font=fonte(9), anchor="w").pack(fill="x")
+        self.subtitulo = tk.Label(titulos, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
+        self.subtitulo.pack(fill="x")
         self.b_opcoes = self._link(lado, "⚙  Opções", self.abrir_opcoes, cor="suave")
         self.b_opcoes.pack(side="right")
         self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
         self.chip_citrix.pack(side="right", padx=(0, 16))
+
+        # abas: uma por tela do SRP (codigo em destaque + nome; sublinhado na aba ativa, sobre a linha divisoria)
+        barra_abas = tk.Frame(self, bg=COR["fundo"])
+        barra_abas.pack(fill="x", padx=margem)
+        self.abas = {}
+        for chave, codigo, nome, _ in TELAS:
+            aba = tk.Frame(barra_abas, bg=COR["fundo"], cursor="hand2")
+            aba.pack(side="left", padx=(0, px(6)))
+            textos = tk.Frame(aba, bg=COR["fundo"], cursor="hand2")
+            textos.pack(padx=px(12), pady=(px(4), px(6)))
+            rotulo_codigo = tk.Label(textos, text=codigo, bg=COR["fundo"], font=fonte(10, forte=True), cursor="hand2")
+            rotulo_codigo.pack(side="left")
+            rotulo_nome = tk.Label(textos, text=nome, bg=COR["fundo"], font=fonte(9), cursor="hand2")
+            rotulo_nome.pack(side="left", padx=(px(6), 0))
+            traco = tk.Frame(aba, height=px(3), bg=COR["fundo"])
+            traco.pack(fill="x")
+            for parte in (aba, textos, rotulo_codigo, rotulo_nome):
+                parte.bind("<Button-1>", lambda _e, c=chave: self.trocar_aba(c))
+                parte.bind("<Enter>", lambda _e, c=chave: self._pintar_abas(sobre=c))
+                parte.bind("<Leave>", lambda _e: self._pintar_abas())
+            self.abas[chave] = (rotulo_codigo, rotulo_nome, traco)
         tk.Frame(self, bg=COR["borda"], height=1).pack(fill="x")
 
+        self.paginas = {}
+        self._montar_snac0236()
         corpo = tk.Frame(self, bg=COR["fundo"])
-        corpo.pack(fill="both", expand=True, padx=margem, pady=(14, 12))
+        self.paginas["snac0234"] = corpo
 
         # planilha: area grande de arrastar ate carregar; depois, cartao compacto
         self.zona = tk.Frame(corpo, bg=COR["cartao"], highlightbackground=COR["borda_forte"], highlightcolor=COR["borda_forte"],
@@ -495,6 +522,53 @@ class App(RaizTk):
         self.tabela.bind("<Motion>", self._dica_conta)
         self.tabela.bind("<Leave>", lambda _e: self._esconder_dica())
 
+    def _montar_snac0236(self):
+        """Aba da SNAC0236 (Digitacao Documento Recebimento): so o layout; o preenchimento ainda sera definido."""
+        pagina = tk.Frame(self, bg=COR["fundo"])
+        self.paginas["snac0236"] = pagina
+        cartao = self._cartao(pagina)
+        cartao.pack(fill="both", expand=True)
+        meio = tk.Frame(cartao, bg=COR["cartao"])
+        meio.place(relx=0.5, rely=0.45, anchor="center")
+        tk.Label(meio, text="◷", bg=COR["cartao"], fg=COR["borda_forte"], font=fonte(30)).pack()
+        tk.Label(meio, text="SNAC0236 · Digitação Documento Recebimento", bg=COR["cartao"], fg=COR["texto"],
+                 font=fonte(12, forte=True)).pack(pady=(px(6), px(4)))
+        tk.Label(meio, text="Em preparação: os passos do preenchimento desta tela ainda vão ser configurados.\n"
+                            "Enquanto isso, use a aba SNAC0234.", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
+                 justify="center").pack()
+        self._link(meio, "Ir para SNAC0234", lambda: self.trocar_aba("snac0234"), bg=COR["cartao"]).pack(pady=(px(12), 0))
+        rodape = tk.Frame(pagina, bg=COR["fundo"])
+        rodape.pack(side="bottom", fill="x", pady=(px(8), 0))
+        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
+
+    def _pintar_abas(self, sobre=None):
+        for chave, (codigo, nome, traco) in self.abas.items():
+            ativa = chave == self.aba
+            codigo.configure(fg=COR["texto"] if ativa or chave == sobre else COR["suave"])
+            nome.configure(fg=COR["texto"] if ativa or chave == sobre else COR["suave"])
+            traco.configure(bg=COR["destaque"] if ativa else (COR["borda_forte"] if chave == sobre else COR["fundo"]))
+
+    def _mostrar_aba(self):
+        for chave, pagina in self.paginas.items():
+            if chave == self.aba:
+                pagina.pack(fill="both", expand=True, padx=px(20), pady=(14, 12))
+            else:
+                pagina.pack_forget()
+        self.subtitulo.configure(text=next(t[3] for t in TELAS if t[0] == self.aba))
+        self._pintar_abas()
+
+    def trocar_aba(self, chave):
+        if chave == self.aba:
+            return
+        if self.ocupado:  # o preenchimento em curso e desta aba: trocar esconderia a pausa e o Parar
+            self._status("Termine ou pare o preenchimento antes de trocar de tela", "aviso")
+            return
+        self._esconder_dica()
+        self.aba = chave
+        self.config_usuario["aba"] = chave
+        gravar_config(self.config_usuario)
+        self._mostrar_aba()
+
     def _pintar_zona(self):
         """Antes da planilha: area grande de arrastar. Depois: cartao com nome, resumo e acoes."""
         for filho in self.zona.winfo_children():
@@ -568,6 +642,7 @@ class App(RaizTk):
         self.saida.configure(state="disabled")
         self._mostrar_console()
         self.filtrar(self.filtro)
+        self._mostrar_aba()
         self._mostrar_avisos()
         self._atualizar_botoes()
 
@@ -983,6 +1058,9 @@ class App(RaizTk):
 
     def _soltou(self, evento):
         arquivos = self.tk.splitlist(evento.data)
+        if arquivos and self.aba != "snac0234":
+            messagebox.showinfo("SNAC0236", "A SNAC0236 ainda não recebe planilha. Para a requisição, abra a aba SNAC0234.")
+            return
         if arquivos:
             self.carregar(arquivos[0])
 
