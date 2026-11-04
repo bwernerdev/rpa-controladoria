@@ -21,7 +21,7 @@ class Pagina0236:
         self.parar, self.retomar = threading.Event(), threading.Event()
         self.soltar_atalhos = None
         self.iids = {}
-        # passo a passo: 0,3 s entre as acoes, narradas no console (para acompanhar os testes no SRP real)
+        # passo a passo: 0,5 s entre as acoes, narradas no console (para acompanhar os testes no SRP real)
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
         self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
         app.after(100, self._drenar)
@@ -63,7 +63,7 @@ class Pagina0236:
         self.b_continuar.pack(side="left", padx=(8, 0))
         self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
         self.b_simular.pack(side="left", padx=(8, 0))
-        self.c_passo = ttk.Checkbutton(botoes, text="Passo a passo (0,3 s entre ações)", variable=self.passo_a_passo)
+        self.c_passo = ttk.Checkbutton(botoes, text="Passo a passo (0,5 s entre ações)", variable=self.passo_a_passo)
         self.c_passo.pack(side="left", padx=(px(14), 0))
         self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.b_parar.pack(side="right")
@@ -243,9 +243,9 @@ class Pagina0236:
         self.soltar_atalhos, falhas = atalhos_globais({VK_F8: lambda: self.fila.put(("parar",))})
         self.escrever("Aviso: F8 ja esta em uso por outro programa; use o botao Parar ou o mouse no canto." if falhas
                       else "Atalho: F8 para.")
-        intervalo = 0.3 if self.passo_a_passo.get() else 0
+        intervalo = 0.5 if self.passo_a_passo.get() else 0
         if intervalo:
-            self.escrever("Passo a passo ligado: 0,3 s antes de cada acao; a proxima acao aparece aqui e na linha de status.")
+            self.escrever("Passo a passo ligado: 0,5 s antes de cada acao; a proxima acao aparece aqui e na linha de status.")
         threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True).start()
 
     def _rodar(self, notas, intervalo):
