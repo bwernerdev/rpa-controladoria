@@ -873,7 +873,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
 
     def integrar(nota):
         """Integrar, ENTERS_DEPOIS_INTEGRAR Enter e Integrar de novo (combinado com o usuario em 04/11/2026).
-        Devolve quantos cliques deu (0, 1 ou 2)."""
+        Devolve quantos cliques deu (0, 1 ou 2) ou 3 se o SRP disse "Documento Integrado com Sucesso"."""
         if not clicar_integrar(nota, 1):
             return 0
         for vez in range(ENTERS_DEPOIS_INTEGRAR):
@@ -885,9 +885,35 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             return 1
         if fechar_aviso_frete(nota):
             registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
-        else:
-            registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'. Confira no SRP.")
+            return 3
+        registrar(f"Nota ...{nota['chave'][-6:]}: nao vi a mensagem 'Documento Integrado com Sucesso'. Confira no SRP.")
         return 2
+
+    def ir_para_chave():
+        """Depois do "Integrado com Sucesso" o SRP volta para a tela vazia com o foco no CNPJ Fornecedor: clica no campo
+        Chave Acesso NF-e (linha de cima, a direita do rotulo lido no inicio) e confere que o foco foi para la (usuario,
+        04/11/2026). Devolve o foco na Chave ou None (o robo pausa como antes)."""
+        rotulo = rotulos.get("chave")
+        if not rotulo:
+            return None
+        prazo, foco = time.time() + render, None
+        while time.time() < prazo and foco is None:  # espera a tela voltar (foco no CNPJ)
+            checar_parada()
+            foco = foco_tela(janela)
+            if foco is None:
+                time.sleep(0.1)
+        altura = rotulo[3] - rotulo[1]
+        ret = janela.rectangle()
+        x, y = rotulo[2] + max(40, 3 * altura), (rotulo[1] + rotulo[3]) / 2
+        checar_parada()
+        devagar("clicar no campo Chave Acesso NF-e (proxima nota)")
+        clicar(ret.left + x, ret.top + y)
+        novo = aguardar(janela, foco, render, fixos)
+        if isinstance(novo, tuple) and posicao_ok("chave", novo, rotulos, None, lidas):
+            registrar(f"  cliquei na Chave Acesso NF-e em ({ret.left + x:.0f}, {ret.top + y:.0f}): foco={novo}", mostrar=False)
+            return novo
+        registrar(f"  cliquei na Chave Acesso NF-e, mas o foco nao foi para la (foco={novo})", mostrar=False)
+        return None
 
     def fechar_aviso_frete(nota):
         """Depois do 2o Integrar (usuario, 04/11/2026), na ordem em que aparecerem, cada um uma vez:
@@ -1043,7 +1069,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 marcar(linhas, "ok")
                 continue
             cliques = integrar(nota)
-            clicou = cliques == 2
+            clicou = cliques >= 2
             registrar(f"OK {etiqueta}: {len(linhas)} item(ns) em {time.time() - t0:.1f}s" +
                       (f"; cliquei em Integrar, dei {ENTERS_DEPOIS_INTEGRAR} Enter e cliquei em Integrar de novo." if clicou else "."))
             if cliques == 0:
@@ -1059,6 +1085,10 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     esperar_continuar()
                     marcar(linhas, "ok")
                 break
+            if cliques == 3:  # integrada com sucesso: clica na Chave e segue com a proxima nota, sem pausa
+                foco = ir_para_chave()
+                if foco:
+                    continue
             if retomar is None:
                 registrar("Sem o botao Continuar o robo para aqui: confira a integracao e inicie de novo pela proxima nota.")
                 return 1

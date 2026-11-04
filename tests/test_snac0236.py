@@ -68,6 +68,7 @@ class SRP0236:
         self.com_aviso_frete, self.aviso_frete, self.fechou_aviso = False, False, 0
         self.resumo, self.confirmou = False, 0  # "Resumo dos Tributos do Documento", depois do aviso do frete
         self.ltcc, self.sucesso, self.sucessos = False, False, 0  # janela do Frete LTCC e "Integrado com Sucesso"
+        self.cliques_chave = 0
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -127,8 +128,8 @@ class SRP0236:
             if texto == "{ENTER}" and self.resumo:  # Confirmar no Resumo: vem a janela do Frete LTCC
                 self.resumo, self.confirmou, self.ltcc = False, self.confirmou + 1, True
                 return
-            if texto == "{ENTER}" and self.sucesso:  # OK no "Integrado com Sucesso"
-                self.sucesso, self.sucessos = False, self.sucessos + 1
+            if texto == "{ENTER}" and self.sucesso:  # OK no "Integrado com Sucesso": tela vazia, foco no CNPJ
+                self.sucesso, self.sucessos, self.indice = False, self.sucessos + 1, 1
                 return
             if texto == "{ENTER}":
                 if base in self.recusar:
@@ -145,6 +146,10 @@ class SRP0236:
 
     def clicar(self, x, y):
         with self.lock:
+            chave = CAIXAS["chave"]
+            if chave[0] <= x <= chave[2] and chave[1] <= y <= chave[3]:  # clique no campo Chave Acesso NF-e
+                self.indice, self.cliques_chave = 0, self.cliques_chave + 1
+                return
             if self.ltcc and BOTAO_LTCC[0] <= x <= BOTAO_LTCC[2] and BOTAO_LTCC[1] <= y <= BOTAO_LTCC[3]:
                 self.ltcc, self.sucesso = False, True
                 return
@@ -385,6 +390,10 @@ class Fluxo(unittest.TestCase):
         self.assertEqual((srp.confirmou, srp.resumo), (2, False))
         self.assertEqual((srp.sucessos, srp.ltcc, srp.sucesso), (2, False, False))  # clicou Frete LTCC e deu OK
         self.assertTrue(any("Integrado com Sucesso" in a for a in avisos))
+        # integrada com sucesso: clica na Chave e segue sem pausar; so a ultima nota termina com Concluido
+        self.assertEqual(srp.cliques_chave, 1)
+        self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
+        self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_A, CHAVE_B])
 
     def test_rateio_sem_imposto(self):
         srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados
