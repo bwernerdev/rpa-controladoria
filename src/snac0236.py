@@ -269,13 +269,32 @@ def binarizar(imagem, limiar=80):
     return imagem.convert("L").point(lambda v: 0 if v < limiar else 255).convert("RGB")
 
 
-def ler_rotulos(imagem, tesseract):
-    """localizar_rotulos com uma segunda leitura (imagem binarizada) para os rotulos que faltarem (ex.: Integrar)."""
-    rotulos = localizar_rotulos(core.palavras_tela(imagem, tesseract))
+def ler_rotulos(imagem, tesseract, guardar=None):
+    """localizar_rotulos com uma segunda leitura (imagem binarizada) para os rotulos que faltarem (ex.: Integrar).
+    `guardar` (lista, opcional) recebe as frases lidas, para dizer onde o cursor esta quando algo nao confere."""
+    palavras = core.palavras_tela(imagem, tesseract)
+    rotulos = localizar_rotulos(palavras)
+    if guardar is not None:
+        guardar.extend(frases(palavras))
     if any(c not in rotulos for c in ("chave", "filial", "data", "valor_total", "frete", "item", "integrar")):
-        for campo, caixa in localizar_rotulos(core.palavras_tela(binarizar(imagem), tesseract)).items():
+        palavras = core.palavras_tela(binarizar(imagem), tesseract)
+        for campo, caixa in localizar_rotulos(palavras).items():
             rotulos.setdefault(campo, caixa)
     return rotulos
+
+
+def onde_esta(caixa, lista):
+    """Rotulo mais proximo do campo em foco: a frase a esquerda na mesma linha ou, na grade, o cabecalho acima."""
+    if not caixa or not lista:
+        return None
+    centro_y, centro_x = (caixa[1] + caixa[3]) / 2, (caixa[0] + caixa[2]) / 2
+    esquerda = [(caixa[0] - c[2], t) for t, c in lista
+                if abs((c[1] + c[3]) / 2 - centro_y) <= max(8, (caixa[3] - caixa[1]) / 2 + 4) and c[2] <= caixa[0] + 5]
+    if esquerda:
+        return min(esquerda)[1]
+    acima = [(caixa[1] - c[3], t) for t, c in lista
+             if c[3] <= caixa[1] + 5 and abs((c[0] + c[2]) / 2 - centro_x) <= max(40, caixa[2] - caixa[0])]
+    return min(acima)[1] if acima else None
 
 
 def ao_lado(caixa, rotulo, distancia=60):
@@ -374,6 +393,32 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             foco = novo
         return foco
 
+    def local(caixa):
+        texto = onde_esta(caixa, lidas)
+        return f" (o cursor esta em '{texto}')" if texto else ""
+
+    def ir_ate(campo, alvo, quantos, foco, anterior):
+        """Depois de digitar `campo`, Enter ate o foco chegar em `alvo` (conferido pelo rotulo lido no inicio), no maximo
+        `quantos` + 4 vezes: o SRP pula ou nao campos que ele mesmo preenche (CNPJ, Filial Fiscal...). Sem rotulo para
+        conferir, so conta os `quantos` Enter combinados."""
+        if posicao_ok(alvo, foco, rotulos, anterior) is None:
+            return enters(campo, quantos, foco)
+        limite = quantos + 4
+        for vez in range(limite):
+            checar_parada()
+            devagar(f"Enter {vez + 1} depois do {NOME[campo]} (procurando {NOME[alvo]}; previstos {quantos})")
+            core.send_keys("{ENTER}", pause=0.03)
+            novo = core.aguardar_mudanca(janela, foco, render, ver_aviso=True, fixos=fixos)
+            if novo in (None, "aviso"):
+                motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
+                raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
+            foco = novo
+            if posicao_ok(alvo, foco, rotulos, anterior):
+                if vez + 1 != quantos:
+                    registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
+                return foco
+        raise Travou(alvo, f"nao cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{local(foco)}")
+
     def esperar_continuar():
         retomar.clear()
         while not retomar.is_set():
@@ -462,10 +507,10 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             fixos = core.caixas_cor(tela, "vermelho")
         except Exception:
             fixos = []
-        rotulos = {}
+        rotulos, lidas = {}, []
         if tesseract:
             try:
-                rotulos = ler_rotulos(tela, tesseract)
+                rotulos = ler_rotulos(tela, tesseract, lidas)
             except Exception as erro:
                 registrar(f"  leitura dos rotulos falhou: {erro}", mostrar=False)
         registrar(f"  rotulos lidos: {rotulos}", mostrar=False)
@@ -499,18 +544,17 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                        (f"-{linhas[-1]})" if len(linhas) > 1 else ")")
             try:
                 marcar([linhas[0]], "executando")
-                anterior = None
-                for campo, quantos in SEQ_CABECALHO:
-                    if posicao_ok(campo, foco, rotulos, anterior) is False:
-                        raise Travou(campo, f"o cursor nao esta no campo {NOME[campo]}")
+                if posicao_ok("chave", foco, rotulos) is False:
+                    raise Travou("chave", f"o cursor nao esta no campo {NOME['chave']}{local(foco)}")
+                for indice, (campo, quantos) in enumerate(SEQ_CABECALHO):
                     digitar(nota[campo], campo)
-                    anterior = foco
-                    foco = enters(campo, quantos, foco)
+                    alvo = SEQ_CABECALHO[indice + 1][0] if indice + 1 < len(SEQ_CABECALHO) else "item"
+                    foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
                 for indice, r in enumerate(nota["itens"]):
                     marcar([r["linha"]], "executando")
                     if posicao_ok("item", foco, rotulos) is False:
                         if retomar is None:
-                            raise Travou("item", "o cursor nao esta no Item da grade")
+                            raise Travou("item", f"o cursor nao esta no Item da grade{local(foco)}")
                         foco = esperar_no_item(r)
                     for campo, quantos in SEQ_ITEM:
                         digitar(r[campo], campo)

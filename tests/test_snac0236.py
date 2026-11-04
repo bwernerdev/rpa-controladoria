@@ -35,7 +35,8 @@ INTEGRAR = (500, 300, 550, 312)
 class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
-    def __init__(self, recusar=(), integrar_volta_para_chave=True):
+    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0):
+        self.extras_filial = extras_filial  # campos a mais entre a 2a parte da filial e a Data (ex.: Filial Fiscal editavel)
         self.recusar = set(recusar)  # nomes de campo em que o Enter nao avanca (aviso)
         self.volta = integrar_volta_para_chave
         self.lock = threading.Lock()
@@ -43,7 +44,8 @@ class SRP0236:
         self.atual, self.integradas = {}, []
 
     def campos(self):
-        cab = ["chave", None, None, None, None, "filial1", "filial2", None, "data"] + [None] * 6 + ["valor_total", "frete"] + [None] * 9
+        cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
+               + ["valor_total", "frete"] + [None] * 9)
         rateio = ["oper", "qtd", None, "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
         return cab, rateio
 
@@ -214,6 +216,9 @@ class Tela(unittest.TestCase):
         self.assertFalse(snac0236.posicao_ok("chave", CAIXAS["data"], rotulos))
         self.assertTrue(snac0236.posicao_ok("filial2", CAIXAS["filial2"], rotulos, CAIXAS["filial1"]))
         self.assertIsNone(snac0236.posicao_ok("data", CAIXAS["data"], {}))
+        lista = snac0236.frases(PALAVRAS)
+        self.assertEqual(snac0236.onde_esta(CAIXAS["frete"], lista), "frete")
+        self.assertEqual(snac0236.onde_esta((235, 430, 290, 442), lista), "tem")
 
 
 class Fluxo(unittest.TestCase):
@@ -234,6 +239,22 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(srp.integradas[1]["chave"], CHAVE_B)
         self.assertEqual(estados[-1], (4, "ok"))
         self.assertTrue(any("PAUSADO: confira a integracao" in a for a in avisos))
+
+    def test_enter_a_mais_ate_o_campo_certo(self):
+        srp = SRP0236(extras_filial=2)  # o SRP pede 2 Enter a mais antes da Data
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.integradas[0]["data"], "01/11/2026")
+        self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_nao_chega_no_campo_pausa_sem_digitar(self):
+        srp = SRP0236(extras_filial=6)  # alem do limite (previstos + 4)
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("nao cheguei no campo Data Emissao com 6 Enter" in a for a in avisos), avisos)
+        self.assertNotIn("data", srp.atual)
 
     def test_cursor_fora_da_chave_nao_digita(self):
         srp = SRP0236()
