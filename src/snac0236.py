@@ -469,7 +469,8 @@ def mudou_acima(antes, agora, caixa):
 # ---------- Rateio (janela "Rateios", abre com Enter depois do Valor do ICMS) ----------
 # Grade "Rateio Item Documento Recebimento Tributo": as linhas COFINS e PIS ficam como o SRP preencheu; na linha
 # ICMS TERCEIROS (combinado com o usuario em 04/11/2026):
-#   sem imposto (ICMS TERCEIROS e BASE CALC. ICMS da planilha = 0): Ident Tributo 0, Base Calculo 0, Aliquota 0, Lancamento 0
+#   sem imposto (ICMS TERCEIROS e BASE CALC. ICMS da planilha = 0): Ident Tributo 0, Base Calculo 0, Aliquota 0
+#   (o Lancamento nao recebe foco: o SRP calcula; no SRP real o Enter so para em Ident, Base Calculo e Aliquota)
 #   com imposto (os dois diferentes de 0): Ident Tributo 1, Base Calculo = BASE CALC. ICMS (o resto como o SRP pos)
 # Depois clica em "Tributos OK" (fecha o Rateio) e, no fim da nota, em Integrar.
 # O usuario contou 7 Enter ate o Rateio abrir ("mas pode ser mais"); no SRP real (log de 04/11) o foco passou pela parte
@@ -489,7 +490,7 @@ def valores_rateio(r):
     """O que digitar na linha ICMS TERCEIROS, por coluna (na ordem da tela)."""
     if tem_imposto(r):
         return {"ident": "1", "base": r["base_icms"]}
-    return {"ident": "0", "base": "0", "aliquota": "0", "lancamento": "0"}
+    return {"ident": "0", "base": "0", "aliquota": "0"}
 
 
 def localizar_rateio(palavras):
@@ -500,7 +501,7 @@ def localizar_rateio(palavras):
         "ident": lambda t: t.startswith("ident"),
         "base": lambda t: t.startswith("base calc") or t == "base",
         "aliquota": lambda t: t.startswith("aliquota") and "zero" not in t,  # nao a linha "COFINS ALIQUOTA ZERO"
-        "lancamento": lambda t: t.startswith("lancamento"),
+        "lancamento": lambda t: t.startswith(("lancamento", "langamento", "lancament")),
         "tributos_ok": lambda t: "tributos" in t,  # botao; "Nome Tributo"/"Ident Tributo" sao no singular
     }
     achados = {}

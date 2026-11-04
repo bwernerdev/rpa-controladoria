@@ -46,7 +46,7 @@ class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
     def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=(), extras_rateio=0,
-                 colunas_tributo=tuple(COLUNAS_TRIBUTO)):
+                 colunas_tributo=("ident", "base", "aliquota")):  # como no SRP real: o Lancamento nao para
         self.colunas_tributo = colunas_tributo  # campos de cada linha de tributo em que o Enter para
         self.extras_rateio = extras_rateio  # Enter a mais (alem dos 7) ate o Rateio abrir
         self.parado = set(parado)  # nomes de campo em que o Enter nao faz nada (nem aviso)
@@ -220,7 +220,7 @@ class Planilha(unittest.TestCase):
         self.assertEqual(notas[1]["frete"], "FOB")
         self.assertEqual(snac0236.valores_rateio(a["itens"][0]), {"ident": "1", "base": "1500.5"})
         self.assertEqual(snac0236.valores_rateio(a["itens"][1]),
-                         {"ident": "0", "base": "0", "aliquota": "0", "lancamento": "0"})
+                         {"ident": "0", "base": "0", "aliquota": "0"})
 
     def test_erros(self):
         caminho = self.gravar([
@@ -351,7 +351,8 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         nota_srp = srp.integradas[0]
-        self.assertEqual({c: nota_srp.get(f"t114{c}0") for c in COLUNAS_TRIBUTO}, dict.fromkeys(COLUNAS_TRIBUTO, "0"))
+        self.assertEqual({n: v for n, v in nota_srp.items() if n.startswith("t")},
+                         {"t114ident0": "0", "t114base0": "0", "t114aliquota0": "0"})
         self.assertFalse([n for n in nota_srp if n.startswith(("t199", "t198"))])  # COFINS e PIS: nao mexe
 
     def test_rateio_com_imposto(self):
@@ -371,11 +372,11 @@ class Fluxo(unittest.TestCase):
         self.assertEqual((nota_srp["t114ident0"], nota_srp["t114ident1"], nota_srp["t114base1"]), ("0", "1", "30"))
 
     def test_rateio_sem_o_campo_pausa(self):
-        srp = SRP0236(colunas_tributo=("ident", "base", "aliquota"))  # Lancamento nao para: pausa, sem Tributos OK
+        srp = SRP0236(colunas_tributo=("ident", "base"))  # Aliquota nao para: pausa, sem Tributos OK
         with ambiente(srp):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
         self.assertEqual(codigo, 1)
-        self.assertTrue(any("Lancamento" in a for a in avisos), avisos)
+        self.assertTrue(any("Aliquota" in a for a in avisos), avisos)
 
     def test_valor_unit_amarelo(self):
         srp = SRP0236()  # o Valor Unit nao fica ciano: o robo confere a entrada pela rolagem da grade
