@@ -37,7 +37,8 @@ INTEGRAR = (500, 300, 550, 312)
 class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
-    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=()):
+    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=(), extras_rateio=0):
+        self.extras_rateio = extras_rateio  # Enter a mais (alem dos 7) ate o Rateio abrir
         self.parado = set(parado)  # nomes de campo em que o Enter nao faz nada (nem aviso)
         self.sem_cor = set(sem_cor)  # indices do cabecalho cujo foco nao fica ciano (ex.: a lista Lemg)
         self.extras_filial = extras_filial  # campos a mais entre a 2a parte da filial e a Data (ex.: Filial Fiscal editavel)
@@ -50,7 +51,7 @@ class SRP0236:
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
-        rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * 6 + ["icms_terceiro"]
+        rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * (6 + self.extras_rateio) + ["icms_terceiro"]
         return cab, rateio
 
     def onde(self):
@@ -69,12 +70,17 @@ class SRP0236:
         if nome in colunas:
             x = colunas[nome]
             return f"{nome}{k}", (x, 430 + 20 * k, x + 60, 442 + 20 * k)
+        if nome == "icms_terceiro":  # janela do Rateio: outra altura da tela
+            return f"{nome}{k}", (1400, 700, 1460, 710)
+        if j > 5:  # depois do Valor Unit a grade rola: o foco fica parado na borda direita (como no SRP real em 4K)
+            return (f"{nome}{k}" if nome else None), (1400, 500, 1460, 510)
         return (f"{nome}{k}" if nome else None), (1400, 500 + 15 * j, 1460, 510 + 15 * j)
 
     def titulo(self):
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
-        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10)}.get(
+        return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10),
+                 "icms_terceiro": ("Base de Calculo ICMS Terceiro", 0, 0, 50, 10)}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
@@ -84,7 +90,7 @@ class SRP0236:
 
     def captura(self, _janela=None):
         """Tela muda a cada campo (no SRP real a grade rola ao entrar no Valor Unit)."""
-        return Image.new("RGB", (1600, 900), (255, 255, (self.indice * 97) % 256))
+        return Image.new("RGB", (1600, 900), ((self.indice * 97) % 256,) * 3)
 
     def tela(self, _janela=None, _fixos=()):
         return self.caixa(), self.alerta
@@ -311,6 +317,13 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_rateio_com_mais_enters(self):
+        srp = SRP0236(extras_rateio=3)  # 10 Enter ate o Rateio em vez de 7
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", icms_t="21")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.integradas[0]["icms_terceiro0"], "21")
 
     def test_valor_unit_amarelo(self):
         srp = SRP0236()  # o Valor Unit nao fica ciano: o robo confere a entrada pela rolagem da grade

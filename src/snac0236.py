@@ -347,15 +347,20 @@ def ler_estado(janela, fixos=()):
 
 # 2 s: ao entrar no Valor Unit a grade rola para a direita e o ciano demora a voltar (04/11/2026: com 0,8 s o robo
 # achou que era campo sem cor, deu mais um Enter e digitou o Valor Unit no Vlr ICMS)
-def aguardar(janela, referencia, limite, fixos=(), sem_cor=2.0):
+def aguardar(janela, referencia, limite, fixos=(), sem_cor=2.0, antes=None):
     """Depois de um Enter: a nova caixa do foco; "aviso" se o aviso do SRP aparecer; "sem_cor" se nenhum campo ficar
     ciano por `sem_cor` s (listas como o Lemg so ganham borda pontilhada); None se o foco nao andar em `limite` s.
-    Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta."""
+    Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta. Com `antes` (captura de antes
+    do Enter): ciano no mesmo lugar tambem conta se a faixa acima dele mudou (na grade rolada, depois do Valor Unit, o
+    campo em foco fica sempre na borda direita e quem anda e a grade; 04/11/2026)."""
     prazo, sem_desde, sem_cor = time.time() + limite, None, min(sem_cor, limite / 2)
     while time.time() < prazo:
         atual, tem_aviso = ler_estado(janela, fixos)
         if atual and (referencia is None or abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
             return atual
+        if atual and antes is not None and mudou_acima(antes, core.capturar(janela), referencia):
+            time.sleep(0.3)  # a grade termina de rolar
+            return ler_estado(janela, fixos)[0] or atual
         if tem_aviso:
             return "aviso"
         if atual is None:
@@ -435,6 +440,10 @@ def titulo_acima(imagem, caixa, tesseract):
     return normalizar(" ".join(p[0] for p in core.palavras_tela(recorte, tesseract)))
 
 
+# campos depois dos quais a grade ja rolou: o foco fica na borda direita e a grade anda por baixo dele
+GRADE_ROLADA = ("unit", "icms", "icms_terceiro")
+
+
 def mudou_acima(antes, agora, caixa):
     """A faixa acima do campo (titulos e linhas de cima da grade) mudou entre as duas capturas? = a grade rolou."""
     altura = caixa[3] - caixa[1]
@@ -444,6 +453,23 @@ def mudou_acima(antes, agora, caixa):
     from PIL import ImageChops
     diferenca = ImageChops.difference(antes.crop(area).convert("L"), agora.crop(area).convert("L"))
     return sum(diferenca.point(lambda v: 255 if v > 40 else 0).histogram()[255:]) > 50
+
+
+# Depois do Valor do ICMS: Enter ate a janela do Rateio abrir (7 ou mais; o usuario contou 7, "mas pode ser mais",
+# 04/11/2026). Chegou = o foco saiu da linha da grade. Antes de digitar, o rotulo perto do campo tem que ser do ICMS
+# Terceiro (BASE DE CALCULO NF).
+MAX_ATE_RATEIO = 15
+ROTULO_TERCEIRO = ("terceiro", "base", "calculo", "calc")
+
+
+def rotulo_perto(imagem, caixa, tesseract):
+    """Texto (normalizado) a esquerda e logo acima do campo em foco (rotulo do campo no Rateio)."""
+    altura = caixa[3] - caixa[1]
+    area = (max(caixa[0] - 700, 0), max(caixa[1] - 3 * altura, 0), min(caixa[2] + 10, imagem.width),
+            min(caixa[3] + altura, imagem.height))
+    if area[2] <= area[0] or area[3] <= area[1]:
+        return ""
+    return normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract)))
 
 
 def clicar(x, y):
@@ -503,17 +529,19 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             time.sleep(min(pausa, 0.05))
 
     def enters(campo, quantos, foco):
-        """Enter `quantos` vezes; cada um precisa mover o foco (senao: aviso do SRP ou campo preso)."""
+        """Enter `quantos` vezes; cada um precisa mover o foco ou, na grade rolada, rolar a grade (senao: aviso do SRP
+        ou campo preso)."""
         for vez in range(quantos):
             checar_parada()
             devagar(f"Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
+            antes = core.capturar(janela) if campo in GRADE_ROLADA and foco is not None else None
             core.send_keys("{ENTER}", pause=0.03)
-            foco = depois_do_enter(campo, vez, foco)
+            foco = depois_do_enter(campo, vez, foco, antes)
         return foco
 
-    def depois_do_enter(campo, vez, foco):
+    def depois_do_enter(campo, vez, foco, antes=None):
         """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou."""
-        novo = aguardar(janela, foco, render, fixos)
+        novo = aguardar(janela, foco, render, fixos, antes=antes)
         if novo in (None, "aviso"):
             motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
             raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
@@ -570,6 +598,20 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 return atual
             time.sleep(0.05)
         raise Travou("unit", "o cursor nao saiu do Qtd.Fisica no Enter 2 depois do Qtd Fiscal (a grade nao rolou)")
+
+    def ate_o_rateio(foco):
+        """Depois do Valor do ICMS: Enter ate o foco sair da linha da grade (abriu o Rateio), no maximo MAX_ATE_RATEIO."""
+        linha = (foco[1] + foco[3]) / 2
+        for vez in range(MAX_ATE_RATEIO):
+            checar_parada()
+            devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando o Rateio)")
+            antes = core.capturar(janela) if foco is not None else None
+            core.send_keys("{ENTER}", pause=0.03)
+            foco = depois_do_enter("icms", vez, foco, antes)
+            if foco is not None and abs((foco[1] + foco[3]) / 2 - linha) > 1.5 * (foco[3] - foco[1]):
+                registrar(f"  Rateio: cheguei com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
+                return foco
+        raise Travou("icms_terceiro", f"nao cheguei no Rateio com {MAX_ATE_RATEIO} Enter depois do Valor do ICMS")
 
     def esperar_continuar():
         retomar.clear()
@@ -721,10 +763,17 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                             registrar(f"  titulo acima do {NOME[campo]}: {titulo!r}", mostrar=False)
                             if not any(t in titulo for t in TITULO_COLUNA[campo]):
                                 raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]} (titulo acima: '{titulo}')")
+                        if campo == "icms_terceiro" and tesseract:
+                            rotulo = rotulo_perto(core.capturar(janela), foco, tesseract)
+                            registrar(f"  rotulo perto do ICMS Terceiro: {rotulo!r}", mostrar=False)
+                            if not any(t in rotulo for t in ROTULO_TERCEIRO):
+                                raise Travou(campo, f"o cursor nao esta no campo ICMS Terceiro (perto: '{rotulo}')")
                         digitar(r[campo], campo)
                         alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
                         if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                             foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
+                        elif alvo == "icms_terceiro":  # Enter ate abrir o Rateio (7 ou mais)
+                            foco = ate_o_rateio(foco)
                         elif alvo == "unit":  # Enter no Qtd.Fisica (ciano), Enter no Valor Unit (amarelo, grade rola)
                             foco = entrar_no_valor_unit(enters(campo, quantos - 1, foco))
                         else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
