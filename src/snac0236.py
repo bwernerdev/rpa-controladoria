@@ -300,8 +300,9 @@ class Travou(Exception):
         self.campo, self.motivo = campo, motivo
 
 
-def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None):
-    """Preenche as notas no SRP. `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
+def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0):
+    """Preenche as notas no SRP. `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
+    acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
     as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. Devolve 0 se concluiu."""
     core.limpar_logs()
     log = open(core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log", "w", encoding="utf-8")
@@ -326,8 +327,19 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         if parar.is_set() or core.mouse_no_canto():
             raise KeyboardInterrupt
 
-    def digitar(texto):
+    def devagar(texto):
+        """Modo passo a passo: anuncia a proxima acao e espera `intervalo` segundos (F8/Parar/mouse no canto valem)."""
+        if intervalo <= 0:
+            return
+        aviso(f"Passo a passo: {texto}")
+        fim = time.time() + intervalo
+        while time.time() < fim:
+            checar_parada()
+            time.sleep(0.1)
+
+    def digitar(texto, campo):
         checar_parada()
+        devagar(f"digitar '{texto}' em {NOME[campo]}" if texto else f"{NOME[campo]} fica em branco")
         if texto:
             core.send_keys(texto.replace(",", "{,}"), pause=0.03)
             time.sleep(min(pausa, 0.05))
@@ -336,6 +348,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         """Enter `quantos` vezes; cada um precisa mover o foco (senao: aviso do SRP ou campo preso)."""
         for vez in range(quantos):
             checar_parada()
+            devagar(f"Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
             core.send_keys("{ENTER}", pause=0.03)
             novo = core.aguardar_mudanca(janela, foco, render, ver_aviso=True, fixos=fixos)
             if novo in (None, "aviso"):
@@ -402,6 +415,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         ret = janela.rectangle()
         x, y = ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2
         checar_parada()
+        devagar("clicar em Integrar")
         clicar(x, y)
         registrar(f"  nota ...{nota['chave'][-6:]}: clique em Integrar em ({x:.0f}, {y:.0f})", mostrar=False)
         return True
@@ -463,7 +477,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 for campo, quantos in SEQ_CABECALHO:
                     if posicao_ok(campo, foco, rotulos, anterior) is False:
                         raise Travou(campo, f"o cursor nao esta no campo {NOME[campo]}")
-                    digitar(nota[campo])
+                    digitar(nota[campo], campo)
                     anterior = foco
                     foco = enters(campo, quantos, foco)
                 for indice, r in enumerate(nota["itens"]):
@@ -473,7 +487,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                             raise Travou("item", "o cursor nao esta no Item da grade")
                         foco = esperar_no_item(r)
                     for campo, quantos in SEQ_ITEM:
-                        digitar(r[campo])
+                        digitar(r[campo], campo)
                         foco = enters(campo, quantos, foco)
                     registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)
                     if indice < len(nota["itens"]) - 1:

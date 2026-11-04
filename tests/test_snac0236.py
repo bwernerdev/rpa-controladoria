@@ -114,7 +114,7 @@ def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="21"):
     return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t}
 
 
-def rodar(srp, notas, com_continuar=True, ao_pausar=None):
+def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0):
     avisos, estados = [], []
     retomar = threading.Event() if com_continuar else None
 
@@ -128,7 +128,7 @@ def rodar(srp, notas, com_continuar=True, ao_pausar=None):
             threading.Timer(0.05, soltar).start()
 
     with mock.patch.object(snac0236.time, "sleep", lambda s: None if s >= 0.1 else threading.Event().wait(s)):
-        codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar)
+        codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar, intervalo)
     return codigo, avisos, estados
 
 
@@ -182,6 +182,21 @@ class Planilha(unittest.TestCase):
         wb.save(caminho)
         with self.assertRaises(ValueError):
             snac0236.ler_planilha(caminho)
+
+
+class PassoAPasso(unittest.TestCase):
+    def test_anuncia_e_espera_cada_acao(self):
+        srp = SRP0236()
+        inicio = __import__("time").time()
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], intervalo=0.01)
+        self.assertEqual(codigo, 0, avisos)
+        passos = [a for a in avisos if a.startswith("Passo a passo:")]
+        enters = sum(n for _, n in snac0236.SEQ_CABECALHO + snac0236.SEQ_ITEM)
+        self.assertEqual(len(passos), 12 + enters + 1)  # 12 campos, cada Enter e o Integrar
+        self.assertIn("Passo a passo: digitar '30' em Filial Fiscal (1a parte)", passos)
+        self.assertEqual(passos[-1], "Passo a passo: clicar em Integrar")
+        self.assertGreater(__import__("time").time() - inicio, 0.01 * len(passos) * 0.9)
 
 
 class Tela(unittest.TestCase):

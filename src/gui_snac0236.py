@@ -21,7 +21,14 @@ class Pagina0236:
         self.parar, self.retomar = threading.Event(), threading.Event()
         self.soltar_atalhos = None
         self.iids = {}
+        # passo a passo: 5 s entre as acoes, narradas no console (para acompanhar os testes no SRP real)
+        self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
+        self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
         app.after(100, self._drenar)
+
+    def _gravar_passo(self):
+        self.app.config_usuario["passo_a_passo_0236"] = self.passo_a_passo.get()
+        self.ui.gravar_config(self.app.config_usuario)
 
     # ---------- montagem ----------
     def montar(self, pai):
@@ -56,6 +63,8 @@ class Pagina0236:
         self.b_continuar.pack(side="left", padx=(8, 0))
         self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
         self.b_simular.pack(side="left", padx=(8, 0))
+        self.c_passo = ttk.Checkbutton(botoes, text="Passo a passo (5 s entre ações)", variable=self.passo_a_passo)
+        self.c_passo.pack(side="left", padx=(px(14), 0))
         self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.b_parar.pack(side="right")
 
@@ -201,6 +210,7 @@ class Pagina0236:
         self.b_simular.configure(state="normal" if pronto else "disabled")
         self.b_parar.configure(state="normal" if self.ocupado else "disabled")
         self.b_continuar.configure(state="normal" if self.ocupado and self.pausado else "disabled")
+        self.c_passo.configure(state="disabled" if self.ocupado else "normal")
 
     def simular(self):
         for nota in self.notas:
@@ -233,12 +243,15 @@ class Pagina0236:
         self.soltar_atalhos, falhas = atalhos_globais({VK_F8: lambda: self.fila.put(("parar",))})
         self.escrever("Aviso: F8 ja esta em uso por outro programa; use o botao Parar ou o mouse no canto." if falhas
                       else "Atalho: F8 para.")
-        threading.Thread(target=self._rodar, args=(notas,), daemon=True).start()
+        intervalo = 5 if self.passo_a_passo.get() else 0
+        if intervalo:
+            self.escrever("Passo a passo ligado: 5 s antes de cada acao; a proxima acao aparece aqui e na linha de status.")
+        threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True).start()
 
-    def _rodar(self, notas):
+    def _rodar(self, notas, intervalo):
         try:
             snac0236.executar(notas, "Desktop Viewer", 0.25, 4.0, 5, self.parar, self.fila.put,
-                              lambda linha, nome: self.fila.put((linha, nome)), self.retomar)
+                              lambda linha, nome: self.fila.put((linha, nome)), self.retomar, intervalo)
         finally:
             self.fila.put(None)
 
