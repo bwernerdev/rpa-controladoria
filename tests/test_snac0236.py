@@ -35,7 +35,8 @@ INTEGRAR = (500, 300, 550, 312)
 class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
-    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0):
+    def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=()):
+        self.sem_cor = set(sem_cor)  # indices do cabecalho cujo foco nao fica ciano (ex.: a lista Lemg)
         self.extras_filial = extras_filial  # campos a mais entre a 2a parte da filial e a Data (ex.: Filial Fiscal editavel)
         self.recusar = set(recusar)  # nomes de campo em que o Enter nao avanca (aviso)
         self.volta = integrar_volta_para_chave
@@ -63,7 +64,7 @@ class SRP0236:
         return f"{rateio[j - 1] or 'x'}{k}" if rateio[j - 1] else None, (900, 500 + 15 * j, 960, 510 + 15 * j)
 
     def caixa(self, _janela=None):
-        return self.onde()[1]
+        return None if self.indice in self.sem_cor else self.onde()[1]
 
     def tela(self, _janela=None, _fixos=()):
         return self.caixa(), self.alerta
@@ -106,6 +107,8 @@ def ambiente(srp, palavras=PALAVRAS):
         for nome, valor in trocas.items():
             pilha.enter_context(mock.patch.object(core, nome, valor))
         pilha.enter_context(mock.patch.object(snac0236, "clicar", srp.clicar))
+        pilha.enter_context(mock.patch.object(snac0236, "ler_estado", srp.tela))
+        pilha.enter_context(mock.patch.object(snac0236, "foco_tela", srp.caixa))
         yield pasta
 
 
@@ -207,6 +210,24 @@ class PassoAPasso(unittest.TestCase):
 
 
 class Tela(unittest.TestCase):
+    def test_foco_unido(self):
+        imagem = Image.new("RGB", (400, 100), "white")
+        for x0, x1 in ((50, 60), (140, 160)):  # sobras do ciano a esquerda e a direita do texto selecionado
+            imagem.paste((0, 255, 255), (x0, 20, x1, 40))
+        imagem.paste((0, 255, 255), (300, 2, 330, 4))  # traco fino no alto da tela: nao e foco
+        caixa = snac0236.foco_unido(imagem)
+        self.assertLessEqual(caixa[0], 52)
+        self.assertGreaterEqual(caixa[2], 157)
+        self.assertIsNone(snac0236.foco_unido(Image.new("RGB", (50, 50), "white")))
+
+    def test_rotulo_mais_perto_a_esquerda(self):
+        rotulos, lista = snac0236.localizar_rotulos(PALAVRAS), snac0236.frases(PALAVRAS)
+        longe = (150, 160, 190, 172)  # Data com o comeco um pouco afastado do rotulo
+        self.assertTrue(snac0236.posicao_ok("data", longe, rotulos, None, lista))
+        self.assertFalse(snac0236.posicao_ok("data", (260, 160, 300, 172), rotulos, None, lista))  # campo Entrada
+        self.assertFalse(snac0236.posicao_ok("valor_total", (700, 185, 760, 195), rotulos, None, lista))  # longe demais
+        self.assertFalse(snac0236.posicao_ok("data", None, rotulos, None, lista))
+
     def test_rotulos(self):
         rotulos = snac0236.localizar_rotulos(PALAVRAS)
         self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar"})
@@ -255,6 +276,13 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(codigo, 1)
         self.assertTrue(any("nao cheguei no campo Data Emissao com 6 Enter" in a for a in avisos), avisos)
         self.assertNotIn("data", srp.atual)
+
+    def test_passa_por_campo_sem_cor(self):
+        srp = SRP0236(sem_cor={10, 11})  # dois campos sem ciano entre a Data e o Valor Total (lista Lemg...)
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
 
     def test_cursor_fora_da_chave_nao_digita(self):
         srp = SRP0236()

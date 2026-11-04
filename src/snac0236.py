@@ -278,6 +278,8 @@ def ler_rotulos(imagem, tesseract, guardar=None):
         guardar.extend(frases(palavras))
     if any(c not in rotulos for c in ("chave", "filial", "data", "valor_total", "frete", "item", "integrar")):
         palavras = core.palavras_tela(binarizar(imagem), tesseract)
+        if guardar is not None:
+            guardar.extend(frases(palavras))
         for campo, caixa in localizar_rotulos(palavras).items():
             rotulos.setdefault(campo, caixa)
     return rotulos
@@ -297,10 +299,78 @@ def onde_esta(caixa, lista):
     return min(acima)[1] if acima else None
 
 
-def ao_lado(caixa, rotulo, distancia=60):
-    """O campo em foco esta logo a direita do rotulo, na mesma linha?"""
+def foco_unido(imagem):
+    """Campo em foco (ciano) inteiro: une os pedacos da mesma linha. Com texto selecionado no campo (ex.: a Data
+    Emissao que o SRP preenche), o ciano se parte e o maior pedaco podia ser so a sobra da direita. Ignora blocos
+    com menos de 8 px de altura (ha um traco ciano de 23x2 no alto da tela do Citrix)."""
+    caixas = [c for c in core.caixas_cor(imagem, "ciano") if c[3] - c[1] >= 8]  # altura: pedacos estreitos valem
+    if not caixas:
+        return None
+    esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
+    folga = max(300, 8 * (base - topo))  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
+    mesma_linha = sorted(c for c in caixas if abs(c[1] - topo) <= 4 and abs(c[3] - base) <= 4)
+    for c in mesma_linha:  # da esquerda para a direita, colando os pedacos vizinhos a direita
+        if c[0] > dir_ and c[0] - dir_ <= folga:
+            dir_ = c[2]
+    for c in reversed(mesma_linha):  # e os da esquerda
+        if c[2] < esq and esq - c[2] <= folga:
+            esq = c[0]
+    return (esq, topo, dir_, base)
+
+
+def foco_tela(janela):
+    return foco_unido(core.capturar(janela))
+
+
+def ler_estado(janela, fixos=()):
+    """(foco unido, ha aviso do SRP) numa captura so."""
+    imagem = core.capturar(janela)
+    return foco_unido(imagem), core.icone_aviso(imagem, fixos) is not None
+
+
+def aguardar(janela, referencia, limite, fixos=(), sem_cor=0.8):
+    """Depois de um Enter: a nova caixa do foco; "aviso" se o aviso do SRP aparecer; "sem_cor" se nenhum campo ficar
+    ciano por `sem_cor` s (listas como o Lemg so ganham borda pontilhada); None se o foco nao andar em `limite` s.
+    Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta."""
+    prazo, sem_desde, sem_cor = time.time() + limite, None, min(sem_cor, limite / 2)
+    while time.time() < prazo:
+        atual, tem_aviso = ler_estado(janela, fixos)
+        if atual and (referencia is None or abs(atual[0] - referencia[0]) > 5 or abs(atual[1] - referencia[1]) > 5):
+            return atual
+        if tem_aviso:
+            return "aviso"
+        if atual is None:
+            sem_desde = sem_desde or time.time()
+            if time.time() - sem_desde >= sem_cor:
+                return "sem_cor"
+        else:
+            sem_desde = None
+        time.sleep(0.02)
+    return None
+
+
+def vizinho_esquerda(caixa, lista):
+    """(texto, retangulo) da frase lida mais perto, a esquerda do campo, na mesma linha."""
+    centro_y = (caixa[1] + caixa[3]) / 2
+    esquerda = [(caixa[0] - c[2], t, c) for t, c in lista
+                if abs((c[1] + c[3]) / 2 - centro_y) <= max(8, (caixa[3] - caixa[1]) / 2 + 4) and c[2] <= caixa[0] + 5]
+    return min(esquerda)[1:] if esquerda else None
+
+
+def ao_lado(caixa, rotulo, lista=None, distancia=60):
+    """O campo em foco esta a direita do rotulo, na mesma linha? Com `lista` (frases lidas no inicio, formulario
+    vazio): o rotulo tem que ser a frase mais proxima a esquerda do campo. Sempre: no maximo `distancia` px (ou 3
+    alturas do campo) entre o rotulo e o campo; o foco_unido junta os pedacos, entao o campo comeca junto do rotulo."""
     centro, centro_rotulo = (caixa[1] + caixa[3]) / 2, (rotulo[1] + rotulo[3]) / 2
-    return abs(centro - centro_rotulo) <= max(8, (caixa[3] - caixa[1]) / 2 + 4) and 0 <= caixa[0] - rotulo[2] <= distancia
+    if abs(centro - centro_rotulo) > max(8, (caixa[3] - caixa[1]) / 2 + 4) or caixa[0] < rotulo[2] - 5:
+        return False
+    if caixa[0] - rotulo[2] > max(distancia, 3 * (caixa[3] - caixa[1])):
+        return False
+    vizinho = vizinho_esquerda(caixa, lista) if lista else None
+    if vizinho:
+        c = vizinho[1]
+        return abs((c[0] + c[2]) / 2 - (rotulo[0] + rotulo[2]) / 2) <= 15 and abs((c[1] + c[3]) / 2 - centro_rotulo) <= 15
+    return True
 
 
 def na_coluna(caixa, rotulo):
@@ -309,8 +379,12 @@ def na_coluna(caixa, rotulo):
     return abs(centro - centro_rotulo) <= max(40, caixa[2] - caixa[0]) and caixa[1] > rotulo[1]
 
 
-def posicao_ok(campo, caixa, rotulos, anterior=None):
-    """True/False se da para conferir o campo pela posicao; None se o rotulo nao foi lido (nao confere)."""
+def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
+    """True/False se da para conferir o campo pela posicao; None se o rotulo nao foi lido (nao confere).
+    Foco sem cor (caixa None) nunca confere."""
+    rotulo = "filial" if campo in ("filial1", "filial2") else campo
+    if caixa is None:
+        return False if rotulo in rotulos else None
     if campo == "filial2":
         rotulo = rotulos.get("filial")
         if not rotulo or not anterior:
@@ -320,7 +394,7 @@ def posicao_ok(campo, caixa, rotulos, anterior=None):
         return na_coluna(caixa, rotulos["item"]) if "item" in rotulos else None
     chave = "filial" if campo == "filial1" else campo
     if chave in rotulos:
-        return ao_lado(caixa, rotulos[chave])
+        return ao_lado(caixa, rotulos[chave], lista)
     return None
 
 
@@ -386,14 +460,23 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             checar_parada()
             devagar(f"Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
             core.send_keys("{ENTER}", pause=0.03)
-            novo = core.aguardar_mudanca(janela, foco, render, ver_aviso=True, fixos=fixos)
-            if novo in (None, "aviso"):
-                motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
-                raise Travou(campo, f"{motivo} no Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
-            foco = novo
+            foco = depois_do_enter(campo, vez, foco)
         return foco
 
+    def depois_do_enter(campo, vez, foco):
+        """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou."""
+        novo = aguardar(janela, foco, render, fixos)
+        if novo in (None, "aviso"):
+            motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
+            raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
+        novo = None if novo == "sem_cor" else novo
+        registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: foco={novo} perto de {onde_esta(novo, lidas)!r}",
+                  mostrar=False)
+        return novo
+
     def local(caixa):
+        if caixa is None:
+            return " (o cursor esta num campo sem cor, como uma lista)"
         texto = onde_esta(caixa, lidas)
         return f" (o cursor esta em '{texto}')" if texto else ""
 
@@ -401,19 +484,15 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         """Depois de digitar `campo`, Enter ate o foco chegar em `alvo` (conferido pelo rotulo lido no inicio), no maximo
         `quantos` + 4 vezes: o SRP pula ou nao campos que ele mesmo preenche (CNPJ, Filial Fiscal...). Sem rotulo para
         conferir, so conta os `quantos` Enter combinados."""
-        if posicao_ok(alvo, foco, rotulos, anterior) is None:
+        if posicao_ok(alvo, foco, rotulos, anterior, lidas) is None:
             return enters(campo, quantos, foco)
         limite = quantos + 4
         for vez in range(limite):
             checar_parada()
             devagar(f"Enter {vez + 1} depois do {NOME[campo]} (procurando {NOME[alvo]}; previstos {quantos})")
             core.send_keys("{ENTER}", pause=0.03)
-            novo = core.aguardar_mudanca(janela, foco, render, ver_aviso=True, fixos=fixos)
-            if novo in (None, "aviso"):
-                motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
-                raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
-            foco = novo
-            if posicao_ok(alvo, foco, rotulos, anterior):
+            foco = depois_do_enter(campo, vez, foco)
+            if posicao_ok(alvo, foco, rotulos, anterior, lidas):
                 if vez + 1 != quantos:
                     registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
                 return foco
@@ -432,7 +511,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         for _ in range(20):
             checar_parada()
             time.sleep(0.1)
-        return core.caixa_foco(janela)
+        return foco_tela(janela)
 
     def esperar_na_chave(texto, linhas):
         """Pausa ate o cursor estar na Chave Acesso NF-e (proxima nota) e o usuario clicar em Continuar."""
@@ -441,7 +520,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         while True:
             esperar_continuar()
             caixa = foco_depois_de_continuar()
-            if caixa and posicao_ok("chave", caixa, rotulos) is not False:
+            if caixa and posicao_ok("chave", caixa, rotulos, None, lidas) is not False:
                 return caixa
             registrar("Ainda pausado: deixe o cursor no campo Chave Acesso NF-e (vazio) e clique em Continuar.")
             marcar(linhas, "pausado")
@@ -453,7 +532,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         while True:
             esperar_continuar()
             caixa = foco_depois_de_continuar()
-            if caixa and posicao_ok("item", caixa, rotulos) is not False:
+            if caixa and posicao_ok("item", caixa, rotulos, None, lidas) is not False:
                 marcar([r["linha"]], "executando")
                 return caixa
             registrar("Ainda pausado: deixe o cursor no Item da proxima linha livre da grade e clique em Continuar.")
@@ -524,12 +603,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 registrar("Interrompido antes de iniciar.")
                 return 1
             time.sleep(0.1)
-        foco = core.caixa_foco(janela)
+        foco = foco_tela(janela)
         if not foco:
             registrar("Nao iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Chave Acesso NF-e e inicie de novo. "
                       "Nada foi digitado.")
             return 1
-        if posicao_ok("chave", foco, rotulos) is False:
+        if posicao_ok("chave", foco, rotulos, None, lidas) is False:
             registrar("Nao iniciei: o cursor nao esta no campo Chave Acesso NF-e. Clique nele e inicie de novo. Nada foi digitado.")
             return 1
 
@@ -544,19 +623,23 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                        (f"-{linhas[-1]})" if len(linhas) > 1 else ")")
             try:
                 marcar([linhas[0]], "executando")
-                if posicao_ok("chave", foco, rotulos) is False:
+                if posicao_ok("chave", foco, rotulos, None, lidas) is False:
                     raise Travou("chave", f"o cursor nao esta no campo {NOME['chave']}{local(foco)}")
                 for indice, (campo, quantos) in enumerate(SEQ_CABECALHO):
+                    if foco is None:
+                        raise Travou(campo, f"nao sei em que campo o cursor esta antes do {NOME[campo]}{local(foco)}")
                     digitar(nota[campo], campo)
                     alvo = SEQ_CABECALHO[indice + 1][0] if indice + 1 < len(SEQ_CABECALHO) else "item"
                     foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
                 for indice, r in enumerate(nota["itens"]):
                     marcar([r["linha"]], "executando")
-                    if posicao_ok("item", foco, rotulos) is False:
+                    if posicao_ok("item", foco, rotulos, None, lidas) is False:
                         if retomar is None:
                             raise Travou("item", f"o cursor nao esta no Item da grade{local(foco)}")
                         foco = esperar_no_item(r)
                     for campo, quantos in SEQ_ITEM:
+                        if foco is None:
+                            raise Travou(campo, f"o cursor esta num campo sem cor antes do {NOME[campo]}; nao digito sem ver o campo")
                         digitar(r[campo], campo)
                         foco = enters(campo, quantos, foco)
                     registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)
