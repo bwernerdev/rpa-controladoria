@@ -49,6 +49,7 @@ REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
     ("Faturamento", 470, 480, 90, 12),
     ("030", 400, 520, 30, 12), ("00765", 450, 520, 50, 12), ("0000087445", 520, 520, 90, 12), ("1", 630, 520, 10, 12),
     ("99999", 660, 520, 50, 12), ("1", 730, 520, 10, 12), ("OK", 700, 760, 20, 12)]
+REFERENCIA += [("Nota", 520, 500, 35, 12), ("Fiscal", 560, 500, 45, 12)]  # titulo da coluna da grade
 REFERENCIA_2A_NF = [("0000087446", 520, 545, 90, 12)]
 BOTAO_OK_REF = (700, 760, 720, 772)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
@@ -544,6 +545,26 @@ class NfReferencia(unittest.TestCase):
         limites = snac0236.limites_referencia(snac0236.frases(palavras), botao)
         self.assertEqual(snac0236.nfs_referencia(palavras, limites), 1)
         self.assertEqual(snac0236.nfs_referencia(palavras + REFERENCIA_2A_NF, limites), 2)
+
+    def grade(self, linhas):
+        """Janela desenhada: celulas cinzas com borda escura e `linhas` delas com texto escuro na coluna Nota Fiscal."""
+        imagem = Image.new("RGB", (700, 300), (230, 230, 235))
+        for k in range(6):
+            topo = 110 + 20 * k
+            imagem.paste((90, 90, 90), (230, topo, 340, topo + 18))  # borda
+            imagem.paste((200, 200, 200), (231, topo + 1, 339, topo + 17))  # celula
+            if k < linhas:
+                for x in range(255, 318, 6):  # digitos
+                    imagem.paste((60, 60, 60), (x, topo + 5, x + 3, topo + 13))
+        return imagem
+
+    def test_conta_linhas_pelos_pixels(self):
+        # o OCR nao leu os numeros (SRP real, 05/11/2026 18:12): conta pelas linhas com texto na coluna Nota Fiscal
+        lista = [("nota fiscal de referencia emitida pelo faturamento", (200, 38, 531, 51)),
+                 ("nota fiscal", (256, 93, 316, 102)), ("ok", (339, 253, 353, 261))]
+        limites = snac0236.limites_referencia(lista, (339, 253, 353, 261))
+        for linhas in (0, 1, 2):
+            self.assertEqual(snac0236.nfs_por_pixels(self.grade(linhas), lista, limites), linhas)
 
 
 class BarraDialogo(unittest.TestCase):

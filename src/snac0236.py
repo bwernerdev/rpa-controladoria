@@ -688,14 +688,48 @@ def botao_ok_referencia(lista):
     return max(oks, key=lambda c: c[1]) if oks else None
 
 
+def linhas_com_texto(imagem, coluna, topo, base):
+    """Faixas com texto escuro na `coluna` (esq, dir) entre `topo` e `base`: uma por linha preenchida da grade. Linha da
+    borda das celulas (escura na largura toda) nao conta; faixa precisa de 3 px de altura."""
+    esq, dir_ = int(coluna[0]), int(coluna[1])
+    if dir_ - esq < 4 or base - topo < 3:
+        return 0
+    faixa = imagem.crop((esq, int(topo), dir_, int(base))).convert("L")
+    largura, dados = faixa.width, faixa.load()
+    faixas, altura = 0, 0
+    for y in range(faixa.height):
+        escuros = sum(1 for x in range(largura) if dados[x, y] < 110)
+        if 0 < escuros < 0.6 * largura:
+            altura += 1
+        else:
+            faixas += altura >= 3
+            altura = 0
+    return faixas + (altura >= 3)
+
+
+def nfs_por_pixels(recorte, lista, limites):
+    """Linhas preenchidas na coluna "Nota Fiscal" da grade (titulo da coluna lido no OCR), pelos pixels: o OCR dos
+    numeros nas celulas cinzas falhou no SRP real (05/11/2026 18:12, "0000221199" saiu "Ze11i:" ou nada)."""
+    esq, topo, dir_, base = limites
+    cabecalho = next((c for t, c in lista if t == "nota fiscal" and topo <= c[1] <= base and esq <= c[0] <= dir_), None)
+    if not cabecalho:
+        return 0
+    return linhas_com_texto(recorte, (cabecalho[0], cabecalho[2]), cabecalho[3] + 2, base - 2)
+
+
 def ler_referencia(imagem, area, tesseract):
-    """(notas na grade, botao OK) da janela de NF de referencia no recorte `area` da `imagem`."""
+    """(notas na grade, botao OK) da janela de NF de referencia no recorte `area` da `imagem`. Notas = o maior entre os
+    numeros lidos no OCR e as linhas com texto na coluna Nota Fiscal (mais de uma = pausa: errar para o lado seguro)."""
     recorte = imagem.crop(area)
     palavras_bin = core.palavras_tela(binarizar(recorte), tesseract)
     palavras_cor = core.palavras_tela(recorte, tesseract)
     botao = botao_ok_referencia(frases(palavras_bin))
-    limites = limites_referencia(frases(palavras_cor) + frases(palavras_bin), botao)
-    nfs = max(nfs_referencia(palavras_bin, limites), nfs_referencia(palavras_cor, limites)) if limites else 0
+    lista = frases(palavras_cor) + frases(palavras_bin)
+    limites = limites_referencia(lista, botao)
+    if not limites:
+        return 0, botao
+    nfs = max(nfs_referencia(palavras_bin, limites), nfs_referencia(palavras_cor, limites),
+              nfs_por_pixels(recorte, lista, limites))
     return nfs, botao
 
 
