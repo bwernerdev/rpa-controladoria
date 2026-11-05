@@ -80,6 +80,10 @@ class SRP0236:
         # conteudo que o SRP ja traz no campo (Ident do ICMS TERCEIROS = 1, 05/11/2026). Chegando pelo Enter o texto vem
         # selecionado (digitar substitui); pelo clique o cursor fica no fim (digitar acrescenta).
         self.iniciais = {"t114ident": "1"}
+        # Tributos OK deixa o foco no Item da mesma linha (SRP real, 05/11/2026); seta para baixo vai a linha de baixo
+        self.ok_desce = False  # True: o Tributos OK ja desce para o Item da linha de baixo
+        self.ignora_seta = False  # seta para baixo que nao faz nada
+        self.setas = 0
         self.selecionado = True
 
     def campos(self):
@@ -165,6 +169,13 @@ class SRP0236:
             if texto == "{ENTER}" and self.sucesso:  # OK no "Integrado com Sucesso": tela vazia, foco no CNPJ
                 self.sucesso, self.sucessos, self.indice = False, self.sucessos + 1, 1
                 return
+            if texto == "{DOWN}":
+                self.setas += 1
+                cab, rateio = self.campos()
+                resto = self.indice - len(cab)
+                if not self.ignora_seta and resto >= 0 and resto % (1 + len(rateio)) == 0:
+                    self.indice += 1 + len(rateio)  # Item da linha de baixo
+                return
             if texto == "{ENTER}":
                 self.enters += 1
                 if base in self.recusar:
@@ -200,9 +211,9 @@ class SRP0236:
                 self.ltcc, self.sucesso = False, True
                 return
             if TRIBUTOS_OK[0] <= x <= TRIBUTOS_OK[2] and TRIBUTOS_OK[1] <= y <= TRIBUTOS_OK[3] and self.rateio_aberto():
-                cab, rateio = self.campos()  # fecha o Rateio: foco no Item da proxima linha da grade
+                cab, rateio = self.campos()  # fecha o Rateio: foco no Item da mesma linha da grade
                 k = (self.indice - len(cab)) // (1 + len(rateio))
-                self.indice = len(cab) + (k + 1) * (1 + len(rateio))
+                self.indice = len(cab) + (k + int(self.ok_desce)) * (1 + len(rateio))
                 return
             cab, rateio = self.campos()
             if self.indice < len(cab) and self.indice > cab.index("frete") and 235 <= x <= 290 and 430 <= y <= 442:
@@ -718,6 +729,28 @@ class Fluxo(unittest.TestCase):
         nota_srp = srp.integradas[0]
         self.assertEqual((nota_srp["t114ident0"], nota_srp["t114ident1"], nota_srp["t114base1"], nota_srp["t114aliquota1"]),
                          ("0", "1", "30", "18"))
+        # Tributos OK deixa o foco no Item da mesma linha: seta para baixo uma vez, e o 2o item na linha de baixo
+        self.assertEqual(srp.setas, 1)
+        self.assertEqual((nota_srp["item0"], nota_srp["item1"]), ("900135", "900266"))
+
+    def test_tributos_ok_ja_desce(self):
+        srp = SRP0236()
+        srp.ok_desce = True  # sem seta: o foco ja esta no Item da linha de baixo
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135"), item("900266")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.setas, 0)
+        self.assertEqual((srp.integradas[0]["item0"], srp.integradas[0]["item1"]), ("900135", "900266"))
+
+    def test_seta_que_nao_desce_pausa(self):
+        srp = SRP0236()
+        srp.ignora_seta = True  # nunca digita o 2o item por cima do 1o
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135"), item("900266")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("seta para baixo" in a for a in avisos), avisos)
+        self.assertEqual(srp.atual.get("item0"), "900135")
+        self.assertNotIn("item1", srp.atual)
 
     def test_rateio_sem_o_campo_pausa(self):
         srp = SRP0236(colunas_tributo=("ident", "base"))  # Aliquota nao para: pausa, sem Tributos OK

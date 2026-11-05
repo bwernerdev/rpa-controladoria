@@ -847,6 +847,31 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         foco = novo if isinstance(novo, tuple) else (None if novo == "sem_cor" else foco)
         return ir_ate("frete", "item", max(10 - vez, 1), foco, anterior=foco)
 
+    def descer_para_item(foco, anterior):
+        """Item seguinte da mesma nota. Depois do Tributos OK o SRP deixa o foco no Item da MESMA linha (05/11/2026 15:20:
+        o robo digitou o 2o item por cima do 1o): seta para baixo leva ao Item da linha de baixo (sugestao do usuario).
+        `anterior` = caixa do Item da linha do item anterior."""
+        meio = lambda c: (c[1] + c[3]) / 2  # noqa: E731
+        if (isinstance(foco, tuple) and posicao_ok("item", foco, rotulos, None, lidas) is not False
+                and meio(foco) > anterior[3]):
+            registrar(f"  depois do Tributos OK o foco ja esta no Item da linha de baixo: {foco}", mostrar=False)
+            return foco
+        if not (isinstance(foco, tuple) and posicao_ok("item", foco, rotulos, None, lidas) is not False
+                and anterior[1] <= meio(foco) <= anterior[3]):
+            raise Travou("item", f"depois do Tributos OK o cursor nao ficou no Item da linha do item anterior{local(foco)}; "
+                                 "nao sei em que linha digitar o proximo item")
+        checar_parada()
+        devagar("seta para baixo: Item da proxima linha da grade")
+        core.send_keys("{DOWN}", pause=0.03)
+        novo = aguardar(janela, foco, render, fixos)
+        if novo == "aviso":
+            raise Travou("item", "apareceu um aviso do SRP depois da seta para baixo na grade")
+        if (isinstance(novo, tuple) and posicao_ok("item", novo, rotulos, None, lidas) is not False
+                and meio(novo) > anterior[3]):
+            registrar(f"  seta para baixo: Item da linha de baixo, foco={novo}", mostrar=False)
+            return novo
+        raise Travou("item", f"a seta para baixo nao levou ao Item da linha de baixo{local(novo if isinstance(novo, tuple) else None)}")
+
     def entrar_no_valor_unit(foco):
         """2o Enter depois do Qtd Fiscal: sai do Qtd.Fisica e entra no Valor Unit, que fica AMARELO (sem ciano) e faz a
         grade rolar para a direita. Conta como entrou se o ciano andar ou sumir, ou se a faixa acima do campo mudar
@@ -1286,12 +1311,16 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         foco = ir_para_item(foco)
                         continue
                     foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
+                caixa_item = None  # Item da linha do item anterior
                 for indice, r in enumerate(nota["itens"]):
                     marcar([r["linha"]], "executando")
+                    if caixa_item is not None:
+                        foco = descer_para_item(foco, caixa_item)
                     if posicao_ok("item", foco, rotulos, None, lidas) is False:
                         if retomar is None:
                             raise Travou("item", f"o cursor nao esta no Item da grade{local(foco)}")
                         foco = esperar_no_item(r)
+                    caixa_item = foco
                     for posicao, (campo, quantos) in enumerate(SEQ_ITEM):
                         if foco is None and campo != "unit":  # o Valor Unit fica amarelo (conferido na entrada)
                             raise Travou(campo, f"o cursor esta num campo sem cor antes do {NOME[campo]}; nao digito sem ver o campo")
