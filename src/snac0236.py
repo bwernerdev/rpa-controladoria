@@ -171,9 +171,13 @@ def ler_planilha(caminho):
     return registros, erros
 
 
+CABECALHO_SEM_CHAVE = ("filial1", "filial2", "data", "valor_total", "frete")
+
+
 def agrupar_notas(registros):
     """Notas na ordem da planilha: {'chave', 'filial1', 'filial2', 'data', 'valor_total', 'frete', 'itens': [registros]}.
-    O cabecalho vem da 1a linha da chave; nas outras pode estar em branco ou igual. Devolve (notas, erros)."""
+    O cabecalho vem da 1a linha da chave; nas outras pode estar em branco ou igual. Linha com a CHAVE NF e todo o
+    cabecalho em branco = mais um item da nota de cima (como o usuario preenche, 05/11/2026). Devolve (notas, erros)."""
     notas, erros, vistas = [], [], {}
     for r in registros:
         if r["chave"] and notas and r["chave"] != notas[-1]["chave"] and r["chave"] in vistas:
@@ -181,7 +185,11 @@ def agrupar_notas(registros):
                          "deixe os itens da mesma nota em linhas seguidas")
         if not r["chave"] or not notas or r["chave"] != notas[-1]["chave"]:
             if not r["chave"] and notas:
-                erros.append(f"linha {r['linha']}: CHAVE NF em branco (repita a chave em todos os itens da nota)")
+                if any(r[c] for c in CABECALHO_SEM_CHAVE):  # cabecalho de outra nota sem a chave: nao adivinhar
+                    erros.append(f"linha {r['linha']}: CHAVE NF em branco com o cabecalho preenchido (para mais um item "
+                                 "da nota de cima, deixe a chave e o cabecalho em branco ou repita a chave)")
+                else:
+                    notas[-1]["itens"].append(r)
                 continue
             vistas.setdefault(r["chave"], r["linha"])
             notas.append({c: r[c] for c in ("chave", "filial1", "filial2", "data", "valor_total", "frete")} | {"itens": [r]})

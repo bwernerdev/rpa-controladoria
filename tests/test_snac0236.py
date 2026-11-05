@@ -329,6 +329,26 @@ class Planilha(unittest.TestCase):
         self.assertEqual(snac0236.valores_rateio(a["itens"][1]),
                          {"ident": "0", "base": "0", "aliquota": "0"})
 
+    def test_chave_em_branco_e_item_da_nota_de_cima(self):
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "CIF", 900135, 5101, 2, 10.5, 180, 1500.5, 12],
+            [None, None, None, None, None, 900266, 5101, 1, 3.75, 0, 0, 0],
+            [CHAVE_B, "30 47", "02/11/2026", 1200, "FOB", 900135, 5102, 1, 1200, 0, 0, 0],
+            [None, None, None, None, None, 900266, 5102, 3, 1, 0, 0, 0],
+        ])
+        _, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual([[i["item"] for i in n["itens"]] for n in notas], [["900135", "900266"], ["900135", "900266"]])
+        self.assertEqual(snac0236.valores_rateio(notas[0]["itens"][1]), {"ident": "0", "base": "0", "aliquota": "0"})
+
+    def test_chave_em_branco_com_cabecalho(self):
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", 900135, 5101, 1, 1, 0, 0, 0],
+            [None, "30 47", None, None, None, 900266, 5101, 1, 1, 0, 0, 0],
+        ])
+        _, _, erros = snac0236.carregar(caminho)
+        self.assertTrue(any("linha 3: CHAVE NF em branco com o cabecalho preenchido" in e for e in erros), erros)
+
     def test_erros(self):
         caminho = self.gravar([
             [1.11e43, "3046", "31/02/2026", "47.407,28", 150, "900135", None, 1, 1, 0, 0],

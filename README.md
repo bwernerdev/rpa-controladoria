@@ -57,7 +57,7 @@ O app guarda as linhas já concluídas. Ao abrir de novo a mesma planilha (sem m
 
 Lança notas de recebimento a partir de uma planilha com as colunas: CHAVE NF, FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE (CIF ou FOB), ITEM, OPER SPM, QTD FISCAL, VALOR UNIT, VALOR DO ICMS, BASE CALC. ICMS (base de cálculo da linha ICMS TERCEIROS; o nome antigo ICMS TERCEIROS (BASE DE CALCULO NF) também serve) e ALIQUOTA.
 
-- **CHAVE NF** como texto (44 dígitos). Linhas seguidas com a mesma chave são itens da mesma nota.
+- **CHAVE NF** como texto (44 dígitos). Linhas seguidas com a mesma chave são itens da mesma nota. Nos itens seguintes da nota, a chave e o cabeçalho (FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE) podem ficar em branco; chave em branco com o cabeçalho preenchido é erro.
 - Valores com ponto decimal (ex.: `47407.28`).
 - BASE CALC. ICMS e ALIQUOTA iguais a 0 = **sem imposto** (Rateio com Ident Tributo 0, Base 0 e Alíquota 0). As duas diferentes de 0 = **com imposto** (Ident Tributo 1, Base Cálculo = BASE CALC. ICMS e Alíquota = ALIQUOTA). Só uma delas zerada é erro na planilha.
 - ALIQUOTA como número (12), não como porcentagem do Excel (12% chega como 0,12 e é recusado).
