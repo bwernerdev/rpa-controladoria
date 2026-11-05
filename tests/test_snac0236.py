@@ -369,6 +369,20 @@ class Tela(unittest.TestCase):
         self.assertGreaterEqual(caixa[3] - caixa[1], 30, caixa)  # o campo inteiro, nao so uma faixa no alto
         self.assertLessEqual(abs((caixa[1] + caixa[3]) / 2 - 119), 3, caixa)
 
+    def test_foco_data_selecionada_tela_pequena(self):
+        # Citrix em 1366x768 (05/11/2026): campo de 14 px, selecao de 11 px e a data em tracos brancos de 1 px
+        imagem = Image.new("RGB", (1366, 768), "white")
+        imagem.paste((72, 100, 141), (300, 0, 1366, 1))  # borda da janela no mesmo azul: nao conta
+        imagem.paste((72, 100, 141), (140, 212, 190, 223))
+        for x in range(142, 188, 3):  # digitos: tracos verticais de 1 px
+            imagem.paste((255, 255, 255), (x, 214, x + 1, 221))
+        imagem.paste((255, 255, 255), (142, 217, 188, 218))  # e um horizontal no meio
+        caixa = snac0236.foco_unido(imagem)
+        self.assertIsNotNone(caixa)
+        self.assertLessEqual(abs((caixa[1] + caixa[3]) / 2 - 217.5), 2, caixa)
+        self.assertLessEqual(abs(caixa[0] - 140), 3, caixa)
+        self.assertLessEqual(abs(caixa[2] - 190), 3, caixa)
+
     def test_foco_unido(self):
         imagem = Image.new("RGB", (400, 100), "white")
         for x0, x1 in ((50, 60), (140, 160)):  # sobras do ciano a esquerda e a direita do texto selecionado

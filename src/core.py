@@ -109,6 +109,10 @@ CORES = {
     # medido (45, 132, 197) uniforme nos prints e na tela 4K em 04/11/2026
     "titulo_srp": (lambda v: 40 <= v <= 50, lambda v: 127 <= v <= 137, lambda v: 192 <= v <= 202),
 }
+# cores com texto branco por cima: fecha os buracos do texto (dilata 2 px) antes da erosao. Com o Citrix em 1366x768
+# os tracos de 1 px da data picotavam o azul da selecao e a erosao apagava tudo; o robo passou da Data Emissao
+# (05/11/2026 14:03). Linhas de ate 4 px (bordas da janela no mesmo azul) continuam sumindo.
+FECHAR = ("selecao",)
 
 
 def _mascara_cor(imagem, cor="ciano"):
@@ -122,8 +126,11 @@ def _mascara_cor(imagem, cor="ciano"):
     caixa = mascara.getbbox()
     if not caixa:
         return None, 0, 0
-    esq, topo = max(caixa[0] - 3, 0), max(caixa[1] - 3, 0)
-    recorte = mascara.crop((esq, topo, min(caixa[2] + 3, mascara.width), min(caixa[3] + 3, mascara.height)))
+    folga = 5 if cor in FECHAR else 3
+    esq, topo = max(caixa[0] - folga, 0), max(caixa[1] - folga, 0)
+    recorte = mascara.crop((esq, topo, min(caixa[2] + folga, mascara.width), min(caixa[3] + folga, mascara.height)))
+    if cor in FECHAR:  # fechamento (dilata 2 px) + a mesma erosao: o bloco sai do mesmo tamanho que sem texto
+        return recorte.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(9)), esq, topo
     return recorte.filter(ImageFilter.MinFilter(5)), esq, topo
 
 

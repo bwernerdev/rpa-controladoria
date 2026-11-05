@@ -338,7 +338,9 @@ def foco_unido(imagem):
         # Bordas de 1 px da janela tem o mesmo azul: so blocos de 8 px ou mais nos dois sentidos.
         # Resolucao inteira: em meia escala o texto branco da data partia o bloco azul e sobrava so uma faixa de 8 px
         # no alto do campo; o robo nao reconheceu a Data Emissao e passou dela (04/11/2026 18:51).
-        caixas = [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
+        # Com o fechamento do texto (`core.FECHAR`) bordas de 1-4 px ja somem: basta 4 px de altura (em 1366x768 o
+        # campo tem ~14 px e a selecao sai com ~9; 05/11/2026).
+        caixas = [c for c in core.caixas_cor(imagem, "selecao") if c[3] - c[1] >= 4 and c[2] - c[0] >= 8]
     if not caixas:
         return None
     esq, topo, dir_, base = max(caixas, key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
@@ -346,8 +348,8 @@ def foco_unido(imagem):
     faixa_topo = max(topo - 6, 0)
     faixa = imagem.crop((0, faixa_topo, imagem.width, min(base + 6, imagem.height)))
     caixas = caixas + [(c[0], c[1] + faixa_topo, c[2], c[3] + faixa_topo) for c in core.caixas_cor(faixa, "selecao")
-                       if c[3] - c[1] >= 8 and c[2] - c[0] >= 8]
-    folga = max(300, 8 * (base - topo))  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
+                       if c[3] - c[1] >= 4 and c[2] - c[0] >= 8]
+    folga = max(300 * imagem.width // 3840, 8 * (base - topo))  # proporcional a tela (1366x768: ~107 px)  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
     mesma_linha = sorted(c for c in caixas if abs(c[1] - topo) <= 4 and abs(c[3] - base) <= 4)
     for c in mesma_linha:  # da esquerda para a direita, colando os pedacos vizinhos a direita
         if c[0] > dir_ and c[0] - dir_ <= folga:
