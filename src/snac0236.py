@@ -653,33 +653,11 @@ def botao_frete_ltcc(lista):
 
 def nf_referencia(texto):
     """Janela "Nota fiscal de referencia do faturamento" ("Escolha a Nota Fiscal Faturamento e Pressione o Botao OK"),
-    que aparece em algumas notas depois do 1o Integrar (05/11/2026). Sem tratar, os 7 Enter atravessavam a grade dela
+    que o SRP abre no caminho do Frete ao Item e as vezes depois do 1o Integrar (05/11/2026). O robo so da OK, sem ler
+    a nota (usuario, 05/11/2026). Sem tratar, os 7 Enter atravessavam a grade dela
     com a tela inteira lida antes de cada um (~16 s, log de 05/11 16:30)."""
     return "referencia emitida" in texto or "nota fiscal faturamento" in texto or (
         "referencia" in texto and "faturamento" in texto)
-
-
-def nfs_referencia(palavras, limites):
-    """Linhas da grade da janela de NF de referencia com numero de nota (8 digitos ou mais, ex.: 0000087445), so dentro
-    de `limites` (esq, topo, dir, base): a leitura pode ser da tela inteira, com CNPJ e chave do formulario atras."""
-    esq, topo_min, dir_, base_max = limites
-    linhas = []
-    for texto, x, topo, larg, alt in palavras:
-        meio_x, meio_y = x + larg / 2, topo + alt / 2
-        if (re.fullmatch(r"\d{8,}", texto.strip()) and esq <= meio_x <= dir_ and topo_min <= meio_y <= base_max
-                and not any(abs(meio_y - y) <= max(6, alt / 2) for y in linhas)):
-            linhas.append(meio_y)
-    return len(linhas)
-
-
-def limites_referencia(lista, botao):
-    """Area da grade da janela de NF de referencia: abaixo do titulo "Nota Fiscal de Referencia emitida...", acima do
-    botao OK e na largura do titulo (mais uma largura para cada lado). Sem o titulo: None."""
-    titulo = next((c for t, c in lista if "referencia" in t), None)
-    if not titulo or not botao:
-        return None
-    largura = titulo[2] - titulo[0]
-    return titulo[0] - largura, titulo[3], titulo[2] + largura, botao[1]
 
 
 def botao_ok_referencia(lista):
@@ -688,49 +666,9 @@ def botao_ok_referencia(lista):
     return max(oks, key=lambda c: c[1]) if oks else None
 
 
-def linhas_com_texto(imagem, coluna, topo, base):
-    """Faixas com texto escuro na `coluna` (esq, dir) entre `topo` e `base`: uma por linha preenchida da grade. Linha da
-    borda das celulas (escura na largura toda) nao conta; faixa precisa de 3 px de altura."""
-    esq, dir_ = int(coluna[0]), int(coluna[1])
-    if dir_ - esq < 4 or base - topo < 3:
-        return 0
-    faixa = imagem.crop((esq, int(topo), dir_, int(base))).convert("L")
-    largura, dados = faixa.width, faixa.load()
-    faixas, altura = 0, 0
-    for y in range(faixa.height):
-        escuros = sum(1 for x in range(largura) if dados[x, y] < 110)
-        if 0 < escuros < 0.6 * largura:
-            altura += 1
-        else:
-            faixas += altura >= 3
-            altura = 0
-    return faixas + (altura >= 3)
-
-
-def nfs_por_pixels(recorte, lista, limites):
-    """Linhas preenchidas na coluna "Nota Fiscal" da grade (titulo da coluna lido no OCR), pelos pixels: o OCR dos
-    numeros nas celulas cinzas falhou no SRP real (05/11/2026 18:12, "0000221199" saiu "Ze11i:" ou nada)."""
-    esq, topo, dir_, base = limites
-    cabecalho = next((c for t, c in lista if t == "nota fiscal" and topo <= c[1] <= base and esq <= c[0] <= dir_), None)
-    if not cabecalho:
-        return 0
-    return linhas_com_texto(recorte, (cabecalho[0], cabecalho[2]), cabecalho[3] + 2, base - 2)
-
-
-def ler_referencia(imagem, area, tesseract):
-    """(notas na grade, botao OK) da janela de NF de referencia no recorte `area` da `imagem`. Notas = o maior entre os
-    numeros lidos no OCR e as linhas com texto na coluna Nota Fiscal (mais de uma = pausa: errar para o lado seguro)."""
-    recorte = imagem.crop(area)
-    palavras_bin = core.palavras_tela(binarizar(recorte), tesseract)
-    palavras_cor = core.palavras_tela(recorte, tesseract)
-    botao = botao_ok_referencia(frases(palavras_bin))
-    lista = frases(palavras_cor) + frases(palavras_bin)
-    limites = limites_referencia(lista, botao)
-    if not limites:
-        return 0, botao
-    nfs = max(nfs_referencia(palavras_bin, limites), nfs_referencia(palavras_cor, limites),
-              nfs_por_pixels(recorte, lista, limites))
-    return nfs, botao
+def botao_referencia(imagem, area, tesseract):
+    """Botao OK da janela de NF de referencia no recorte `area` (OCR binarizado: texto preto no botao cinza)."""
+    return botao_ok_referencia(frases(core.palavras_tela(binarizar(imagem.crop(area)), tesseract)))
 
 
 def integrado_com_sucesso(texto):
@@ -884,10 +822,32 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 return foco
         raise Travou(alvo, f"nao cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{local(foco)}")
 
+    def fechar_referencia(imagem, area):
+        """Janela "Nota fiscal de referencia do faturamento": so OK, sem ler a nota (usuario, 05/11/2026). Clique no
+        botao OK; sem o botao lido, Enter ate a janela fechar (o Enter atravessa a grade e chega no OK), no maximo 8."""
+        botao = botao_referencia(imagem, area, tesseract)
+        if botao:
+            devagar("clicar em OK na 'Nota Fiscal de Referencia'")
+            ret = janela.rectangle()
+            clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
+            registrar("  NF de referencia: cliquei em OK", mostrar=False)
+            return
+        registrar("  NF de referencia: nao li o botao OK; Enter ate a janela fechar", mostrar=False)
+        for vez in range(8):
+            checar_parada()
+            devagar(f"Enter {vez + 1} na 'Nota Fiscal de Referencia' (ate o OK)")
+            antes = core.capturar(janela)
+            core.send_keys("{ENTER}", pause=0.03)
+            esperar_tela(antes, 1.0)
+            if not barras_dialogo(core.capturar(janela)):
+                registrar(f"  NF de referencia: fechou com {vez + 1} Enter", mostrar=False)
+                return
+        raise Travou("item", "a janela 'Nota Fiscal de Referencia' nao fechou (nao li o botao OK e 8 Enter nao bastaram)")
+
     def janela_no_caminho(foco):
         """Depois de cada Enter do Frete ao Item: janela por cima (barra de titulo azul, ~0,07 s)? A "Nota fiscal de
-        referencia do faturamento" abre nesse caminho (usuario, 05/11/2026): com UMA nota na grade clica em OK e segue;
-        com mais de uma (ou nenhuma lida) a escolha e do usuario. Outra janela qualquer: pausa (nao da Enter as cegas)."""
+        referencia do faturamento" abre nesse caminho (usuario, 05/11/2026): `fechar_referencia` e segue. Outra janela
+        qualquer: pausa (nao da Enter as cegas)."""
         if not tesseract:
             return foco
         imagem = core.capturar(janela)
@@ -898,20 +858,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract)))
         if not nf_referencia(texto):
             raise Travou("item", f"apareceu uma janela do SRP entre o Frete e o Item ('{texto[:60]}')")
-        nfs, botao = ler_referencia(imagem, area, tesseract)
-        registrar(f"  NF de referencia entre o Frete e o Item: {nfs} nota(s) na grade, botao OK={botao}", mostrar=False)
-        if nfs != 1 or not botao:
-            raise Travou("item", "janela 'Nota Fiscal de Referencia' "
-                         + (f"com {nfs} notas na grade" if nfs != 1 else "sem o botao OK lido")
-                         + ": escolha a nota e clique em OK no SRP")
-        devagar("clicar em OK na 'Nota Fiscal de Referencia'")
-        ret = janela.rectangle()
-        clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
+        fechar_referencia(imagem, area)
         novo = aguardar(janela, foco, render, fixos)
         if novo in (None, "aviso"):
-            raise Travou("item", "cliquei em OK na 'Nota Fiscal de Referencia', mas "
+            raise Travou("item", "depois do OK na 'Nota Fiscal de Referencia' "
                          + ("apareceu um aviso do SRP" if novo == "aviso" else "a tela nao mudou"))
-        registrar(f"  NF de referencia: cliquei em OK; foco={novo}", mostrar=False)
+        registrar(f"  NF de referencia fechada entre o Frete e o Item: foco={novo}", mostrar=False)
         return novo if isinstance(novo, tuple) else None
 
     def ir_para_item(foco):
@@ -1256,18 +1208,11 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             registrar(f"  leitura depois do Integrar: {time.time() - t_leitura:.1f}s, {onde}, janelas={janelas}", mostrar=False)
             nova = next((nome for nome in janelas if nome not in feitos), None)
             if nova == "referencia":
-                # uma NF na grade = a escolha e unica: clica em OK (~1 s em vez dos 7 Enter). Mais de uma (ou nenhuma
-                # lida): a escolha e do usuario, o robo nao escolhe nota.
-                nfs, botao = ler_referencia(imagem, area, tesseract)
-                registrar(f"  {etiqueta}: NF de referencia: {nfs} nota(s) na grade, botao OK={botao}", mostrar=False)
-                if nfs != 1 or not botao:
-                    registrar(f"Nota ...{nota['chave'][-6:]}: janela 'Nota Fiscal de Referencia' "
-                              + (f"com {nfs} notas na grade" if nfs != 1 else "sem o botao OK lido")
-                              + ". Escolha a nota, clique em OK e termine a integracao no SRP.")
+                try:
+                    fechar_referencia(imagem, area)
+                except Travou as erro:
+                    registrar(f"Nota ...{nota['chave'][-6:]}: {erro.motivo}. Termine a integracao no SRP.")
                     return 2
-                devagar("clicar em OK na 'Nota Fiscal de Referencia'")
-                ret = janela.rectangle()
-                clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
                 # no log de 05/11 16:30 a janela fechou no 7o Enter e o 2o Integrar seguiu com frete, Resumo, LTCC e
                 # sucesso: depois do OK vai direto ao 2o Integrar, sem Enter as cegas
                 enters = ENTERS_DEPOIS_INTEGRAR
