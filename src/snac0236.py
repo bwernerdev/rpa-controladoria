@@ -540,7 +540,8 @@ def localizar_rateio(palavras):
     """Rotulos do Rateio lidos no OCR: linha ICMS TERCEIROS, colunas da grade de tributos e botao Tributos OK."""
     lista = frases(palavras)
     testes = {
-        "terceiros": lambda t: "terceiros" in t or "icms tercei" in t,
+        # em 1366x768 o OCR leu "11s icms erceiros" e "is terceiros" (05/11/2026)
+        "terceiros": lambda t: "erceiro" in t or "icms tercei" in t,
         "ident": lambda t: t.startswith("ident"),
         "base": lambda t: t.startswith("base calc") or t == "base",
         "aliquota": lambda t: t.startswith("aliquota") and "zero" not in t,  # nao a linha "COFINS ALIQUOTA ZERO"
@@ -552,15 +553,28 @@ def localizar_rateio(palavras):
         caixa = next((c for texto, c in lista if teste(texto)), None)
         if caixa:
             achados[chave] = caixa
+    if "ident" not in achados:
+        # titulo em 2 linhas "Ident / Tributo": com o Citrix em 1366x768 o OCR nao leu o "Ident", mas leu o "Tributo"
+        # sozinho (05/11/2026 14:09). O mais a esquerda: o "Clf Tribut" fica a direita da Descricao.
+        sozinhos = sorted((c for texto, c in lista if texto == "tributo"), key=lambda c: c[0])
+        if sozinhos:
+            achados["ident"] = sozinhos[0]
     return achados
 
 
 def ler_rateio(imagem, tesseract):
-    """localizar_rateio na tela; 2a leitura binarizada para o que faltar (texto preto em botao cinza)."""
-    achados = localizar_rateio(core.palavras_tela(imagem, tesseract))
-    if any(c not in achados for c in ("terceiros", "tributos_ok") + COLUNAS_RATEIO):
-        for chave, caixa in localizar_rateio(core.palavras_tela(binarizar(imagem), tesseract)).items():
-            achados.setdefault(chave, caixa)
+    """localizar_rateio na tela; leituras extras (binarizada: texto preto em botao cinza; em tela pequena, ampliada 4x)
+    so para o que faltar. Em 1366x768 (05/11/2026) a leitura 2x nao achou Ident nem ICMS TERCEIROS e a 4x achou o Ident
+    mas perdeu o ICMS TERCEIROS: junta as leituras."""
+    escalas = (2,) if imagem.width >= 2000 else (2, 4)
+    achados = {}
+    for escala in escalas:
+        # binarizada a 120: em 1366x768 a unica que leu a linha ICMS TERCEIROS em todas as ampliacoes
+        for img in (imagem, binarizar(imagem)) + ((binarizar(imagem, 120),) if len(escalas) > 1 else ()):
+            if all(c in achados for c in ("terceiros", "tributos_ok") + COLUNAS_RATEIO):
+                return achados
+            for chave, caixa in localizar_rateio(core.palavras_tela(img, tesseract, escala=escala)).items():
+                achados.setdefault(chave, caixa)
     return achados
 
 
@@ -859,9 +873,10 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         imagem = core.capturar(janela)
         recorte = imagem.crop((max(c[0] - 2 * h, 0), max(c[1] - h, 0), min(c[2] + 2 * h, imagem.width),
                                min(c[3] + h, imagem.height)))
-        for img in (recorte, binarizar(recorte)):
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, tesseract)))
-            if "tercei" in texto:
+        escala = 2 if h >= 20 else 4  # em 1366x768 o rotulo tem ~8 px
+        for img in (recorte, binarizar(recorte)) + ((binarizar(recorte, 120),) if escala > 2 else ()):
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, tesseract, escala=escala)))
+            if "tercei" in texto or "erceiro" in texto:
                 return True
         registrar(f"  recorte do ICMS TERCEIROS nao confere: {texto!r}", mostrar=False)
         return False

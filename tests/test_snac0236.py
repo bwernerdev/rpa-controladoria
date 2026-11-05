@@ -231,7 +231,7 @@ def ambiente(srp, palavras=PALAVRAS):
         "send_keys": srp.teclas, "caixa_foco": srp.caixa, "estado_tela": srp.tela,
         "capturar": srp.captura,
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
-        "palavras_tela": lambda imagem, t: (list(palavras) + srp.palavras_janelas() if imagem.size == (1600, 900) else
+        "palavras_tela": lambda imagem, t, escala=2: (list(palavras) + srp.palavras_janelas() if imagem.size == (1600, 900) else
                                             srp.recorte() if imagem.size == (AREA[2] - AREA[0], AREA[3] - AREA[1]) else
                                             srp.titulo() if imagem.height < 60 else
                                             [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
@@ -418,6 +418,25 @@ class Tela(unittest.TestCase):
         lista = snac0236.frases(PALAVRAS)
         self.assertEqual(snac0236.onde_esta(CAIXAS["frete"], lista), "frete")
         self.assertEqual(snac0236.onde_esta((235, 430, 290, 442), lista), "tem")
+
+
+class RateioTelaPequena(unittest.TestCase):
+    def test_ident_pelo_tributo_sozinho(self):
+        # 1366x768 (05/11/2026): o OCR leu so a 2a linha do titulo "Ident / Tributo"
+        palavras = [("Nome", 147, 408, 30, 9), ("Tributo", 180, 408, 29, 9), ("Tributo", 272, 408, 33, 9),
+                    ("Tribut", 454, 407, 32, 10), ("Base", 524, 412, 30, 9), ("Calculo", 557, 412, 39, 9)]
+        self.assertEqual(snac0236.localizar_rateio(palavras)["ident"], (272, 408, 305, 417))
+
+    def test_junta_leituras_em_tela_pequena(self):
+        leituras = {2: [("ICMS", 59, 467, 30, 8), ("TERCEIROS", 92, 467, 78, 8), ("Base", 524, 412, 30, 9),
+                        ("Calculo", 557, 412, 39, 9), ("Aliquota", 613, 413, 38, 9), ("Lancamento", 700, 413, 57, 11),
+                        ("Tributos", 365, 563, 40, 8), ("OK", 408, 563, 14, 8)],
+                    4: [("Ident", 278, 393, 23, 8)]}
+        imagem = Image.new("RGB", (1366, 768), "white")
+        with mock.patch.object(core, "palavras_tela", lambda img, t, escala=2: leituras[escala]):
+            achados = snac0236.ler_rateio(imagem, None)
+        self.assertEqual(set(achados), {"terceiros", "ident", "base", "aliquota", "lancamento", "tributos_ok"})
+        self.assertEqual(achados["ident"], (278, 393, 301, 401))
 
 
 class BarraDialogo(unittest.TestCase):
