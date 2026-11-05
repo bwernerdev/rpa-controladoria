@@ -260,8 +260,8 @@ def nota(chave, itens, filial=("30", "46"), data="01/11/2026", total="47407.28",
     return notas[0]
 
 
-def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="0", base="0"):
-    return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t, "base_icms": base}
+def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="0", aliq="0"):
+    return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t, "aliquota_icms": aliq}
 
 
 def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0):
@@ -288,7 +288,7 @@ class Planilha(unittest.TestCase):
         wb = Workbook()
         ws = wb.active
         ws.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
-                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIROS (BASE DE CALCULO NF)", "BASE CALC. ICMS"])
+                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIROS (BASE DE CALCULO NF)", "ALIQUOTA"])
         for linha in linhas:
             ws.append(linha)
         caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
@@ -297,7 +297,7 @@ class Planilha(unittest.TestCase):
 
     def test_formatos_e_agrupamento(self):
         caminho = self.gravar([
-            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "cif", 900135, "5101", 2, 10.5, 1.89, 21, 1500.5],
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "cif", 900135, "5101", 2, 10.5, 180, 1500.5, 12],
             [CHAVE_A, None, None, None, None, "900266", 5101, 1.25, "3,75", None, None],
             [CHAVE_B, "30 47", "02/11/2026", "1200", "FOB", 900135, 5102, 1, 1200, 0, 0],
         ])
@@ -308,7 +308,7 @@ class Planilha(unittest.TestCase):
         self.assertEqual((a["filial1"], a["filial2"], a["data"], a["valor_total"], a["frete"]), ("30", "46", "01/11/2026", "47407.28", "CIF"))
         self.assertEqual((a["itens"][1]["qtd"], a["itens"][1]["unit"], a["itens"][1]["icms"]), ("1.25", "3.75", ""))
         self.assertEqual(notas[1]["frete"], "FOB")
-        self.assertEqual(snac0236.valores_rateio(a["itens"][0]), {"ident": "1", "base": "1500.5"})
+        self.assertEqual(snac0236.valores_rateio(a["itens"][0]), {"ident": "1", "base": "1500.5", "aliquota": "12"})
         self.assertEqual(snac0236.valores_rateio(a["itens"][1]),
                          {"ident": "0", "base": "0", "aliquota": "0"})
 
@@ -319,13 +319,16 @@ class Planilha(unittest.TestCase):
             [CHAVE_A, "30 47", "01/11/2026", 10, None, "900266", "5101", 1, 1, 0, 0],
             [CHAVE_B, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
             [CHAVE_A, "30 46", "01/11/2026", 10, None, "900135", "5101", 1, 1, 0, 0],
+            [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", "900135", "5101", 1, 1, 0, 1500, 0.12],
+            [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", "900135", "5101", 1, 1, 0, 1500, 120],
         ])
         _, _, erros = snac0236.carregar(caminho)
         texto = "\n".join(erros)
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
                        "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
                        "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco",
-                       "linha 3: ICMS TERCEIROS (BASE DE CALCULO NF) e BASE CALC. ICMS precisam ser os dois 0"):
+                       "linha 3: ICMS TERCEIROS (BASE DE CALCULO NF) e ALIQUOTA precisam ser os dois 0",
+                       "linha 7: ALIQUOTA 0.12 parece porcentagem do Excel", "linha 8: ALIQUOTA invalida: 120"):
             self.assertIn(trecho, texto)
 
     def test_coluna_faltando(self):
@@ -587,10 +590,10 @@ class Fluxo(unittest.TestCase):
     def test_rateio_com_imposto(self):
         srp = SRP0236()
         with ambiente(srp):
-            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", icms_t="21", base="1500.5")])])
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135", icms_t="1500.5", aliq="12")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
-                         {"t114ident0": "1", "t114base0": "1500.5"})
+                         {"t114ident0": "1", "t114base0": "1500.5", "t114aliquota0": "12"})
 
     def test_rateio_reaproveita_posicoes(self):
         srp = SRP0236()
@@ -619,10 +622,11 @@ class Fluxo(unittest.TestCase):
     def test_rateio_dois_itens(self):
         srp = SRP0236()
         with ambiente(srp):
-            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135"), item("900266", icms_t="2", base="30")])])
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135"), item("900266", icms_t="30", aliq="18")])])
         self.assertEqual(codigo, 0, avisos)
         nota_srp = srp.integradas[0]
-        self.assertEqual((nota_srp["t114ident0"], nota_srp["t114ident1"], nota_srp["t114base1"]), ("0", "1", "30"))
+        self.assertEqual((nota_srp["t114ident0"], nota_srp["t114ident1"], nota_srp["t114base1"], nota_srp["t114aliquota1"]),
+                         ("0", "1", "30", "18"))
 
     def test_rateio_sem_o_campo_pausa(self):
         srp = SRP0236(colunas_tributo=("ident", "base"))  # Aliquota nao para: pausa, sem Tributos OK

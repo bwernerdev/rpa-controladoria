@@ -22,14 +22,14 @@ import core
 # coluna da planilha (normalizada) -> chave
 COLUNAS = {"chave nf": "chave", "filial fiscal": "filial", "data emissao": "data", "valor total documento": "valor_total",
            "frete": "frete", "item": "item", "oper spm": "oper", "qtd fiscal": "qtd", "valor unit": "unit",
-           "valor do icms": "icms", "icms terceiro": "icms_terceiro", "base calc. icms": "base_icms"}
+           "valor do icms": "icms", "icms terceiro": "icms_terceiro", "aliquota": "aliquota_icms"}
 TITULOS = {"chave": "CHAVE NF", "filial": "FILIAL FISCAL", "data": "DATA EMISSÃO", "valor_total": "VALOR TOTAL DOCUMENTO",
            "frete": "FRETE", "item": "ITEM", "oper": "OPER SPM", "qtd": "QTD FISCAL", "unit": "VALOR UNIT",
-           "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIROS (BASE DE CALCULO NF)", "base_icms": "BASE CALC. ICMS"}
+           "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIROS (BASE DE CALCULO NF)", "aliquota_icms": "ALIQUOTA"}
 CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da nota (repetidos ou so na 1a linha)
 OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
 FRETES = ("CIF", "FOB")  # o campo Frete do SRP recebe o tipo de frete, nao valor
-VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro", "base_icms")
+VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro", "aliquota_icms")
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
@@ -55,8 +55,8 @@ def chave_coluna(titulo):
     nome = normalizar(titulo)
     if nome.startswith("icms terceiro"):  # "ICMS TERCEIROS (BASE DE CALCULO NF)"
         return "icms_terceiro"
-    if nome.startswith("base calc") and "icms" in nome:  # "BASE CALC. ICMS"
-        return "base_icms"
+    if nome.startswith("aliquota"):  # "ALIQUOTA" (da linha ICMS TERCEIROS do Rateio; era BASE CALC. ICMS ate 05/11/2026)
+        return "aliquota_icms"
     return COLUNAS.get(nome)
 
 
@@ -201,10 +201,15 @@ def validar(registros, notas):
             for campo in ("item", "oper", "qtd", "unit"):
                 if not r[campo]:
                     erros.append(f"linha {r['linha']}: {TITULOS[campo]} em branco")
-            terceiro, base = (Decimal(r.get(c) or "0") != 0 for c in ("icms_terceiro", "base_icms"))
-            if terceiro != base:
-                erros.append(f"linha {r['linha']}: {TITULOS['icms_terceiro']} e {TITULOS['base_icms']} precisam ser os dois 0 "
+            terceiro, aliquota = (Decimal(r.get(c) or "0") for c in ("icms_terceiro", "aliquota_icms"))
+            if (terceiro != 0) != (aliquota != 0):
+                erros.append(f"linha {r['linha']}: {TITULOS['icms_terceiro']} e {TITULOS['aliquota_icms']} precisam ser os dois 0 "
                              "(sem imposto) ou os dois diferentes de 0 (com imposto)")
+            elif 0 < aliquota < 1:  # celula em porcentagem no Excel: 12% chega como 0,12 e o SRP receberia 0.12
+                erros.append(f"linha {r['linha']}: ALIQUOTA {r['aliquota_icms']} parece porcentagem do Excel (12% vira 0,12): "
+                             "digite o numero da aliquota, ex.: 12")
+            elif aliquota < 0 or aliquota > 100:
+                erros.append(f"linha {r['linha']}: ALIQUOTA invalida: {r['aliquota_icms']}")
     return erros
 
 
@@ -479,9 +484,11 @@ def mudou_acima(antes, agora, caixa):
 # ---------- Rateio (janela "Rateios", abre com Enter depois do Valor do ICMS) ----------
 # Grade "Rateio Item Documento Recebimento Tributo": as linhas COFINS e PIS ficam como o SRP preencheu; na linha
 # ICMS TERCEIROS (combinado com o usuario em 04/11/2026):
-#   sem imposto (ICMS TERCEIROS e BASE CALC. ICMS da planilha = 0): Ident Tributo 0, Base Calculo 0, Aliquota 0
+#   sem imposto (ICMS TERCEIROS e ALIQUOTA da planilha = 0): Ident Tributo 0, Base Calculo 0, Aliquota 0
 #   (o Lancamento nao recebe foco: o SRP calcula; no SRP real o Enter so para em Ident, Base Calculo e Aliquota)
-#   com imposto (os dois diferentes de 0): Ident Tributo 1, Base Calculo = BASE CALC. ICMS (o resto como o SRP pos)
+#   com imposto (os dois diferentes de 0): Ident Tributo 1, Base Calculo = ICMS TERCEIROS (BASE DE CALCULO NF) e
+#   Aliquota = ALIQUOTA (usuario, 05/11/2026: na planilha 153241.57 x 12% = 18388.99, o VALOR DO ICMS; o Lancamento o SRP
+#   calcula). Ate 05/11 a Base vinha da coluna BASE CALC. ICMS e a Aliquota ficava como o SRP pos.
 # Depois clica em "Tributos OK" (fecha o Rateio) e, no fim da nota, em Integrar.
 # O usuario contou 7 Enter ate o Rateio abrir ("mas pode ser mais"); no SRP real (log de 04/11) o foco passou pela parte
 # de cima do Rateio e chegou na grade de tributos no 10o Enter; cada linha de tributo teve 3 paradas.
@@ -517,13 +524,13 @@ def gravar_posicoes(tamanho, rateio):
 
 def tem_imposto(r):
     """Os dois valores da planilha diferentes de 0 = nota com imposto (vazio conta como 0)."""
-    return Decimal(r.get("icms_terceiro") or "0") != 0 and Decimal(r.get("base_icms") or "0") != 0
+    return Decimal(r.get("icms_terceiro") or "0") != 0 and Decimal(r.get("aliquota_icms") or "0") != 0
 
 
 def valores_rateio(r):
     """O que digitar na linha ICMS TERCEIROS, por coluna (na ordem da tela)."""
     if tem_imposto(r):
-        return {"ident": "1", "base": r["base_icms"]}
+        return {"ident": "1", "base": r["icms_terceiro"], "aliquota": r["aliquota_icms"]}
     return {"ident": "0", "base": "0", "aliquota": "0"}
 
 
