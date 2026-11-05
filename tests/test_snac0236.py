@@ -43,6 +43,14 @@ LTCC = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate("Informe o Centro d
     ("Frete", 1000, 470, 50, 12), ("LTCC", 1055, 470, 45, 12),  # cabecalho da grade (nao e o botao)
     ("Voltar", 430, 700, 90, 12), ("Frete", 1000, 700, 50, 12), ("LTC", 1055, 700, 45, 12)]
 BOTAO_LTCC = (1000, 700, 1100, 712)
+REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
+    "Nota Fiscal de Referência emitida pelo Faturamento".split())] + [
+    ("Escolha", 300, 480, 60, 12), ("a", 365, 480, 10, 12), ("Nota", 380, 480, 35, 12), ("Fiscal", 420, 480, 45, 12),
+    ("Faturamento", 470, 480, 90, 12),
+    ("030", 400, 520, 30, 12), ("00765", 450, 520, 50, 12), ("0000087445", 520, 520, 90, 12), ("1", 630, 520, 10, 12),
+    ("99999", 660, 520, 50, 12), ("1", 730, 520, 10, 12), ("OK", 700, 760, 20, 12)]
+REFERENCIA_2A_NF = [("0000087446", 520, 545, 90, 12)]
+BOTAO_OK_REF = (700, 760, 720, 772)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
 BARRA = (250, 400, 1300, 430)  # barra de titulo azul das janelas pos-Integrar
 AREA = (230, 395, 1320, 900)  # snac0236.area_dialogo da BARRA na tela 1600x900
@@ -84,6 +92,9 @@ class SRP0236:
         self.ok_desce = False  # True: o Tributos OK ja desce para o Item da linha de baixo
         self.ignora_seta = False  # seta para baixo que nao faz nada
         self.setas = 0
+        # janela "Nota fiscal de referencia do faturamento" depois do 1o Integrar (SRP real, 05/11/2026)
+        self.com_referencia, self.referencia, self.duas_nfs = False, False, False
+        self.ok_referencia, self.enters_referencia = 0, 0
         self.selecionado = True
 
     def campos(self):
@@ -136,10 +147,11 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+        return self.referencia or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
 
     def palavras_janelas(self):
-        return ((AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
+        return ((REFERENCIA + (REFERENCIA_2A_NF if self.duas_nfs else []) if self.referencia else [])
+                + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
                 + (SUCESSO if self.sucesso else []))
 
     def barras(self, imagem):
@@ -157,6 +169,11 @@ class SRP0236:
         with self.lock:
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
+            if texto == "{ENTER}" and self.referencia:  # no SRP real a janela fechou no 7o Enter
+                self.enters_referencia += 1
+                if self.enters_referencia >= 7:
+                    self.referencia = False
+                return
             if texto == "{ENTER}" and self.aviso_frete:  # OK no aviso do frete: vem o Resumo dos Tributos
                 self.aviso_frete, self.fechou_aviso, self.resumo = False, self.fechou_aviso + 1, True
                 return
@@ -207,6 +224,9 @@ class SRP0236:
             if chave[0] <= x <= chave[2] and chave[1] <= y <= chave[3]:  # clique no campo Chave Acesso NF-e
                 self.indice, self.cliques_chave = 0, self.cliques_chave + 1
                 return
+            if self.referencia and BOTAO_OK_REF[0] <= x <= BOTAO_OK_REF[2] and BOTAO_OK_REF[1] <= y <= BOTAO_OK_REF[3]:
+                self.referencia, self.ok_referencia = False, self.ok_referencia + 1
+                return
             if self.ltcc and BOTAO_LTCC[0] <= x <= BOTAO_LTCC[2] and BOTAO_LTCC[1] <= y <= BOTAO_LTCC[3]:
                 self.ltcc, self.sucesso = False, True
                 return
@@ -246,6 +266,7 @@ class SRP0236:
                     self.indice, self.alerta = 0, False
                     return
                 self.integradas.append(self.atual)
+                self.referencia = self.com_referencia
                 self.aviso_frete = self.avisos_no_1o  # janelas logo depois do 1o Integrar (sem o 2o)
                 self.atual = {}
                 if self.volta:
@@ -507,6 +528,18 @@ class RateioTelaPequena(unittest.TestCase):
         self.assertEqual(achados["ident"], (278, 393, 301, 401))
 
 
+class NfReferencia(unittest.TestCase):
+    def test_conta_so_as_nfs_dentro_da_janela(self):
+        # leitura da tela inteira: CNPJ e chave do formulario atras nao contam como NF da grade
+        palavras = REFERENCIA + [("002914460", 130, 150, 60, 11), ("41261002914460", 300, 120, 300, 11),
+                                 ("0000087447", 1200, 520, 90, 12)]
+        botao = snac0236.botao_ok_referencia(snac0236.frases(palavras))
+        self.assertEqual(botao, BOTAO_OK_REF)
+        limites = snac0236.limites_referencia(snac0236.frases(palavras), botao)
+        self.assertEqual(snac0236.nfs_referencia(palavras, limites), 1)
+        self.assertEqual(snac0236.nfs_referencia(palavras + REFERENCIA_2A_NF, limites), 2)
+
+
 class BarraDialogo(unittest.TestCase):
     def test_resumo_dos_tributos_variantes_do_ocr(self):
         self.assertTrue(snac0236.resumo_tributos("ae dos tributos documento confirmar cancelar"))
@@ -751,6 +784,24 @@ class Fluxo(unittest.TestCase):
         self.assertTrue(any("seta para baixo" in a for a in avisos), avisos)
         self.assertEqual(srp.atual.get("item0"), "900135")
         self.assertNotIn("item1", srp.atual)
+
+    def test_nf_referencia_clica_ok(self):
+        srp = SRP0236()
+        srp.com_referencia, srp.com_aviso_frete = True, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.ok_referencia, srp.enters_referencia), (1, 0))  # OK clicado, nenhum Enter na grade dela
+        self.assertEqual((srp.reintegrou, srp.fechou_aviso, srp.confirmou, srp.sucessos), (1, 1, 1, 1))
+
+    def test_nf_referencia_com_duas_nfs_pausa(self):
+        srp = SRP0236()
+        srp.com_referencia, srp.duas_nfs = True, True  # a escolha da nota e do usuario
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
+        self.assertEqual(srp.ok_referencia, 0)
+        self.assertEqual(srp.enters_referencia, 0)
+        self.assertTrue(any("Nota Fiscal de Referencia' com 2 notas" in a for a in avisos), avisos)
 
     def test_rateio_sem_o_campo_pausa(self):
         srp = SRP0236(colunas_tributo=("ident", "base"))  # Aliquota nao para: pausa, sem Tributos OK
