@@ -288,7 +288,7 @@ class Planilha(unittest.TestCase):
         wb = Workbook()
         ws = wb.active
         ws.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
-                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "ICMS TERCEIROS (BASE DE CALCULO NF)", "ALIQUOTA"])
+                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "BASE CALC. ICMS", "ALIQUOTA"])
         for linha in linhas:
             ws.append(linha)
         caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
@@ -327,9 +327,29 @@ class Planilha(unittest.TestCase):
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
                        "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
                        "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco",
-                       "linha 3: ICMS TERCEIROS (BASE DE CALCULO NF) e ALIQUOTA precisam ser os dois 0",
+                       "linha 3: BASE CALC. ICMS e ALIQUOTA precisam ser os dois 0",
                        "linha 7: ALIQUOTA 0.12 parece porcentagem do Excel", "linha 8: ALIQUOTA invalida: 120"):
             self.assertIn(trecho, texto)
+
+    def gravar_cabecalho(self, base):
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.active.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
+                          "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS"] + base + ["ALIQUOTA"])
+        wb.active.append([CHAVE_A, "30 46", "01/11/2026", 10, "CIF", "900135", "5101", 1, 1, 180] + [1500] * len(base) + [12])
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
+        wb.save(caminho)
+        return caminho
+
+    def test_nome_antigo_da_base(self):
+        _, notas, erros = snac0236.carregar(self.gravar_cabecalho(["ICMS TERCEIROS (BASE DE CALCULO NF)"]))
+        self.assertEqual(erros, [])
+        self.assertEqual(snac0236.valores_rateio(notas[0]["itens"][0]), {"ident": "1", "base": "1500", "aliquota": "12"})
+
+    def test_base_em_duas_colunas(self):
+        with self.assertRaises(ValueError) as erro:
+            snac0236.ler_planilha(self.gravar_cabecalho(["ICMS TERCEIROS (BASE DE CALCULO NF)", "BASE CALC. ICMS"]))
+        self.assertIn("Duas colunas para a base", str(erro.exception))
 
     def test_coluna_faltando(self):
         from openpyxl import Workbook

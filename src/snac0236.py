@@ -25,7 +25,7 @@ COLUNAS = {"chave nf": "chave", "filial fiscal": "filial", "data emissao": "data
            "valor do icms": "icms", "icms terceiro": "icms_terceiro", "aliquota": "aliquota_icms"}
 TITULOS = {"chave": "CHAVE NF", "filial": "FILIAL FISCAL", "data": "DATA EMISSÃO", "valor_total": "VALOR TOTAL DOCUMENTO",
            "frete": "FRETE", "item": "ITEM", "oper": "OPER SPM", "qtd": "QTD FISCAL", "unit": "VALOR UNIT",
-           "icms": "VALOR DO ICMS", "icms_terceiro": "ICMS TERCEIROS (BASE DE CALCULO NF)", "aliquota_icms": "ALIQUOTA"}
+           "icms": "VALOR DO ICMS", "icms_terceiro": "BASE CALC. ICMS", "aliquota_icms": "ALIQUOTA"}
 CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da nota (repetidos ou so na 1a linha)
 OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
 FRETES = ("CIF", "FOB")  # o campo Frete do SRP recebe o tipo de frete, nao valor
@@ -53,7 +53,9 @@ def normalizar(texto):
 
 def chave_coluna(titulo):
     nome = normalizar(titulo)
-    if nome.startswith("icms terceiro"):  # "ICMS TERCEIROS (BASE DE CALCULO NF)"
+    # base de calculo da linha ICMS TERCEIROS do Rateio: "BASE CALC. ICMS" desde 05/11/2026 (antes
+    # "ICMS TERCEIROS (BASE DE CALCULO NF)"; o nome antigo continua aceito)
+    if nome.startswith("icms terceiro") or nome.startswith("base calc"):
         return "icms_terceiro"
     if nome.startswith("aliquota"):  # "ALIQUOTA" (da linha ICMS TERCEIROS do Rateio; era BASE CALC. ICMS ate 05/11/2026)
         return "aliquota_icms"
@@ -127,11 +129,16 @@ def ler_planilha(caminho):
     ws = load_workbook(caminho, read_only=True, data_only=True).active
     linhas = ws.iter_rows(values_only=True)
     cabecalho = next(linhas, None) or ()
-    indices = {}
+    indices, repetidas = {}, []
     for posicao, titulo in enumerate(cabecalho):
         chave = chave_coluna(titulo) if titulo is not None else None
         if chave and chave not in indices:
             indices[chave] = posicao
+        elif chave == "icms_terceiro":  # nome novo e antigo juntos: nao adivinhar qual e a base
+            repetidas.append(str(titulo))
+    if repetidas:
+        raise ValueError(f"Duas colunas para a base do ICMS TERCEIROS ({cabecalho[indices['icms_terceiro']]} e "
+                         f"{', '.join(repetidas)}): deixe so a {TITULOS['icms_terceiro']}")
     faltando = [TITULOS[c] for c in TITULOS if c not in indices]
     if faltando:
         raise ValueError(f"Colunas ausentes no cabecalho: {', '.join(faltando)}")
