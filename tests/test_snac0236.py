@@ -1,6 +1,7 @@
 """SNAC0236: planilha (formatos, agrupamento por chave) e preenchimento com um SRP simulado (Enter entre campos)."""
 import contextlib
 import pathlib
+import re
 import tempfile
 import threading
 import unittest
@@ -76,6 +77,10 @@ class SRP0236:
         self.ignora_cliques = False  # cliques no Item e no Ident Tributo que nao mudam o foco
         self.clique_item_passa = False  # o foco passa por outro campo antes de chegar no Item (SRP real, 04/11 19:20)
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
+        # conteudo que o SRP ja traz no campo (Ident do ICMS TERCEIROS = 1, 05/11/2026). Chegando pelo Enter o texto vem
+        # selecionado (digitar substitui); pelo clique o cursor fica no fim (digitar acrescenta).
+        self.iniciais = {"t114ident": "1"}
+        self.selecionado = True
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -168,8 +173,19 @@ class SRP0236:
                 if base in self.parado:
                     return
                 self.indice += 1
+                self.selecionado = True
             elif nome:
-                self.atual[nome] = self.atual.get(nome, "") + texto.replace("{,}", ",")
+                valor = "" if self.selecionado else self.atual.get(nome, self.iniciais.get(base, ""))
+                for tecla in re.findall(r"\{[^}]*\}|[^{]+", texto):
+                    if tecla == "{END}":
+                        self.selecionado = False
+                    elif tecla.startswith("{BACKSPACE"):
+                        partes = tecla.strip("{}").split()
+                        valor = valor[:max(len(valor) - (int(partes[1]) if len(partes) > 1 else 1), 0)]
+                    else:
+                        valor += "," if tecla == "{,}" else tecla
+                self.selecionado = False
+                self.atual[nome] = valor
 
     def rateio_aberto(self):
         return (self.onde()[0] or "").startswith("t1")
@@ -208,6 +224,7 @@ class SRP0236:
                         if cx <= x <= cx + 60 and cy <= y <= cy + 12:
                             self.cliques_ident += 1
                             if not self.ignora_cliques:
+                                self.selecionado = False
                                 k = (self.indice - len(cab)) // (1 + len(rateio))
                                 self.indice = len(cab) + k * (1 + len(rateio)) + 1 + rateio.index(nome)
                             return
@@ -534,6 +551,7 @@ class Fluxo(unittest.TestCase):
             log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.cliques_item, srp.cliques_ident), (2, 2))
+        # o Ident ja vinha com 1 e o clique nao seleciona: sem apagar antes ficaria "10" (sem imposto)
         self.assertIn("cliquei no Item da grade", log)
         self.assertIn("cliquei no Ident Tributo do ICMS TERCEIROS", log)
         self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])

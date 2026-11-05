@@ -741,6 +741,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             core.send_keys(texto.replace(",", "{,}"), pause=0.03)
             time.sleep(min(pausa, 0.05))
 
+    def limpar_campo(campo):
+        """Apaga o conteudo do campo em foco: End + Backspace (serve com o texto selecionado ou com o cursor no meio)."""
+        checar_parada()
+        devagar(f"apagar o que houver em {NOME[campo]}")
+        core.send_keys("{END}{BACKSPACE 10}", pause=0.03)
+
     def enters(campo, quantos, foco):
         """Enter `quantos` vezes; cada um precisa mover o foco ou, na grade rolada, rolar a grade (senao: aviso do SRP
         ou campo preso)."""
@@ -961,6 +967,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         valores = valores_rateio(r)
         registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto: {valores}", mostrar=False)
         pendentes = [c for c in COLUNAS_RATEIO if c in valores]
+        # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026). Chegando pelo clique, o cursor fica onde clicou e o
+        # texto nao e selecionado: digitar "1" virava "11" e dava erro. Pelo Enter o texto vem selecionado. Apaga antes.
+        limpar_campo("ident")
         digitar(valores["ident"], "ident")
         pendentes.remove("ident")
         for vez in range(len(COLUNAS_RATEIO) + 2):
