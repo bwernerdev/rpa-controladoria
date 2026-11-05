@@ -95,6 +95,7 @@ class SRP0236:
         # janela "Nota fiscal de referencia do faturamento" depois do 1o Integrar (SRP real, 05/11/2026)
         self.com_referencia, self.referencia, self.duas_nfs = False, False, False
         self.ok_referencia, self.enters_referencia = 0, 0
+        self.ref_no_caminho = None  # Enter depois do Frete em que abre a janela da NF de referencia (SRP real, 05/11/2026)
         self.selecionado = True
 
     def campos(self):
@@ -135,6 +136,8 @@ class SRP0236:
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
+        if self.referencia:  # foco na celula Filial da grade da janela
+            return (450, 520, 500, 532)
         nome = self.onde()[0] or ""
         # Valor Unit: no SRP real fica amarelo (sem ciano)
         return None if self.indice in self.sem_cor or nome.startswith("unit") else self.onde()[1]
@@ -202,6 +205,9 @@ class SRP0236:
                     return
                 self.indice += 1
                 self.selecionado = True
+                cab = self.campos()[0]
+                if self.ref_no_caminho and self.indice == cab.index("frete") + self.ref_no_caminho:
+                    self.referencia = True
             elif nome:
                 valor = "" if self.selecionado else self.atual.get(nome, self.iniciais.get(base, ""))
                 for tecla in re.findall(r"\{[^}]*\}|[^{]+", texto):
@@ -614,23 +620,34 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
             log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
         self.assertEqual(codigo, 0, avisos)
-        self.assertEqual((srp.cliques_item, srp.cliques_ident), (2, 2))
+        # do Frete ao Item so Enter (o clique pulava a janela da NF de referencia, 05/11/2026)
+        self.assertEqual((srp.cliques_item, srp.cliques_ident), (0, 2))
         # o Ident ja vinha com 1 e o clique nao seleciona: sem apagar antes ficaria "10" (sem imposto)
-        self.assertIn("cliquei no Item da grade", log)
+        self.assertIn("Item: cheguei com", log)
         self.assertIn("cliquei no Ident Tributo do ICMS TERCEIROS", log)
         self.assertEqual([n["t114ident0"] for n in srp.integradas], ["0", "0"])
         self.assertNotIn("t199ident0", srp.integradas[0])
 
-    def test_clique_no_item_com_foco_passando_por_outro_campo(self):
+    def test_nf_referencia_entre_o_frete_e_o_item(self):
         srp = SRP0236()
-        srp.clique_item_passa = True
+        srp.ref_no_caminho = 4  # abre no 4o Enter depois do Frete
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
             log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
         self.assertEqual(codigo, 0, avisos)
-        self.assertIn("antes de chegar no Item", log)
-        self.assertNotIn("sigo com Enter", log)
+        self.assertEqual((srp.ok_referencia, srp.enters_referencia), (1, 0))  # OK clicado, nenhum Enter na grade dela
+        self.assertIn("NF de referencia entre o Frete e o Item: 1 nota(s)", log)
         self.assertEqual(srp.integradas[0]["item0"], "900135")
+
+    def test_nf_referencia_no_caminho_com_duas_nfs_pausa(self):
+        srp = SRP0236()
+        srp.ref_no_caminho, srp.duas_nfs = 4, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertEqual((srp.ok_referencia, srp.enters_referencia), (0, 0))
+        self.assertTrue(any("com 2 notas na grade" in a for a in avisos), avisos)
+        self.assertNotIn("item0", srp.atual)
 
     def test_sem_janela_depois_do_1o_integrar_nao_le_a_tela_inteira_a_cada_enter(self):
         srp = SRP0236()
@@ -650,9 +667,9 @@ class Fluxo(unittest.TestCase):
             with ambiente(srp):
                 codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
             self.assertEqual(codigo, 0, avisos)
-        self.assertEqual((com.cliques_item, com.cliques_ident), (1, 1))
+        self.assertEqual((com.cliques_item, com.cliques_ident), (0, 1))
         self.assertEqual(com.integradas[0]["t114ident0"], "0")
-        self.assertGreater(com.enters, sem.enters + 8)  # Enter pelos campos que o clique pularia
+        self.assertGreater(com.enters, sem.enters)  # Enter pelas linhas de tributo que o clique pularia
 
     def test_janelas_pos_integrar_lidas_no_recorte(self):
         srp = SRP0236()
