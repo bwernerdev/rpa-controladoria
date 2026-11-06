@@ -72,6 +72,8 @@ Para usar, deixe o cursor no campo **Chave Acesso NF-e** e clique em Iniciar. O 
 
 Cada nota concluída fica **verde no app e na planilha**: o robô pinta de verde as linhas dela no Excel. Com a planilha fechada, ele grava o arquivo. Ao clicar em Iniciar, se a planilha carregada estiver aberta no Excel, o robô salva e fecha **só ela** (as outras planilhas e o Excel continuam abertos). Se ela tinha alterações que mudam os dados, o robô recarrega e pede para você conferir e clicar em Iniciar de novo. Se não der para fechar (ex.: célula em edição), ele avisa e pinta na janela do Excel; aí você salva. Se não conseguir pintar, só avisa nos detalhes e segue.
 
+Ao carregar a planilha, as notas que **já estão verdes** (pintadas pelo robô ou por você, em qualquer tom de verde, em todas as células preenchidas da linha) contam como feitas: aparecem como Concluídas e o robô começa pela primeira nota que não está verde ("Continuar da linha N"). Nota com só parte das linhas em verde é digitada inteira, com um aviso.
+
 Depois de importar a planilha (sem erros), abaixo da barra de progresso aparece o **tempo previsto** para as notas pendentes e o horário de término se iniciar agora. Enquanto roda, no mesmo lugar aparece a nota atual, o tempo decorrido e o **tempo previsto para a conclusão** (com o horário de término). Antes da 1ª nota a previsão usa ~40 s por nota e ~25 s por item a mais; depois, o ritmo medido. O tempo pausado não entra na conta. A confirmação do Iniciar também mostra o tempo previsto.
 
 Se algo não confere, ele pausa: termine a nota à mão no SRP, deixe o cursor na Chave Acesso NF-e da próxima nota e clique em **Continuar**.

@@ -131,9 +131,11 @@ def ler_planilha(caminho):
     # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
     livro = load_workbook(caminho, read_only=True, data_only=True)
     try:
-        linhas = iter(list(livro.active.iter_rows(values_only=True)))
+        celulas = list(livro.active.iter_rows())
+        tema = core.cores_do_tema(getattr(livro, "loaded_theme", None))
     finally:
         livro.close()
+    linhas = iter([tuple(c.value for c in linha) for linha in celulas])
     cabecalho = next(linhas, None) or ()
     indices, repetidas = {}, []
     for posicao, titulo in enumerate(cabecalho):
@@ -153,7 +155,11 @@ def ler_planilha(caminho):
         bruto = {c: (linha[p] if p < len(linha) else None) for c, p in indices.items()}
         if all(v is None or str(v).strip() == "" for v in bruto.values()):
             continue
-        r = {"linha": numero}
+        # linha pintada de verde (pelo robo ao concluir a nota, ou a mao): o app trata como ja feita (usuario, 06/11/2026).
+        # Verde = todas as celulas preenchidas das colunas lidas com fundo verde.
+        preenchidas = [celulas[numero - 1][p] for c, p in indices.items()
+                       if p < len(celulas[numero - 1]) and not (bruto[c] is None or str(bruto[c]).strip() == "")]
+        r = {"linha": numero, "verde": all(core.fundo_verde(getattr(c, "fill", None), tema) for c in preenchidas)}
         problemas = []
         r["chave"], erro = formatar_chave(bruto["chave"])
         problemas.append(erro)

@@ -550,6 +550,54 @@ def arquivo_progresso():
 VERDE_CONCLUIDA = "C6EFCE"  # o verde do estilo "Bom" do Excel
 
 
+def cores_do_tema(xml):
+    """Cores do tema da planilha na ordem dos indices de cor do Excel (0 lt1, 1 dk1, 2 lt2, 3 dk2, 4-9 accent1-6, 10
+    hlink, 11 folHlink), em hex 'RRGGBB'; [] sem tema. As celulas pintadas com as cores do tema guardam so o indice."""
+    if not xml:
+        return []
+    import xml.etree.ElementTree as ET
+    try:
+        raiz = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    esquema = raiz.find(f".//{a}clrScheme")
+    if esquema is None:
+        return []
+    cores = {}
+    for filho in esquema:
+        nome = filho.tag.replace(a, "")
+        cor = next(iter(filho), None)
+        if cor is not None:
+            cores[nome] = (cor.get("val") if cor.tag == f"{a}srgbClr" else cor.get("lastClr")) or ""
+    ordem = ("lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink")
+    return [cores.get(nome, "") for nome in ordem]
+
+
+def fundo_verde(fill, tema=()):
+    """Fundo solido verde (o VERDE_CONCLUIDA do robo ou outro verde pintado a mao, do verde-claro "80% mais claro" do
+    Excel, E2EFDA, ao escuro): matiz entre 75 e 165 graus e alguma saturacao. Cor do tema: pelo indice em `tema`
+    (cores_do_tema), com o clareamento/escurecimento (tint) aplicado."""
+    if fill is None or fill.fill_type != "solid":
+        return False
+    cor = fill.fgColor
+    if cor.type == "rgb" and isinstance(cor.rgb, str):
+        hexa = cor.rgb[-6:]
+    elif cor.type == "theme" and isinstance(cor.theme, int) and cor.theme < len(tema):
+        hexa = tema[cor.theme]
+    else:
+        return False
+    try:
+        r, g, b = (int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return False
+    tint = cor.tint or 0
+    r, g, b = ((c + (255 - c) * tint) if tint > 0 else c * (1 + tint) for c in (r, g, b))
+    import colorsys
+    matiz, saturacao, valor = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    return 75 <= matiz * 360 <= 165 and saturacao >= 0.07 and valor >= 0.25
+
+
 def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA):
     """Fundo `cor` nas `linhas` da aba ativa (a que o robo le), nas colunas do cabecalho. Planilha fechada: grava o
     arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade). Aberta no Excel (o Excel

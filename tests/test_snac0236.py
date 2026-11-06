@@ -16,6 +16,7 @@ import snac0236
 
 CHAVE_A = "1" * 40 + "0001"  # chaves ficticias
 CHAVE_B = "2" * 40 + "0002"
+CHAVE_C, CHAVE_D = "3" * 40 + "0003", "4" * 40 + "0004"
 
 # palavras da tela (texto, esq, topo, larg, alt), como o palavras_tela devolve
 PALAVRAS = [
@@ -397,6 +398,44 @@ class Planilha(unittest.TestCase):
         self.assertEqual(erros, [])
         self.assertEqual([[i["item"] for i in n["itens"]] for n in notas], [["900135", "900266"], ["900135", "900266"]])
         self.assertEqual(snac0236.valores_rateio(notas[0]["itens"][1]), {"ident": "0", "base": "0", "aliquota": "0"})
+
+    def test_linhas_pintadas_de_verde(self):
+        from openpyxl import load_workbook
+        from openpyxl.styles import PatternFill
+        from openpyxl.styles.colors import Color
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", 900135, 5101, 1, 1, 0, 0, 0],
+            [None, None, None, None, None, 900266, 5101, 1, 1, 0, 0, 0],
+            [CHAVE_B, "30 47", "02/11/2026", 10, "FOB", 900135, 5102, 1, 1, 0, 0, 0],
+            [CHAVE_C, "30 48", "03/11/2026", 10, "CIF", 900135, 5101, 1, 1, 0, 0, 0],
+            [CHAVE_D, "30 49", "04/11/2026", 10, "CIF", 900135, 5101, 1, 1, 0, 0, 0],
+        ])
+        livro = load_workbook(caminho)
+        aba = livro.active
+        def pintar(linha, cor, ate=12):
+            for coluna in range(1, ate + 1):
+                aba.cell(row=linha, column=coluna).fill = PatternFill("solid", fgColor=cor)
+        pintar(2, core.VERDE_CONCLUIDA)  # nota A: o robo pintou as 2 linhas (a 2a com o cabecalho vazio)
+        pintar(3, core.VERDE_CONCLUIDA)
+        pintar(4, Color(theme=6, tint=0.6))  # nota B: verde do tema, a mao (accent3 = 9BBB59 no tema do openpyxl)
+        pintar(5, "FFFF00")  # nota C: amarelo nao e verde
+        pintar(6, "00B050", ate=5)  # nota D: so parte das celulas
+        livro.save(caminho)
+        registros, _, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual([r["verde"] for r in registros], [True, True, True, False, False])
+
+    def test_fundo_verde(self):
+        from openpyxl.styles import PatternFill
+        from openpyxl.styles.colors import Color
+        tema = core.cores_do_tema(None) or ["FFFFFF", "000000", "E7E6E6", "44546A", "4472C4", "ED7D31", "A5A5A5", "FFC000",
+                                             "5B9BD5", "70AD47"]
+        for cor, esperado in (("C6EFCE", True), ("00B050", True), ("92D050", True), ("FFFF00", False), ("00FFFF", False),
+                              ("FFFFFF", False), ("FFC7CE", False), ("E2EFDA", True), ("D9D9D9", False), ("FFEB9C", False), (Color(theme=9), True), (Color(theme=9, tint=0.8), True),
+                              (Color(theme=4), False), (Color(theme=9, tint=-0.5), True)):
+            self.assertEqual(core.fundo_verde(PatternFill("solid", fgColor=cor), tema), esperado, cor)
+        self.assertFalse(core.fundo_verde(PatternFill(fgColor="C6EFCE")))  # sem preenchimento solido
+        self.assertFalse(core.fundo_verde(PatternFill("solid", fgColor=Color(theme=9)), []))  # sem tema: nao adivinha
 
     def test_chave_em_branco_com_cabecalho(self):
         caminho = self.gravar([

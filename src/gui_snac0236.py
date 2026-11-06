@@ -192,6 +192,26 @@ class Pagina0236:
         self.caminho, self.registros, self.notas, self.erros, self.estados = caminho, registros, notas, erros, {}
         self.pintadas = set()
         self.escrever(f"Planilha {Path(caminho).name}: {len(notas)} nota(s), {len(registros)} item(ns).")
+        # notas ja pintadas de verde na planilha = ja feitas: o robo pula e segue pelas outras (usuario, 06/11/2026)
+        verdes, partidas = [], []
+        for nota in notas:
+            cores = [r.get("verde") for r in nota["itens"]]
+            if all(cores):
+                verdes.append(nota)
+                for r in nota["itens"]:
+                    self.estados[r["linha"]] = "ok"
+                    self.pintadas.add(r["linha"])
+            elif any(cores):
+                partidas.append(nota)
+        if verdes:
+            pendentes = [n for n in notas if n not in verdes]
+            self.escrever(f"{len(verdes)} nota(s) já pintada(s) de verde na planilha: o robô pula essas"
+                          + (f" e começa pela linha {pendentes[0]['itens'][0]['linha']}." if pendentes else
+                             " (todas as notas)."))
+        for nota in partidas:
+            linhas = ", ".join(str(r["linha"]) for r in nota["itens"] if r.get("verde"))
+            self.escrever(f"Aviso: a nota …{nota['chave'][-6:]} tem só parte das linhas em verde ({linhas}); "
+                          "o robô digita a nota inteira. Se ela já foi integrada, pinte todas as linhas dela de verde.")
         for erro in erros[:30]:
             self.escrever(f"Erro: {erro}")
         if len(erros) > 30:
@@ -200,8 +220,11 @@ class Pagina0236:
             self._status(f"{len(erros)} erro(s) na planilha: corrija no Excel e clique em Recarregar", "erro")
         elif not notas:
             self._status("A planilha não tem linhas preenchidas", "aviso")
+        elif len(verdes) == len(notas):
+            self._status("Todas as notas já estão em verde na planilha (concluídas)", "ok")
         else:
-            self._status(f"Pronta: {len(notas)} nota(s). Clique em Simular para ver as teclas ou Iniciar", "suave")
+            self._status(f"Pronta: {len(notas) - len(verdes)} nota(s) a fazer. Clique em Simular para ver as teclas ou "
+                         "Iniciar", "suave")
         for iid in self.tabela.get_children():
             self.tabela.delete(iid)
         self._repovoar()
@@ -289,6 +312,7 @@ class Pagina0236:
         if registros == self.registros and not erros:
             return True
         self.carregar(self.caminho)
+        # registros com a cor: linha pintada de verde no Excel antes do Iniciar tambem conta como alteracao
         messagebox.showwarning("Planilha alterada", "A planilha tinha alterações no Excel, que foram salvas. Recarreguei "
                                                     "a planilha: confira as linhas e clique em Iniciar de novo.")
         return False
