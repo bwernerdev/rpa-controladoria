@@ -511,10 +511,14 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
 TITULO_COLUNA = {"icms": ("icms", "cms", "oms", "doc forn", "forn")}
 
 
-def titulo_acima(imagem, caixa, tesseract):
-    """Texto (normalizado) do titulo da coluna logo acima do campo em foco, lido na hora (a grade pode ter rolado)."""
+def titulo_acima(imagem, caixa, tesseract, topo_linha1=None):
+    """Texto (normalizado) do titulo da coluna acima do campo em foco, lido na hora (a grade pode ter rolado). O titulo
+    fica acima da 1a linha da grade: `topo_linha1` (topo do mesmo campo no 1o item da nota) estica o recorte ate ele
+    nos itens de baixo; no 3o item de uma nota (06/11/2026, 1366x768) as 4 alturas acima do campo so pegavam os valores das linhas
+    1 e 2 (')[ 5903.470000 )[ 1292.100000') e o robo pausou com o cursor certo."""
     altura = caixa[3] - caixa[1]
-    area = (max(caixa[0] - 10, 0), max(caixa[1] - 4 * altura, 0), min(caixa[2] + 10, imagem.width), max(caixa[1] - 2, 1))
+    topo = min(caixa[1], topo_linha1) if topo_linha1 is not None else caixa[1]
+    area = (max(caixa[0] - 10, 0), max(topo - 4 * altura, 0), min(caixa[2] + 10, imagem.width), max(caixa[1] - 2, 1))
     if area[2] <= area[0] or area[3] <= area[1]:
         return ""
     recorte = imagem.crop(area)
@@ -1397,6 +1401,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         continue
                     foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
                 caixa_item = None  # Item da linha do item anterior
+                topos_linha1 = {}  # campo -> topo dele no 1o item (1a linha da grade): o titulo da coluna fica acima
                 for indice, r in enumerate(nota["itens"]):
                     marcar([r["linha"]], "executando")
                     if caixa_item is not None:
@@ -1412,7 +1417,9 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         if campo != "unit" and posicao_ok(campo, foco, rotulos, None, lidas) is False:
                             raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]}{local(foco)}")
                         if campo in TITULO_COLUNA and tesseract:
-                            titulo = titulo_acima(core.capturar(janela), foco, tesseract)
+                            if indice == 0:
+                                topos_linha1[campo] = foco[1]
+                            titulo = titulo_acima(core.capturar(janela), foco, tesseract, topos_linha1.get(campo))
                             registrar(f"  titulo acima do {NOME[campo]}: {titulo!r}", mostrar=False)
                             if not any(t in titulo for t in TITULO_COLUNA[campo]):
                                 raise Travou(campo, f"o cursor nao esta na coluna {NOME[campo]} (titulo acima: '{titulo}')")

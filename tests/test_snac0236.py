@@ -287,7 +287,7 @@ def ambiente(srp, palavras=PALAVRAS):
         # tela inteira: as palavras; recorte acima do foco: o titulo da coluna; recorte do Integrar: o botao
         "palavras_tela": lambda imagem, t, escala=2: (list(palavras) + srp.palavras_janelas() if imagem.size == (1600, 900) else
                                             srp.recorte() if imagem.size == (AREA[2] - AREA[0], AREA[3] - AREA[1]) else
-                                            srp.titulo() if imagem.height < 60 else
+                                            srp.titulo() if imagem.height < 60 or imagem.width < 120 else
                                             [("Tributos", 300, 80, 55, 12), ("OK", 360, 80, 20, 12)] if srp.rateio_aberto() else
                                             [("Integrar", 300, 80, 50, 12)]),
         "caminho_tesseract": lambda: pathlib.Path("tesseract-falso"),
@@ -531,6 +531,23 @@ class RateioTelaPequena(unittest.TestCase):
             achados = snac0236.ler_rateio(imagem, None)
         self.assertEqual(set(achados), {"terceiros", "ident", "base", "aliquota", "lancamento", "tributos_ok"})
         self.assertEqual(achados["ident"], (278, 393, 301, 401))
+
+
+class TituloAcima(unittest.TestCase):
+    def recorte(self, caixa, topo_linha1=None):
+        from PIL import Image
+        tamanhos, original = [], snac0236.core.palavras_tela
+        snac0236.core.palavras_tela = lambda img, _t, **_k: tamanhos.append(img.size) or [("icms", 0, 0, 10, 5)]
+        try:
+            self.assertEqual(snac0236.titulo_acima(Image.new("RGB", (1366, 768)), caixa, "tess", topo_linha1), "icms")
+        finally:
+            snac0236.core.palavras_tela = original
+        return tamanhos[0]
+
+    def test_3o_item_le_ate_acima_da_1a_linha(self):
+        # 1366x768 (06/11/2026): linhas da grade a cada 18 px, campo de 10 px; 1a linha em 421, 3a em 457
+        self.assertEqual(self.recorte((710, 421, 800, 431)), (110, 38))  # 1o item: 4 alturas acima, como antes
+        self.assertEqual(self.recorte((710, 457, 800, 467), topo_linha1=421), (110, 74))  # 3o: desde 4 alturas acima da 1a
 
 
 class TempoPrevisto(unittest.TestCase):
