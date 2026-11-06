@@ -250,6 +250,38 @@ def descrever(nota):
     return " ".join(partes) + " | clicar Integrar"
 
 
+# tempo previsto: nota de 1 item ~37-43 s no SRP real (log de 05/11/2026 18:21, Citrix 1366x768); cada item a mais
+# repete a grade e o Rateio (~25 s, chute ate medir). Depois da 1a nota, a medida corrige a conta (`tempo_previsto`).
+SEG_NOTA, SEG_ITEM_EXTRA = 40.0, 25.0
+
+
+def custo_previsto(notas):
+    """Segundos previstos para as `notas` pelos tempos de referencia (antes de medir)."""
+    return sum(SEG_NOTA + SEG_ITEM_EXTRA * (len(n["itens"]) - 1) for n in notas)
+
+
+def tempo_previsto(feitas, faltam, gasto):
+    """Segundos que faltam para as notas `faltam`, depois de `feitas` terem levado `gasto` segundos (sem as pausas).
+    Sem nota feita = so os tempos de referencia; com notas feitas = a referencia corrigida pelo ritmo medido (o fator
+    respeita a mistura de notas de 1 e de varios itens)."""
+    restante = custo_previsto(faltam)
+    referencia = custo_previsto(feitas)
+    if not feitas or referencia <= 0 or gasto <= 0:
+        return restante
+    return restante * gasto / referencia
+
+
+def texto_duracao(segundos):
+    """'~1 h 52 min', '~14 min', '~40 s' (aproximado, para o usuario)."""
+    segundos = max(0, round(segundos))
+    if segundos >= 3600:
+        horas, minutos = divmod(round(segundos / 60), 60)
+        return f"~{horas} h {minutos:02d} min"
+    if segundos >= 90:
+        return f"~{round(segundos / 60)} min"
+    return f"~{max(5, round(segundos / 5) * 5)} s"
+
+
 # ---------- tela ----------
 def frases(palavras, folga=15):
     """Junta palavras vizinhas da mesma linha em frases (rotulos): [(texto normalizado, (esq, topo, dir, base))]."""

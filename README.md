@@ -68,6 +68,8 @@ Para usar, deixe o cursor no campo **Chave Acesso NF-e** e clique em Iniciar. O 
 3. integra e trata as janelas do SRP: frete alterado para CIF, Resumo dos Tributos, Frete LTCC e Integrado com Sucesso;
 4. volta para a Chave da próxima nota.
 
+Enquanto roda, abaixo da barra de progresso aparece a nota atual, o tempo decorrido e o **tempo previsto para a conclusão** (com o horário de término). Antes da 1ª nota a previsão usa ~40 s por nota e ~25 s por item a mais; depois, o ritmo medido. O tempo pausado não entra na conta. A confirmação do Iniciar também mostra o tempo previsto.
+
 Se algo não confere, ele pausa: termine a nota à mão no SRP, deixe o cursor na Chave Acesso NF-e da próxima nota e clique em **Continuar**.
 
 ## Arquivos ao lado do exe

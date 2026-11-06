@@ -533,6 +533,29 @@ class RateioTelaPequena(unittest.TestCase):
         self.assertEqual(achados["ident"], (278, 393, 301, 401))
 
 
+class TempoPrevisto(unittest.TestCase):
+    def notas(self, *itens):
+        return [{"itens": [{}] * n} for n in itens]
+
+    def test_sem_nota_feita_usa_os_tempos_de_referencia(self):
+        faltam = self.notas(1, 2, 1)
+        esperado = 3 * snac0236.SEG_NOTA + snac0236.SEG_ITEM_EXTRA
+        self.assertEqual(snac0236.tempo_previsto([], faltam, 0), esperado)
+
+    def test_ritmo_medido_corrige_a_referencia(self):
+        feitas, faltam = self.notas(1, 1), self.notas(1, 3)
+        # 2 notas de 1 item levaram o dobro da referencia: o resto tambem vai levar o dobro
+        gasto = 2 * 2 * snac0236.SEG_NOTA
+        esperado = 2 * (2 * snac0236.SEG_NOTA + 2 * snac0236.SEG_ITEM_EXTRA)
+        self.assertAlmostEqual(snac0236.tempo_previsto(feitas, faltam, gasto), esperado)
+
+    def test_texto_duracao(self):
+        self.assertEqual(snac0236.texto_duracao(6720), "~1 h 52 min")
+        self.assertEqual(snac0236.texto_duracao(840), "~14 min")
+        self.assertEqual(snac0236.texto_duracao(42), "~40 s")
+        self.assertEqual(snac0236.texto_duracao(-3), "~5 s")
+
+
 class NfReferencia(unittest.TestCase):
     def test_botao_ok_e_a_frase_ok_mais_baixa(self):
         self.assertEqual(snac0236.botao_ok_referencia(snac0236.frases(REFERENCIA)), BOTAO_OK_REF)

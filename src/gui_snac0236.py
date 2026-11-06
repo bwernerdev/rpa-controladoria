@@ -2,6 +2,7 @@
 redesenhada por tema ou monitor); `montar(pai)` refaz so os widgets. `ui` e o modulo gui (COR, fonte, px, ESTADOS)."""
 import queue
 import threading
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
@@ -24,7 +25,9 @@ class Pagina0236:
         # passo a passo: 0,5 s entre as acoes, narradas no console (para acompanhar os testes no SRP real)
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
         self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
+        self.execucao = None  # andamento da execucao em curso, para o tempo previsto
         app.after(100, self._drenar)
+        app.after(1000, self._tique)
 
     def _gravar_passo(self):
         self.app.config_usuario["passo_a_passo_0236"] = self.passo_a_passo.get()
@@ -75,6 +78,9 @@ class Pagina0236:
         self.status.pack(fill="x")
         self.barra = ui.BarraFina(progresso)
         self.barra.pack(fill="x", pady=(4, 0))
+        # tempo previsto para a conclusao (so durante a execucao; `_atualizar_previsao`, a cada segundo)
+        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte(9), anchor="w")
+        self._atualizar_previsao()
 
         cartao = self.app._cartao(pai)
         cartao.pack(fill="both", expand=True, pady=(px(12), 0))
@@ -227,7 +233,9 @@ class Pagina0236:
         itens = sum(len(n["itens"]) for n in notas)
         if not messagebox.askokcancel(
                 "Iniciar", f"Preencher {len(notas)} nota(s) ({itens} item(ns)) na SNAC0236, a partir da linha "
-                           f"{notas[0]['itens'][0]['linha']}?\n\nDepois do OK você terá 5 segundos para clicar no campo "
+                           f"{notas[0]['itens'][0]['linha']}?\n\nTempo previsto: "
+                           f"{snac0236.texto_duracao(snac0236.custo_previsto(notas))} (sem contar as pausas; "
+                           "a previsão se ajusta depois da 1ª nota).\n\nDepois do OK você terá 5 segundos para clicar no campo "
                            "Chave Acesso NF-e (vazio).\n\nO robô clica em Integrar no fim de cada nota e pausa para você "
                            "conferir; para a próxima, deixe o cursor na Chave e clique em Continuar."):
             return
@@ -237,9 +245,12 @@ class Pagina0236:
         self.parar.clear()
         self.retomar.clear()
         self.ocupado = self.app.ocupado = True
+        self.execucao = {"inicio": time.time(), "notas": notas, "feitas": 0, "gasto": 0.0, "tempo_pausado": 0.0,
+                         "pausado_desde": None}
         self.app._atualizar_botoes()
         self._botoes()
         self._status("Iniciando...", "destaque")
+        self._atualizar_previsao()
         self.soltar_atalhos, falhas = atalhos_globais({VK_F8: lambda: self.fila.put(("parar",))})
         self.escrever("Aviso: F8 ja esta em uso por outro programa; use o botao Parar ou o mouse no canto." if falhas
                       else "Atalho: F8 para.")
@@ -287,7 +298,65 @@ class Pagina0236:
             pass  # widgets sendo refeitos (tema/monitor): o resto sai na proxima volta
         self.app.after(100, self._drenar)
 
+    # ---------- tempo previsto ----------
+    def _tique(self):
+        try:
+            self._atualizar_previsao()
+        except (tk.TclError, AttributeError):
+            pass  # widgets sendo refeitos (tema/monitor) ou a aba ainda nao montada
+        finally:
+            self.app.after(1000, self._tique)
+
+    def _tempo_util(self, agora=None):
+        """Segundos desde o Iniciar, sem o tempo pausado (a previsao nao conta o tempo parado esperando o usuario)."""
+        e, agora = self.execucao, agora or time.time()
+        pausado = e["tempo_pausado"] + (agora - e["pausado_desde"] if e["pausado_desde"] else 0)
+        return agora - e["inicio"] - pausado
+
+    def _contar_execucao(self, nome):
+        e = self.execucao
+        if not e:
+            return
+        agora = time.time()
+        if nome == "pausado" and not e["pausado_desde"]:
+            e["pausado_desde"] = agora
+        elif nome != "pausado" and e["pausado_desde"]:
+            e["tempo_pausado"] += agora - e["pausado_desde"]
+            e["pausado_desde"] = None
+        feitas = sum(1 for n in e["notas"] if all(self.estados.get(r["linha"]) == "ok" for r in n["itens"]))
+        if feitas > e["feitas"]:
+            e["feitas"], e["gasto"] = feitas, self._tempo_util(agora)
+
+    def _atualizar_previsao(self):
+        e = self.execucao
+        if not (e and self.ocupado):
+            self.previsao.pack_forget()
+            return
+        notas, feitas = e["notas"], e["feitas"]
+        util = self._tempo_util()
+        texto = f"Nota {min(feitas + 1, len(notas))} de {len(notas)}  ·  decorrido {self.ui.duracao(time.time() - e['inicio'])}"
+        if feitas >= len(notas):
+            texto += "  ·  terminando…"
+        else:
+            # previsto para as que faltam menos o que a nota atual ja levou (a contagem desce a cada segundo)
+            resta = snac0236.tempo_previsto(notas[:feitas], notas[feitas:], e["gasto"]) - (util - e["gasto"])
+            resta = max(resta, snac0236.SEG_NOTA * 0.1 * (len(notas) - feitas))
+            termino = time.strftime("%H:%M", time.localtime(time.time() + resta))
+            texto += f"  ·  previsto: {snac0236.texto_duracao(resta)} restantes (término ~{termino})"
+            if e["pausado_desde"]:
+                texto += "  ·  pausado: o tempo parado não entra na conta"
+            elif not feitas:
+                texto += "  ·  estimativa inicial"
+        self.previsao.configure(text=texto)
+        if not self.previsao.winfo_ismapped():
+            self.previsao.pack(fill="x", pady=(4, 0))
+
     def _fim(self):
+        if self.execucao:
+            e, self.execucao = self.execucao, None
+            self.escrever(f"Tempo total: {self.ui.duracao(time.time() - e['inicio'])} ({e['feitas']} de "
+                          f"{len(e['notas'])} nota(s) concluída(s)).")
+        self._atualizar_previsao()
         feitas, total = self._feitas(), len(self.registros)
         if total and feitas == total:
             self._status("Tudo concluído", "ok")
@@ -301,6 +370,7 @@ class Pagina0236:
             self.pausado = True
         elif nome == "executando":
             self.pausado = False
+        self._contar_execucao(nome)
         iid = self.iids.get(linha)
         if iid:
             indice = next((i for i, n in enumerate(self.notas) if any(r["linha"] == linha for r in n["itens"])), 0)
