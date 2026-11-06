@@ -7,8 +7,8 @@ App separado, nao mexe no robo. Dois testes:
    cada combinacao (jeito de envio x janela do Citrix). Depois voce olha o campo: os digitos que apareceram dizem
    quais combinacoes funcionam. Apague o campo depois (nada e gravado no SRP sem voce).
 
-3. Enter, Backspace e clique: com a SNAC0236 vazia e o foco em OUTRO programa, clica em "Outras Observacoes" sem
-   mexer o mouse, digita 9, apaga (End + Backspace), da Enter e clica de volta na Chave Acesso. Confere cada passo
+3. Enter, Backspace e clique: com a SNAC0236 vazia e o foco em OUTRO programa, clica em "Outras Observacoes" (o
+   mouse vai ao campo por ~0,1 s e volta: o Citrix usa a posicao real do mouse), digita 9, apaga (End + Backspace), da Enter e clica de volta na Chave Acesso. Confere cada passo
    sozinho pela captura (campo ciano e texto do campo). Nao grava nada no SRP.
 
 Imagens e resultado ficam em logs/teste_sem_foco (fora do git: podem ter dados da empresa).
@@ -117,15 +117,24 @@ def tecla(hwnd, vk):
 
 
 def clique(hwnd, principal, x, y):
-    """Clique em (x, y) da imagem da janela do Citrix, por mensagem: o mouse de verdade nao se mexe."""
+    """Clique em (x, y) da imagem da janela do Citrix, por mensagem (o foco fica no seu programa). O Citrix ignora a
+    posicao da mensagem e usa a do mouse de verdade (teste de 06/11/2026: o clique caiu onde o mouse estava): o mouse
+    vai ao alvo por ~0,1 s e volta para onde estava."""
     esq, topo, _, _ = win32gui.GetWindowRect(principal)
-    cx, cy = win32gui.ScreenToClient(hwnd, (esq + x, topo + y))
+    alvo = (esq + x, topo + y)
+    cx, cy = win32gui.ScreenToClient(hwnd, alvo)
     posicao = win32api.MAKELONG(cx, cy)
-    win32api.PostMessage(hwnd, win32con.WM_MOUSEMOVE, 0, posicao)
-    time.sleep(0.05)
-    win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, posicao)
-    time.sleep(0.05)
-    win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, posicao)
+    volta = win32api.GetCursorPos()
+    try:
+        win32api.SetCursorPos(alvo)
+        win32api.PostMessage(hwnd, win32con.WM_MOUSEMOVE, 0, posicao)
+        time.sleep(0.03)
+        win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, posicao)
+        time.sleep(0.03)
+        win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, posicao)
+        time.sleep(0.06)  # o Citrix le a posicao do mouse ao tratar a mensagem
+    finally:
+        win32api.SetCursorPos(volta)
 
 
 class App(tk.Tk):
