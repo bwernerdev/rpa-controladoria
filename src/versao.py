@@ -1,3 +1,3 @@
 """Versao do app (aparece na janela e nas propriedades do .exe)."""
-VERSAO = "1.12.6"
+VERSAO = "1.12.7"
 NOME = "Robô SRP"
