@@ -74,6 +74,8 @@ Cada nota concluída fica **verde no app e na planilha**: o robô pinta de verde
 
 Ao carregar a planilha, as notas que **já estão verdes** (pintadas pelo robô ou por você, em qualquer tom de verde, em todas as células preenchidas da linha) contam como feitas: aparecem como Concluídas e o robô começa pela primeira nota que não está verde ("Continuar da linha N"). Nota com só parte das linhas em verde é digitada inteira, com um aviso.
 
+Para lançar só algumas notas, preencha **NFs a lançar** (ao lado de "Passo a passo"; só números) antes de clicar em Iniciar: com 10, o robô lança as 10 primeiras notas pendentes e para. No Iniciar seguinte ele continua pelas próximas 10. Em branco (ou 0), lança todas. O tempo previsto mostra quantas serão lançadas ("para 10 de 37 nota(s)").
+
 Depois de importar a planilha (sem erros), abaixo da barra de progresso aparece o **tempo previsto** para as notas pendentes e o horário de término se iniciar agora. Enquanto roda, no mesmo lugar aparece a nota atual, o tempo decorrido e o **tempo previsto para a conclusão** (com o horário de término). Antes da 1ª nota a previsão usa ~40 s por nota e ~25 s por item a mais; depois, o ritmo medido. O tempo pausado não entra na conta. A confirmação do Iniciar também mostra o tempo previsto.
 
 Se algo não confere, ele pausa: termine a nota à mão no SRP, deixe o cursor na Chave Acesso NF-e da próxima nota e clique em **Continuar**.

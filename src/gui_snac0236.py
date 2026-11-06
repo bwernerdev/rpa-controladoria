@@ -26,6 +26,9 @@ class Pagina0236:
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
         self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
         self.execucao = None  # andamento da execucao em curso, para o tempo previsto
+        # quantas NFs lancar nesta execucao (usuario, 06/11/2026): vazio = todas as pendentes; so numeros
+        self.qtd_nfs = tk.StringVar(app, value="")
+        self.qtd_nfs.trace_add("write", lambda *_: self._mudou_qtd())
         # linhas das notas concluidas pintadas de verde na planilha (usuario, 06/11/2026), numa thread so
         self.fila_pintar, self.pintadas, self.avisou_excel = queue.Queue(), set(), False
         threading.Thread(target=self._pintor, daemon=True).start()
@@ -73,6 +76,14 @@ class Pagina0236:
         self.c_passo.pack(side="left", padx=(px(14), 0))
         self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.b_parar.pack(side="right")
+        # quantidade de NFs a lancar: so digitos (ate 4); vazio = todas. Sem rotulo de ajuda (nao cabe ao lado do
+        # Parar): a linha do tempo previsto mostra "para N de M nota(s)"
+        tk.Label(botoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte(9)).pack(
+            side="left", padx=(px(14), px(6)))
+        so_numeros = (pai.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
+        self.e_qtd = ttk.Entry(botoes, textvariable=self.qtd_nfs, width=5, justify="center", font=fonte(10),
+                               validate="key", validatecommand=so_numeros)
+        self.e_qtd.pack(side="left")
 
         progresso = tk.Frame(pai, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
@@ -236,6 +247,23 @@ class Pagina0236:
     def _pendentes(self):
         return [n for n in self.notas if any(self.estados.get(r["linha"]) != "ok" for r in n["itens"])]
 
+    def _limite_nfs(self):
+        """Quantidade de NFs digitada (None = vazio ou 0 = todas)."""
+        texto = self.qtd_nfs.get().strip()
+        return int(texto) if texto.isdigit() and int(texto) > 0 else None
+
+    def _lote(self):
+        """Notas que o Iniciar vai lancar: as pendentes, so as primeiras `_limite_nfs` se houver numero."""
+        pendentes = self._pendentes()
+        limite = self._limite_nfs()
+        return pendentes[:limite] if limite else pendentes
+
+    def _mudou_qtd(self):
+        try:
+            self._atualizar_previsao()
+        except (tk.TclError, AttributeError):
+            pass  # aba ainda nao montada
+
     def _botoes(self):
         pronto = bool(self.notas) and not self.erros and not self.ocupado and not self.app.ocupado
         pendentes = self._pendentes()
@@ -246,6 +274,7 @@ class Pagina0236:
         self.b_parar.configure(state="normal" if self.ocupado else "disabled")
         self.b_continuar.configure(state="normal" if self.ocupado and self.pausado else "disabled")
         self.c_passo.configure(state="disabled" if self.ocupado else "normal")
+        self.e_qtd.configure(state="disabled" if self.ocupado else "normal")
 
     def simular(self):
         for nota in self.notas:
@@ -253,16 +282,19 @@ class Pagina0236:
         self._status("Simulação no console (nada foi digitado)", "suave")
 
     def iniciar(self):
-        notas = self._pendentes()
+        notas = self._lote()
         if not notas:
             return
+        faltam = len(self._pendentes())
         if not citrix_aberto():
             messagebox.showwarning("Citrix não encontrado", "Não achei a janela do Citrix (Desktop Viewer).\nAbra a SNAC0236 e tente de novo.")
             return
         itens = sum(len(n["itens"]) for n in notas)
         if not messagebox.askokcancel(
                 "Iniciar", f"Preencher {len(notas)} nota(s) ({itens} item(ns)) na SNAC0236, a partir da linha "
-                           f"{notas[0]['itens'][0]['linha']}?\n\nTempo previsto: "
+                           f"{notas[0]['itens'][0]['linha']}?"
+                           + (f" Das {faltam} pendentes, ficam {faltam - len(notas)} para depois (NFs a lançar: "
+                              f"{len(notas)})." if len(notas) < faltam else "") + "\n\nTempo previsto: "
                            f"{snac0236.texto_duracao(snac0236.custo_previsto(notas))} (sem contar as pausas; "
                            "a previsão se ajusta depois da 1ª nota).\n\nDepois do OK você terá 5 segundos para clicar no campo "
                            "Chave Acesso NF-e (vazio).\n\nO robô clica em Integrar no fim de cada nota e pausa para você "
@@ -389,14 +421,17 @@ class Pagina0236:
         e = self.execucao
         if not (e and self.ocupado):
             # antes de iniciar (planilha importada sem erros): previsao das notas que faltam (usuario, 06/11/2026)
-            pendentes = self._pendentes() if self.notas and not self.erros and not self.ocupado else []
+            # com "NFs a lancar" preenchido: so as primeiras N pendentes (usuario, 06/11/2026)
+            pendentes = self._lote() if self.notas and not self.erros and not self.ocupado else []
             if not pendentes:
                 self.previsao.pack_forget()
                 return
             itens = sum(len(n["itens"]) for n in pendentes)
+            faltam = len(self._pendentes())
             termino = time.strftime("%H:%M", time.localtime(time.time() + snac0236.custo_previsto(pendentes)))
             self.previsao.configure(text=f"Tempo previsto: {snac0236.texto_duracao(snac0236.custo_previsto(pendentes))} "
-                                         f"para {len(pendentes)} nota(s), {itens} item(ns)  ·  se iniciar agora, término "
+                                         f"para {len(pendentes)}" + (f" de {faltam}" if len(pendentes) < faltam else "")
+                                         + f" nota(s), {itens} item(ns)  ·  se iniciar agora, término "
                                          f"~{termino}  ·  sem contar as pausas")
             if not self.previsao.winfo_ismapped():
                 self.previsao.pack(fill="x", pady=(4, 0))
