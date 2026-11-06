@@ -105,6 +105,49 @@ class Tela(unittest.TestCase):
         self.assertFalse(core.conta_editavel(custo, (656, 503, 740, 514)))
 
 
+class PintarLinhas(unittest.TestCase):
+    def planilha(self, pasta):
+        caminho = pathlib.Path(pasta) / "notas.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Notas"
+        ws.append(["CHAVE NF", "ITEM", "QTD FISCAL"])
+        for i in range(4):
+            ws.append(["1" * 44, "900135", 100 + i])
+        wb.create_sheet("Outra")
+        wb.active = 0
+        wb.save(caminho)
+        return caminho
+
+    def test_pinta_so_as_linhas_pedidas_nas_colunas_do_cabecalho(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            self.assertEqual(core.pintar_linhas(caminho, [3, 2, 3]), "arquivo")
+            ws = load_workbook(caminho).active
+            verde = lambda c: (c.fill.fgColor.rgb or "")[-6:] == core.VERDE_CONCLUIDA  # noqa: E731
+            self.assertTrue(all(verde(ws.cell(row=l, column=c)) for l in (2, 3) for c in (1, 2, 3)))
+            self.assertFalse(any(verde(ws.cell(row=l, column=c)) for l in (1, 4, 5) for c in (1, 2, 3)))
+            self.assertFalse(verde(ws.cell(row=2, column=4)))  # fora do cabecalho
+            self.assertEqual((ws.title, ws.cell(row=3, column=3).value), ("Notas", 101))  # valores e aba ativa ficam
+            self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])  # sem temporario
+
+    def test_planilha_travada_pinta_no_excel_aberto(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            chamadas, original_replace, original_excel = [], core.os.replace, core._pintar_no_excel
+
+            def travado(*_a):
+                raise PermissionError("aberta no Excel")
+            core.os.replace, core._pintar_no_excel = travado, lambda *a: chamadas.append(a)
+            try:
+                self.assertEqual(core.pintar_linhas(caminho, [4]), "excel")
+            finally:
+                core.os.replace, core._pintar_no_excel = original_replace, original_excel
+            self.assertEqual(chamadas, [(caminho, "Notas", [4], 3, core.VERDE_CONCLUIDA)])
+            self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])
+
+
 class Progresso(unittest.TestCase):
     def test_salva_e_so_vale_para_a_mesma_planilha(self):
         from unittest import mock

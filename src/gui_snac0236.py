@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
 import snac0236
-from core import VK_F8, atalhos_globais, citrix_aberto, pasta_logs
+from core import VK_F8, atalhos_globais, citrix_aberto, pasta_logs, pintar_linhas
 
 
 class Pagina0236:
@@ -26,6 +26,9 @@ class Pagina0236:
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
         self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
         self.execucao = None  # andamento da execucao em curso, para o tempo previsto
+        # linhas das notas concluidas pintadas de verde na planilha (usuario, 06/11/2026), numa thread so
+        self.fila_pintar, self.pintadas, self.avisou_excel = queue.Queue(), set(), False
+        threading.Thread(target=self._pintor, daemon=True).start()
         app.after(100, self._drenar)
         app.after(1000, self._tique)
 
@@ -97,7 +100,7 @@ class Pagina0236:
         self.tabela.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
         self.tabela.tag_configure("nota_par", background=COR["zebra"])
         self.tabela.tag_configure("nota_impar", background=COR["cartao"])
-        self.tabela.tag_configure("ok", foreground=COR["ok"])
+        self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
         self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
         self.tabela.tag_configure("pausado", background=COR["aviso_fundo"], foreground=COR["aviso"])
@@ -129,7 +132,8 @@ class Pagina0236:
 
     def _tags(self, linha, zebra):
         nome = self.estados.get(linha, "pendente")
-        return (nome,) if nome in ("erro", "executando", "pausado") else (zebra, nome)
+        # concluida = fundo verde (usuario, 06/11/2026); a zebra so nas linhas sem fundo proprio (ela venceria)
+        return (nome,) if nome in ("erro", "executando", "pausado", "ok") else (zebra, nome)
 
     def _pintar_zona(self):
         COR, px, fonte = self.ui.COR, self.ui.px, self.ui.fonte
@@ -186,6 +190,7 @@ class Pagina0236:
             messagebox.showerror("Planilha", f"Não consegui ler a planilha:\n{erro}")
             return
         self.caminho, self.registros, self.notas, self.erros, self.estados = caminho, registros, notas, erros, {}
+        self.pintadas = set()
         self.escrever(f"Planilha {Path(caminho).name}: {len(notas)} nota(s), {len(registros)} item(ns).")
         for erro in erros[:30]:
             self.escrever(f"Erro: {erro}")
@@ -246,6 +251,7 @@ class Pagina0236:
         self.parar.clear()
         self.retomar.clear()
         self.ocupado = self.app.ocupado = True
+        self.avisou_excel = False
         self.execucao = {"inicio": time.time(), "notas": notas, "feitas": 0, "gasto": 0.0, "tempo_pausado": 0.0,
                          "pausado_desde": None}
         self.app._atualizar_botoes()
@@ -383,6 +389,8 @@ class Pagina0236:
         elif nome == "executando":
             self.pausado = False
         self._contar_execucao(nome)
+        if nome == "ok" and self.ocupado:
+            self._pintar_nota(linha)
         iid = self.iids.get(linha)
         if iid:
             indice = next((i for i, n in enumerate(self.notas) if any(r["linha"] == linha for r in n["itens"])), 0)
@@ -392,6 +400,43 @@ class Pagina0236:
                 self.tabela.see(iid)
         self.barra.configure(value=self._feitas())
         self._botoes()
+
+    # ---------- linhas concluidas pintadas na planilha ----------
+    def _pintar_nota(self, linha):
+        """Nota da `linha` toda concluida: manda as linhas dela para o pintor (uma vez por nota)."""
+        nota = next((n for n in self.notas if any(r["linha"] == linha for r in n["itens"])), None)
+        if not nota or not self.caminho:
+            return
+        linhas = [r["linha"] for r in nota["itens"]]
+        if all(self.estados.get(l) == "ok" for l in linhas) and not set(linhas) <= self.pintadas:
+            self.pintadas.update(linhas)
+            self.fila_pintar.put((self.caminho, linhas))
+
+    def _pintor(self):
+        """Thread unica: uma gravacao da planilha por vez; junta as notas que terminaram enquanto pintava."""
+        while True:
+            pedidos = [self.fila_pintar.get()]
+            while True:
+                try:
+                    pedidos.append(self.fila_pintar.get_nowait())
+                except queue.Empty:
+                    break
+            por_planilha = {}
+            for caminho, linhas in pedidos:
+                por_planilha.setdefault(caminho, []).extend(linhas)
+            for caminho, linhas in por_planilha.items():
+                lista = ", ".join(str(l) for l in sorted(linhas))
+                try:
+                    como = pintar_linhas(caminho, linhas)
+                except Exception as erro:  # pintar nunca para o robo
+                    self.fila.put(f"Aviso: não pintei de verde a(s) linha(s) {lista} na planilha ({erro}).")
+                    continue
+                if como == "excel" and not self.avisou_excel:
+                    self.avisou_excel = True
+                    self.fila.put("Aviso: a planilha está aberta no Excel: pinto as linhas concluídas lá; salve a "
+                                  "planilha no Excel para manter as cores.")
+                self.fila.put(f"  Planilha: linha(s) {lista} pintada(s) de verde"
+                              + (" (no Excel aberto)" if como == "excel" else ""))
 
     # ---------- mensagens ----------
     def escrever(self, texto):

@@ -29,14 +29,14 @@ PALETAS = {
     "claro": {
         "fundo": "#f6f7f9", "cartao": "#ffffff", "borda": "#e2e5ea", "borda_forte": "#c9ced6", "texto": "#1f2328",
         "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
-        "ok": "#1a7f37", "ok_fundo": "#f0f7f2", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
+        "ok": "#1a7f37", "ok_fundo": "#d9f2e1", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
         "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
         "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb",
     },
     "escuro": {
         "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
         "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
-        "ok": "#57c27a", "ok_fundo": "#1c2a21", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
+        "ok": "#57c27a", "ok_fundo": "#1f3d2a", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
         "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
         "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730",
     },
@@ -516,7 +516,7 @@ class App(RaizTk):
         # ordem importa: tags configuradas depois tem prioridade (o fundo do estado vence o da zebra)
         self.tabela.tag_configure("par", background=COR["zebra"])
         self.tabela.tag_configure("impar", background=COR["cartao"])
-        self.tabela.tag_configure("ok", foreground=COR["ok"])
+        self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
         self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
         self.tabela.tag_configure("pausado", background=COR["aviso_fundo"], foreground=COR["aviso"])
@@ -607,8 +607,9 @@ class App(RaizTk):
                      font=fonte(9)).pack(side="left")
 
     def _tags(self, linha, nome):
-        """Zebra so nas linhas sem fundo proprio: no Treeview a cor de fundo da zebra venceria a do estado."""
-        return (nome,) if nome in ("erro", "executando", "pausado") else (self.zebra.get(linha, "impar"), nome)
+        """Zebra so nas linhas sem fundo proprio: no Treeview a cor de fundo da zebra venceria a do estado. Concluida =
+        fundo verde (usuario, 06/11/2026)."""
+        return (nome,) if nome in ("erro", "executando", "pausado", "ok") else (self.zebra.get(linha, "impar"), nome)
 
     def _valores(self, r):
         conta = (r["conta"] or "—") + (MARCA_TROCADA if r["linha"] in self.trocas else "")

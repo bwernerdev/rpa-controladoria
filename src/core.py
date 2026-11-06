@@ -541,6 +541,77 @@ def arquivo_progresso():
     return pasta_base() / "progresso.json"
 
 
+# ---------- linhas concluidas pintadas na planilha (usuario, 06/11/2026) ----------
+VERDE_CONCLUIDA = "C6EFCE"  # o verde do estilo "Bom" do Excel
+
+
+def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA):
+    """Fundo `cor` nas `linhas` da aba ativa (a que o robo le), nas colunas do cabecalho. Planilha fechada: grava o
+    arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade). Aberta no Excel (o Excel
+    trava o arquivo): pinta na janela do Excel aberta, sem salvar (o usuario salva). Devolve 'arquivo' ou 'excel';
+    falha = excecao (quem chama avisa e segue: pintar nunca para o robo)."""
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+
+    caminho = Path(caminho)
+    linhas = sorted(set(linhas))
+    if not linhas:
+        return None
+    livro = load_workbook(caminho, keep_vba=caminho.suffix.lower() == ".xlsm")
+    aba = livro.active
+    colunas = max((c.column for c in aba[1] if c.value not in (None, "")), default=1)
+    fundo = PatternFill("solid", fgColor=cor)
+    for linha in linhas:
+        for coluna in range(1, colunas + 1):
+            aba.cell(row=linha, column=coluna).fill = fundo
+    temporario = caminho.with_name(f"~rpa-{caminho.name}")
+    try:
+        livro.save(temporario)
+        os.replace(temporario, caminho)
+        return "arquivo"
+    except PermissionError:
+        pass  # planilha aberta no Excel
+    finally:
+        if temporario.exists():
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
+    _pintar_no_excel(caminho, aba.title, linhas, colunas, cor)
+    return "excel"
+
+
+def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor):
+    """Pinta pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o arquivo nem salva."""
+    import pythoncom
+    import win32com.client
+    from openpyxl.utils import get_column_letter
+
+    r, g, b = (int(cor[i:i + 2], 16) for i in (0, 2, 4))
+    alvo = os.path.normcase(os.path.abspath(caminho))
+    pythoncom.CoInitialize()
+    try:
+        # o Excel registra cada pasta aberta na tabela de objetos em execucao (ROT) pelo caminho: acha a planilha em
+        # qualquer janela do Excel, sem abrir nada (GetObject(caminho) abriria o arquivo se ele nao estivesse aberto)
+        livro, contexto = None, pythoncom.CreateBindCtx(0)
+        for moniker in pythoncom.GetRunningObjectTable():
+            try:
+                if os.path.normcase(moniker.GetDisplayName(contexto, None)) == alvo:
+                    objeto = pythoncom.GetRunningObjectTable().GetObject(moniker)
+                    livro = win32com.client.Dispatch(objeto.QueryInterface(pythoncom.IID_IDispatch))
+                    break
+            except pythoncom.com_error:
+                continue
+        if livro is None:
+            raise RuntimeError("a planilha está travada por outro programa e não achei ela aberta no Excel")
+        aba = livro.Worksheets(nome_aba)
+        ultima = get_column_letter(colunas)
+        for linha in linhas:
+            aba.Range(f"A{linha}:{ultima}{linha}").Interior.Color = r + g * 256 + b * 65536
+    finally:
+        pythoncom.CoUninitialize()
+
+
 def assinatura_planilha(registros):
     """Identifica a planilha pelo conteudo (nao pelo caminho): mudou uma celula, o andamento salvo nao vale mais."""
     texto = json.dumps([[r["linha"], r["item"], r["custo"], r["conta"], r["quantidade"]] for r in registros])
