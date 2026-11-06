@@ -64,26 +64,51 @@ class Pagina0236:
         for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
             self.saida.tag_configure(tipo, foreground=COR[cor])
 
-        botoes = tk.Frame(pai, bg=COR["fundo"])
-        botoes.pack(side="bottom", fill="x", pady=(12, 10))
+        # barra de baixo responsiva (usuario, 06/11/2026): botoes a esquerda, Parar a direita e as opcoes (Passo a
+        # passo, NFs a lancar) no meio; se nao couberem na largura (janela estreita), descem para uma linha propria
+        barra = tk.Frame(pai, bg=COR["fundo"])
+        barra.pack(side="bottom", fill="x", pady=(12, 10))
+        barra.columnconfigure(2, weight=1)
+        botoes = tk.Frame(barra, bg=COR["fundo"])
+        botoes.grid(row=0, column=0, sticky="w")
         self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
         self.b_iniciar.pack(side="left")
         self.b_continuar = ttk.Button(botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
         self.b_continuar.pack(side="left", padx=(8, 0))
         self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
         self.b_simular.pack(side="left", padx=(8, 0))
-        self.c_passo = ttk.Checkbutton(botoes, text="Passo a passo (0,5 s entre ações)", variable=self.passo_a_passo)
-        self.c_passo.pack(side="left", padx=(px(14), 0))
-        self.b_parar = ttk.Button(botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
-        self.b_parar.pack(side="right")
-        # quantidade de NFs a lancar: so digitos (ate 4); vazio = todas. Sem rotulo de ajuda (nao cabe ao lado do
-        # Parar): a linha do tempo previsto mostra "para N de M nota(s)"
-        tk.Label(botoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte(9)).pack(
+        opcoes = tk.Frame(barra, bg=COR["fundo"])
+        self.c_passo = ttk.Checkbutton(opcoes, text="Passo a passo (0,5 s entre ações)", variable=self.passo_a_passo)
+        self.c_passo.pack(side="left")
+        # quantidade de NFs a lancar: so digitos (ate 4); vazio = todas. A linha do tempo previsto mostra
+        # "para N de M nota(s)"
+        tk.Label(opcoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte(9)).pack(
             side="left", padx=(px(14), px(6)))
         so_numeros = (pai.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
-        self.e_qtd = ttk.Entry(botoes, textvariable=self.qtd_nfs, width=5, justify="center", font=fonte(10),
+        self.e_qtd = ttk.Entry(opcoes, textvariable=self.qtd_nfs, width=5, justify="center", font=fonte(10),
                                validate="key", validatecommand=so_numeros)
         self.e_qtd.pack(side="left")
+        self.b_parar = ttk.Button(barra, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_parar.grid(row=0, column=3, sticky="e", padx=(px(14), 0))
+        embaixo = [None]
+
+        def arrumar(_evento=None):
+            largura = barra.winfo_width()
+            if largura <= 1:
+                return
+            precisa = (botoes.winfo_reqwidth() + opcoes.winfo_reqwidth() + self.b_parar.winfo_reqwidth()
+                       + 2 * px(14) + px(8))
+            descer = largura < precisa
+            if descer == embaixo[0]:
+                return
+            embaixo[0] = descer
+            if descer:
+                opcoes.grid(row=1, column=0, columnspan=4, sticky="w", pady=(px(10), 0))
+            else:
+                opcoes.grid(row=0, column=1, sticky="w", padx=(px(14), 0), pady=0)
+        opcoes.grid(row=0, column=1, sticky="w", padx=(px(14), 0))
+        barra.bind("<Configure>", arrumar)
+        botoes.bind("<Configure>", arrumar)  # o Iniciar muda de texto ("Continuar da linha N") e de largura
 
         progresso = tk.Frame(pai, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
