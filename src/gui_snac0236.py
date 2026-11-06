@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
 import snac0236
-from core import VK_F8, atalhos_globais, citrix_aberto, pasta_logs, pintar_linhas
+from core import VK_F8, atalhos_globais, citrix_aberto, fechar_no_excel, pasta_logs, pintar_linhas
 
 
 class Pagina0236:
@@ -243,7 +243,10 @@ class Pagina0236:
                            f"{snac0236.texto_duracao(snac0236.custo_previsto(notas))} (sem contar as pausas; "
                            "a previsão se ajusta depois da 1ª nota).\n\nDepois do OK você terá 5 segundos para clicar no campo "
                            "Chave Acesso NF-e (vazio).\n\nO robô clica em Integrar no fim de cada nota e pausa para você "
-                           "conferir; para a próxima, deixe o cursor na Chave e clique em Continuar."):
+                           "conferir; para a próxima, deixe o cursor na Chave e clique em Continuar.\n\nSe a planilha "
+                           f"{Path(self.caminho).name} estiver aberta no Excel, ela será salva e fechada (só ela)."):
+            return
+        if not self._fechar_planilha_no_excel():
             return
         for n in notas:
             for r in n["itens"]:
@@ -265,6 +268,30 @@ class Pagina0236:
         if intervalo:
             self.escrever("Passo a passo ligado: 0,5 s antes de cada acao; a proxima acao aparece aqui e na linha de status.")
         threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True).start()
+
+    def _fechar_planilha_no_excel(self):
+        """Salva e fecha no Excel SO a planilha carregada no robo (usuario, 06/11/2026): assim as notas concluidas sao
+        pintadas direto no arquivo. Se ela mudou no Excel depois de carregada, recarrega e nao inicia (o usuario
+        confere). Devolve False para nao iniciar."""
+        try:
+            fechou = fechar_no_excel(self.caminho)
+        except Exception as erro:  # nao impede o preenchimento: pinta no Excel aberto
+            self.escrever(f"Aviso: não salvei nem fechei a planilha no Excel ({erro}). As notas concluídas serão "
+                          "pintadas no Excel aberto.")
+            return True
+        if not fechou:
+            return True
+        self.escrever(f"Planilha {Path(self.caminho).name} salva e fechada no Excel.")
+        try:
+            registros, _, erros = snac0236.carregar(self.caminho)
+        except Exception:
+            registros, erros = None, True
+        if registros == self.registros and not erros:
+            return True
+        self.carregar(self.caminho)
+        messagebox.showwarning("Planilha alterada", "A planilha tinha alterações no Excel, que foram salvas. Recarreguei "
+                                                    "a planilha: confira as linhas e clique em Iniciar de novo.")
+        return False
 
     def _rodar(self, notas, intervalo):
         try:

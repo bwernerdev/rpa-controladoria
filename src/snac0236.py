@@ -127,8 +127,13 @@ def ler_planilha(caminho):
     """Linhas da planilha ja formatadas para o SRP. Devolve (registros, erros)."""
     from openpyxl import load_workbook
 
-    ws = load_workbook(caminho, read_only=True, data_only=True).active
-    linhas = ws.iter_rows(values_only=True)
+    # read_only deixa o arquivo aberto ate o close(): sem ele a planilha ficava travada e o Excel nao conseguia salvar
+    # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
+    livro = load_workbook(caminho, read_only=True, data_only=True)
+    try:
+        linhas = iter(list(livro.active.iter_rows(values_only=True)))
+    finally:
+        livro.close()
     cabecalho = next(linhas, None) or ()
     indices, repetidas = {}, []
     for posicao, titulo in enumerate(cabecalho):

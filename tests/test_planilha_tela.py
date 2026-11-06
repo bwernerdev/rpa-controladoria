@@ -148,6 +148,56 @@ class PintarLinhas(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])
 
 
+class PlanilhaSolta(unittest.TestCase):
+    def test_ler_nao_deixa_o_arquivo_travado(self):
+        # o Excel salva por cima trocando o arquivo: com o arquivo ainda aberto pelo robo, o salvar falhava (06/11/2026)
+        import snac0236
+        with tempfile.TemporaryDirectory() as pasta:
+            for ler in (core.ler_planilha, snac0236.ler_planilha):
+                caminho = pathlib.Path(pasta) / "p.xlsx"
+                wb = Workbook()
+                wb.active.append(["Item", "C/Custo", "Conta", "Quantidade"])
+                wb.save(caminho)
+                try:
+                    ler(caminho)
+                except ValueError:
+                    pass  # cabecalho da outra tela: o que importa e o arquivo solto depois
+                caminho.rename(caminho.with_name("trocado.xlsx"))  # falha no Windows se o arquivo ficou aberto
+                caminho.with_name("trocado.xlsx").unlink()
+
+
+class FecharNoExcel(unittest.TestCase):
+    class Livro:
+        def __init__(self, saved, read_only=False):
+            self.Saved, self.ReadOnly, self.fechada = saved, read_only, None
+
+        def Close(self, SaveChanges):
+            self.fechada = SaveChanges
+
+    def fechar(self, livro):
+        original = core._pasta_aberta
+        core._pasta_aberta = lambda caminho: livro
+        try:
+            return core.fechar_no_excel("planilha.xlsx")
+        finally:
+            core._pasta_aberta = original
+
+    def test_nao_aberta_nao_faz_nada(self):
+        self.assertFalse(self.fechar(None))
+
+    def test_salva_so_se_tiver_alteracao(self):
+        alterada, salva = self.Livro(saved=False), self.Livro(saved=True)
+        self.assertTrue(self.fechar(alterada))
+        self.assertTrue(self.fechar(salva))
+        self.assertEqual((alterada.fechada, salva.fechada), (True, False))
+
+    def test_somente_leitura_com_alteracao_nao_fecha(self):
+        livro = self.Livro(saved=False, read_only=True)
+        with self.assertRaises(RuntimeError):
+            self.fechar(livro)
+        self.assertIsNone(livro.fechada)
+
+
 class Progresso(unittest.TestCase):
     def test_salva_e_so_vale_para_a_mesma_planilha(self):
         from unittest import mock

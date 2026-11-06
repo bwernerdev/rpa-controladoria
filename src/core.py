@@ -43,8 +43,13 @@ def texto(valor):
 def ler_planilha(caminho):
     from openpyxl import load_workbook  # importado so ao ler a planilha (abre o app mais rapido)
 
-    ws = load_workbook(caminho, read_only=True, data_only=True).active
-    linhas = ws.iter_rows(values_only=True)
+    # read_only deixa o arquivo aberto ate o close(): sem ele a planilha ficava travada e o Excel nao conseguia salvar
+    # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
+    livro = load_workbook(caminho, read_only=True, data_only=True)
+    try:
+        linhas = iter(list(livro.active.iter_rows(values_only=True)))
+    finally:
+        livro.close()
     cabecalho = next(linhas, None) or ()
     indices = {}
     for posicao, nome in enumerate(cabecalho):
@@ -588,26 +593,61 @@ def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor):
     from openpyxl.utils import get_column_letter
 
     r, g, b = (int(cor[i:i + 2], 16) for i in (0, 2, 4))
-    alvo = os.path.normcase(os.path.abspath(caminho))
     pythoncom.CoInitialize()
     try:
-        # o Excel registra cada pasta aberta na tabela de objetos em execucao (ROT) pelo caminho: acha a planilha em
-        # qualquer janela do Excel, sem abrir nada (GetObject(caminho) abriria o arquivo se ele nao estivesse aberto)
-        livro, contexto = None, pythoncom.CreateBindCtx(0)
-        for moniker in pythoncom.GetRunningObjectTable():
-            try:
-                if os.path.normcase(moniker.GetDisplayName(contexto, None)) == alvo:
-                    objeto = pythoncom.GetRunningObjectTable().GetObject(moniker)
-                    livro = win32com.client.Dispatch(objeto.QueryInterface(pythoncom.IID_IDispatch))
-                    break
-            except pythoncom.com_error:
-                continue
+        livro = _pasta_aberta(caminho)
         if livro is None:
             raise RuntimeError("a planilha está travada por outro programa e não achei ela aberta no Excel")
         aba = livro.Worksheets(nome_aba)
         ultima = get_column_letter(colunas)
         for linha in linhas:
             aba.Range(f"A{linha}:{ultima}{linha}").Interior.Color = r + g * 256 + b * 65536
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _pasta_aberta(caminho):
+    """A pasta do Excel aberta com este arquivo (objeto COM) ou None. O Excel registra cada pasta aberta na tabela de
+    objetos em execucao (ROT) pelo caminho: acha a planilha em qualquer janela do Excel, sem abrir nada
+    (GetObject(caminho) abriria o arquivo se ele nao estivesse aberto). Chamar com o COM ja iniciado."""
+    import pythoncom
+    import win32com.client
+
+    alvo = os.path.normcase(os.path.abspath(caminho))
+    tabela, contexto = pythoncom.GetRunningObjectTable(), pythoncom.CreateBindCtx(0)
+    for moniker in tabela:
+        try:
+            if os.path.normcase(moniker.GetDisplayName(contexto, None)) == alvo:
+                return win32com.client.Dispatch(tabela.GetObject(moniker).QueryInterface(pythoncom.IID_IDispatch))
+        except pythoncom.com_error:
+            continue
+    return None
+
+
+def fechar_no_excel(caminho, tentativas=5):
+    """Salva e fecha no Excel SO a pasta deste arquivo (a planilha carregada no robo; usuario, 06/11/2026): as outras
+    pastas e o proprio Excel ficam abertos. Devolve True se estava aberta e foi salva e fechada, False se nao estava
+    aberta. Falha (ex.: celula em edicao no Excel, que recusa as chamadas) = RuntimeError com o motivo."""
+    import pythoncom
+
+    pythoncom.CoInitialize()
+    try:
+        livro = _pasta_aberta(caminho)
+        if livro is None:
+            return False
+        for tentativa in range(tentativas):
+            try:
+                salvar = not livro.Saved
+                if salvar and livro.ReadOnly:  # salvar abriria o "Salvar como" do Excel e travaria aqui
+                    raise RuntimeError("a planilha está aberta no Excel como somente leitura e tem alterações; "
+                                       "feche-a no Excel")
+                livro.Close(SaveChanges=salvar)
+                return True
+            except pythoncom.com_error as erro:
+                if tentativa == tentativas - 1:
+                    raise RuntimeError("o Excel não aceitou salvar e fechar a planilha (alguma célula em edição ou "
+                                       f"janela aberta no Excel?): {erro.strerror or erro}") from None
+                time.sleep(0.5)
     finally:
         pythoncom.CoUninitialize()
 
