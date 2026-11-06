@@ -532,6 +532,16 @@ class RateioTelaPequena(unittest.TestCase):
         self.assertEqual(set(achados), {"terceiros", "ident", "base", "aliquota", "lancamento", "tributos_ok"})
         self.assertEqual(achados["ident"], (278, 393, 301, 401))
 
+    def test_descricao_do_3o_item_nao_e_o_ident(self):
+        # 1366x768 (06/11/2026): no Enter 7 o foco vai a Descricao do 3o item, na altura da linha ICMS TERCEIROS do
+        # Rateio salvo; tomada pelo Ident, a conferencia falhava e o robo lia a tela inteira (~11 s a mais)
+        salvo = {"terceiros": (59, 467, 170, 475), "base": (524, 412, 596, 421), "aliquota": (613, 413, 651, 422),
+                 "lancamento": (700, 413, 757, 424), "ident": (275, 413, 307, 421), "tributos_ok": (367, 567, 424, 575)}
+        descricao, ident = (203, 457, 410, 468), (275, 465, 302, 476)
+        self.assertTrue(snac0236.na_linha(descricao, salvo["terceiros"]))  # mesma altura: so a largura separa
+        self.assertFalse(snac0236.celula_ident(descricao, salvo))
+        self.assertTrue(snac0236.celula_ident(ident, salvo))
+
 
 class TituloAcima(unittest.TestCase):
     def recorte(self, caixa, topo_linha1=None):

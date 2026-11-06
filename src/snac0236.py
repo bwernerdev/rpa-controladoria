@@ -653,6 +653,13 @@ def na_linha(caixa, rotulo):
     return caixa is not None and abs((caixa[1] + caixa[3]) / 2 - (rotulo[1] + rotulo[3]) / 2) <= max(8, (caixa[3] - caixa[1]) / 2 + 4)
 
 
+def celula_ident(caixa, rateio):
+    """Foco na celula Ident Tributo do Rateio: coluna Ident e estreito. Na grade principal, campo largo na mesma altura
+    (ex.: a Descricao do 3o item em 1366x768, 207 px contra 27 px da celula Ident) nao conta (06/11/2026)."""
+    return (caixa is not None and coluna_rateio(caixa, rateio) == "ident"
+            and caixa[2] - caixa[0] <= 2 * (rateio["ident"][2] - rateio["ident"][0]))
+
+
 # depois do 1o clique em Integrar: 7 Enter e Integrar de novo (usuario, 04/11/2026)
 ENTERS_DEPOIS_INTEGRAR = 7
 # aviso que pode aparecer depois do 2o Integrar; o robo fecha com Enter (usuario, 04/11/2026). Outros avisos: nao mexe.
@@ -1040,12 +1047,11 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             pos = rateio or salvo
             # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
             # de cima (na grade principal o campo nessa altura e largo: 635 px contra 107 px da celula Ident, 4K)
-            if (pos and not clicou and foco is not None and coluna_rateio(foco, pos) == "ident"
-                    and foco[2] - foco[0] <= 2 * (pos["ident"][2] - pos["ident"][0])
+            if (pos and not clicou and celula_ident(foco, pos)
                     and foco[1] > pos["ident"][3] and foco[3] < pos["terceiros"][1]):
                 clicou = True
                 foco = clicar_ident_terceiros(pos, foco, vez)
-            if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and coluna_rateio(foco, salvo) == "ident":
+            if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and celula_ident(foco, salvo):
                 if confirma_terceiros(salvo):
                     rateio = salvo
                     registrar(f"  Rateio: posicoes da nota anterior; ICMS TERCEIROS conferido no recorte (Enter {vez + 1})",
@@ -1067,7 +1073,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         raise Travou("rateio", f"nao li no Rateio a(s) coluna(s) {', '.join(faltam)}")
                     rateio_salvo[0] = rateio
                     gravar_posicoes(tamanho, rateio)
-            if rateio and na_linha(foco, rateio["terceiros"]) and coluna_rateio(foco, rateio) == "ident":
+            if rateio and na_linha(foco, rateio["terceiros"]) and celula_ident(foco, rateio):
                 registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
             linha = (rateio or salvo or {}).get("terceiros")
