@@ -67,7 +67,7 @@ Lança notas de recebimento a partir de uma planilha com as colunas: CHAVE NF, F
 Para usar, deixe o cursor no campo **Chave Acesso NF-e** e clique em Iniciar. O robô:
 1. preenche o cabeçalho e a grade;
 2. preenche a linha ICMS TERCEIROS do Rateio e clica em Tributos OK;
-3. integra e trata as janelas do SRP: frete alterado para CIF, Resumo dos Tributos, Frete LTCC e Integrado com Sucesso;
+3. integra e trata as janelas do SRP: despesa acessória de até 0,05 (clica em Ajustar; acima disso, pausa para você conferir), frete alterado para CIF, Resumo dos Tributos, Frete LTCC e Integrado com Sucesso;
 4. volta para a Chave da próxima nota.
 
 Cada nota concluída fica **verde no app e na planilha**: o robô pinta de verde as linhas dela no Excel. Com a planilha fechada, ele grava o arquivo. Ao clicar em Iniciar, se a planilha carregada estiver aberta no Excel, o robô salva e fecha **só ela** (as outras planilhas e o Excel continuam abertos). Se ela tinha alterações que mudam os dados, o robô recarrega e pede para você conferir e clicar em Iniciar de novo. Se não der para fechar (ex.: célula em edição), ele avisa e pinta na janela do Excel; aí você salva. Se não conseguir pintar, só avisa nos detalhes e segue.

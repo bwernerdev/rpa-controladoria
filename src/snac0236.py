@@ -724,6 +724,42 @@ def integrado_com_sucesso(texto):
     return "integrado com sucesso" in texto
 
 
+# janela "Atencao" do Integrar: "---- Valor Calculado para Documento ---- Total Geral...: X / Total Documento: Y /
+# Total Acessoria..: Z / Botao <Ajustar> para integrar este valor / Botao <Cancelar> para usuario conferir"
+# [Cancelar] [Ajustar]. Despesa acessoria de ate 0,05: o robo clica em Ajustar e segue (usuario, 06/11/2026); acima
+# disso, ou sem ler os 3 valores conferindo entre si, nao clica em nada e pausa. O foco fica no Cancelar: nada de Enter.
+LIMITE_ACESSORIA = 0.05
+_NUMERO = r"(-?\d*[.,]\d{1,2}(?!\d)|-?\d+(?![\d.,]))"
+
+
+def ajuste_acessoria(texto):
+    """O texto (normalizado) lido tem a janela "Valor Calculado para Documento" (despesa acessoria)?"""
+    return "valor calculado" in texto or ("acessoria" in texto and "ajustar" in texto)
+
+
+def valores_acessoria(texto):
+    """(total geral, total documento, total acessoria) lidos no texto normalizado, so se os 3 conferirem entre si
+    (|documento - geral| = |acessoria|); senao None."""
+    # o ultimo numero entre o rotulo e o rotulo seguinte: os pontilhados ("Total Geral.......:") saem como "2" no OCR
+    # do print real (06/11/2026): "total geral 2 236367.42"
+    valores = []
+    for rotulo, fim in (("total geral", "total documento"), ("total documento", "acessoria"), ("acessoria", r"bot|<|ajust")):
+        achado = re.search(re.escape(rotulo) + r"(.*?)(?:" + fim + "|$)", texto)
+        numeros = re.findall(_NUMERO, achado.group(1)) if achado else []
+        if not numeros:
+            return None
+        valores.append(float(numeros[-1].replace(",", ".")))
+    geral, documento, acessoria = valores
+    return tuple(valores) if abs(abs(documento - geral) - abs(acessoria)) < 0.005 else None
+
+
+def botao_ajustar(lista):
+    """Botao "Ajustar" nas frases do OCR: a frase que e so "ajustar" (o texto "Botao <Ajustar> para integrar..." fica
+    numa frase maior), a mais baixa."""
+    botoes = [c for t, c in lista if t.strip("<>[]|(). ") in ("ajustar", "ajusta")]
+    return max(botoes, key=lambda c: c[1]) if botoes else None
+
+
 def barras_dialogo(imagem):
     """Barras de titulo (azul `titulo_srp`) das janelas que o SRP abre por cima da tela principal; a da tela principal
     (quase a largura toda) fica de fora. ~0,07 s na tela 4K, contra ~2,2 s do OCR da tela inteira."""
@@ -742,7 +778,8 @@ def area_dialogo(imagem, barras):
 
 def janelas_no_texto(texto):
     """Janelas pos-Integrar reconhecidas no texto (normalizado) lido."""
-    return [nome for nome, teste in (("referencia", nf_referencia), ("frete", aviso_frete_cif), ("resumo", resumo_tributos),
+    return [nome for nome, teste in (("referencia", nf_referencia), ("acessoria", ajuste_acessoria),
+                                     ("frete", aviso_frete_cif), ("resumo", resumo_tributos),
                                      ("ltcc", janela_ltcc), ("sucesso", integrado_com_sucesso)) if teste(texto)]
 
 
@@ -1215,10 +1252,39 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             time.sleep(0.15)
         return False
 
+    def ajustar_acessoria(imagem, area):
+        """Janela "Valor Calculado para Documento": le os 3 totais (varias leituras do recorte; em 1366x768 o texto e
+        pequeno) e, com despesa acessoria de ate LIMITE_ACESSORIA, clica em Ajustar. Devolve None (clicou) ou o motivo
+        para nao clicar."""
+        recorte = imagem.crop(area)
+        valores, botao = None, None
+        # no print real (06/11/2026) a leitura 4x leu os 3 totais e a binarizada nao leu nada: fica por ultimo
+        for img, escala in ((recorte, 2), (recorte, 4), (binarizar(recorte), 2)):
+            palavras = core.palavras_tela(img, tesseract, escala=escala)
+            valores = valores or valores_acessoria(normalizar(" ".join(p[0] for p in palavras)))
+            botao = botao or botao_ajustar(frases(palavras))
+            if valores and botao:
+                break
+        registrar(f"  despesa acessoria: valores lidos={valores}, botao Ajustar={botao}", mostrar=False)
+        if not valores:
+            return "nao consegui ler os totais (Geral, Documento e Acessoria conferindo entre si)"
+        geral, documento, acessoria = valores
+        if abs(acessoria) > LIMITE_ACESSORIA + 1e-9:
+            return f"despesa acessoria de {acessoria:.2f} (Geral {geral:.2f}, Documento {documento:.2f}), acima de 0,05"
+        if not botao:
+            return f"despesa acessoria de {acessoria:.2f}, mas nao achei o botao Ajustar"
+        devagar(f"clicar em Ajustar (despesa acessoria de {acessoria:.2f})")
+        ret = janela.rectangle()
+        checar_parada()
+        clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
+        registrar(f"  despesa acessoria de {acessoria:.2f} (ate 0,05): cliquei em Ajustar", mostrar=False)
+        return None
+
     def integrar(nota):
         """Integrar e o que vem depois (usuario, 04/11/2026), lendo a tela antes de cada passo:
         aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
         janela "Centro de Custo e Conta Contabil para Frete LTCC" -> CLIQUE em "Frete LTCC" (Enter ali roda sem fim);
+        "Valor Calculado para Documento" com despesa acessoria de ate 0,05 -> CLIQUE em Ajustar (acima: pausa);
         "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Sem nenhuma dessas janelas: Enter, ate
         ENTERS_DEPOIS_INTEGRAR, e depois Integrar de novo. Janela ja tratada que continua aberta: espera, sem Enter.
         Devolve 0 (nao achei o Integrar), 1 (nao achei o 2o Integrar), 2 (sem "Integrado com Sucesso") ou 3 (sucesso)."""
@@ -1263,6 +1329,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 # no log de 05/11 16:30 a janela fechou no 7o Enter e o 2o Integrar seguiu com frete, Resumo, LTCC e
                 # sucesso: depois do OK vai direto ao 2o Integrar, sem Enter as cegas
                 enters = ENTERS_DEPOIS_INTEGRAR
+            elif nova == "acessoria":
+                problema = ajustar_acessoria(imagem, area)
+                if problema:
+                    registrar(f"Nota ...{nota['chave'][-6:]}: janela 'Valor Calculado para Documento': {problema}. "
+                              "Confira e clique em Ajustar ou Cancelar no SRP.")
+                    return 2
             elif nova == "ltcc":
                 botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem.crop(area)), tesseract)))
                 if not botao:

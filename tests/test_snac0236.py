@@ -51,6 +51,16 @@ REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
     ("99999", 660, 520, 50, 12), ("1", 730, 520, 10, 12), ("OK", 700, 760, 20, 12)]
 BOTAO_OK_REF = (700, 760, 720, 772)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
+BOTAO_AJUSTAR = (800, 700, 860, 712)
+
+
+def acessoria(geral, documento, diferenca):
+    """Palavras da janela "Valor Calculado para Documento" (despesa acessoria), uma linha por frase; numeros ficticios."""
+    linhas = [["----", "Valor", "Calculado", "para", "Documento", "----"], ["Total", "Geral.......:", geral],
+              ["Total", "Documento:", documento], ["Total", "Acessoria..:", diferenca],
+              ["Botão", "<Ajustar>", "para", "integrar", "este", "valor"], ["Botão", "<Cancelar>", "para", "usuário", "conferi"]]
+    palavras = [(p, 300 + 65 * i, 450 + 25 * n, 60, 12) for n, linha in enumerate(linhas) for i, p in enumerate(linha)]
+    return palavras + [("Cancelar", 600, 700, 70, 12), ("Ajustar", *BOTAO_AJUSTAR[:2], 60, 12)]
 BARRA = (250, 400, 1300, 430)  # barra de titulo azul das janelas pos-Integrar
 AREA = (230, 395, 1320, 900)  # snac0236.area_dialogo da BARRA na tela 1600x900
 LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
@@ -96,6 +106,9 @@ class SRP0236:
         self.ok_referencia, self.enters_referencia = 0, 0
         self.ref_no_caminho = None  # Enter depois do Frete em que abre a janela da NF de referencia (SRP real, 05/11/2026)
         self.selecionado = True
+        # janela "Valor Calculado para Documento" logo depois do 1o Integrar (SRP real, 06/11/2026): Ajustar segue com o
+        # aviso do frete; Enter cai no Cancelar (foco no botao)
+        self.com_acessoria, self.acessoria, self.ajustou, self.cancelou = None, None, 0, 0
 
     def campos(self):
         cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -149,11 +162,11 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return self.referencia or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+        return self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
 
     def palavras_janelas(self):
         return (([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
-                + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
+                + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
                 + (SUCESSO if self.sucesso else []))
 
     def barras(self, imagem):
@@ -175,6 +188,9 @@ class SRP0236:
                 self.enters_referencia += 1
                 if self.enters_referencia >= 7:
                     self.referencia = False
+                return
+            if texto == "{ENTER}" and self.acessoria:  # Enter = Cancelar: volta ao documento
+                self.acessoria, self.cancelou = None, self.cancelou + 1
                 return
             if texto == "{ENTER}" and self.aviso_frete:  # OK no aviso do frete: vem o Resumo dos Tributos
                 self.aviso_frete, self.fechou_aviso, self.resumo = False, self.fechou_aviso + 1, True
@@ -232,6 +248,9 @@ class SRP0236:
             if self.referencia and BOTAO_OK_REF[0] <= x <= BOTAO_OK_REF[2] and BOTAO_OK_REF[1] <= y <= BOTAO_OK_REF[3]:
                 self.referencia, self.ok_referencia = False, self.ok_referencia + 1
                 return
+            if self.acessoria and BOTAO_AJUSTAR[0] <= x <= BOTAO_AJUSTAR[2] and BOTAO_AJUSTAR[1] <= y <= BOTAO_AJUSTAR[3]:
+                self.acessoria, self.ajustou, self.aviso_frete = None, self.ajustou + 1, True
+                return
             if self.ltcc and BOTAO_LTCC[0] <= x <= BOTAO_LTCC[2] and BOTAO_LTCC[1] <= y <= BOTAO_LTCC[3]:
                 self.ltcc, self.sucesso = False, True
                 return
@@ -272,6 +291,7 @@ class SRP0236:
                     return
                 self.integradas.append(self.atual)
                 self.referencia = self.com_referencia
+                self.acessoria = self.com_acessoria
                 self.aviso_frete = self.avisos_no_1o  # janelas logo depois do 1o Integrar (sem o 2o)
                 self.atual = {}
                 if self.volta:
@@ -745,6 +765,47 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.enter_no_ltcc), (1, 1, 1, 0))
+
+    def test_despesa_acessoria_ate_5_centavos_clica_em_ajustar(self):
+        srp = SRP0236()
+        srp.com_acessoria = ("1234.50", "1234.51", ".01")
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.ajustou, srp.cancelou, srp.reintegrou), (1, 0, 0))
+        self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos), (1, 1, 1))  # segue o resto da integracao
+        self.assertIn("despesa acessoria de 0.01 (ate 0,05): cliquei em Ajustar", log)
+        self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
+
+    def test_despesa_acessoria_acima_de_5_centavos_pausa(self):
+        for valores in (("1234.50", "1234.57", ".07"), ("1234.50", "1234.51", "01")):  # acima; ponto perdido no OCR
+            srp = SRP0236()
+            srp.com_acessoria = valores
+            fechar = lambda s: setattr(s, "acessoria", None)  # noqa: E731  (o usuario resolve no SRP)
+            with ambiente(srp):
+                codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])],
+                                          ao_pausar=fechar)
+            self.assertEqual(codigo, 0, avisos)
+            self.assertEqual((srp.ajustou, srp.cancelou, srp.sucessos), (0, 0, 0), valores)  # nem clique nem Enter
+            self.assertTrue(any("Valor Calculado para Documento" in a and "Ajustar ou Cancelar" in a for a in avisos), avisos)
+            self.assertTrue(any("PAUSADO" in a for a in avisos), avisos)  # na 1a nota espera o usuario
+            self.assertEqual(len(srp.integradas), 2)
+
+    def test_valores_da_despesa_acessoria(self):
+        ler = lambda t: snac0236.valores_acessoria(snac0236.normalizar(t))  # noqa: E731
+        self.assertEqual(ler("---- Valor Calculado para Documento ---- Total Geral.......: 236367.42 "
+                             "Total Documento: 236367.43 Total Acessoria..: .01 Botão <Ajustar> para integrar"),
+                         (236367.42, 236367.43, 0.01))
+        self.assertEqual(ler("Total Geral: 100,00 Total Documento: 99,96 Total Acessoria: -,04"), (100.0, 99.96, -0.04))
+        # pontilhado lido como "2" (OCR 2x do print real, 06/11/2026; numeros trocados por ficticios)
+        self.assertEqual(ler("valor calculado para documento --- total geral 2 1234.50 total documento: 1234.51 "
+                             "total acessoria..: .01 bot&o <ajustar> para integrar"), (1234.5, 1234.51, 0.01))
+        self.assertIsNone(ler("Total Geral: 236367.42 Total Documento: 236367.43 Total Acessoria: 01"))  # nao confere
+        self.assertIsNone(ler("Total Geral: 236367.42 Total Acessoria: .01"))  # faltou o Documento
+        self.assertTrue(snac0236.ajuste_acessoria(snac0236.normalizar("---- Valor Calculado para Documento ----")))
+        lista = snac0236.frases(acessoria("1", "2", "1"))
+        self.assertEqual(snac0236.botao_ajustar(lista), BOTAO_AJUSTAR)
 
     def test_aviso_frete_cif_depois_do_integrar(self):
         srp = SRP0236()
