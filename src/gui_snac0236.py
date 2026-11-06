@@ -120,6 +120,7 @@ class Pagina0236:
         self.saida.see("end")
         self.saida.configure(state="disabled")
         self._botoes()
+        self._atualizar_previsao()
 
     def _valores(self, nota, r, posicao):
         chave = f"…{nota['chave'][-6:]}" if posicao == 0 else "  ↳"
@@ -330,7 +331,18 @@ class Pagina0236:
     def _atualizar_previsao(self):
         e = self.execucao
         if not (e and self.ocupado):
-            self.previsao.pack_forget()
+            # antes de iniciar (planilha importada sem erros): previsao das notas que faltam (usuario, 06/11/2026)
+            pendentes = self._pendentes() if self.notas and not self.erros and not self.ocupado else []
+            if not pendentes:
+                self.previsao.pack_forget()
+                return
+            itens = sum(len(n["itens"]) for n in pendentes)
+            termino = time.strftime("%H:%M", time.localtime(time.time() + snac0236.custo_previsto(pendentes)))
+            self.previsao.configure(text=f"Tempo previsto: {snac0236.texto_duracao(snac0236.custo_previsto(pendentes))} "
+                                         f"para {len(pendentes)} nota(s), {itens} item(ns)  ·  se iniciar agora, término "
+                                         f"~{termino}  ·  sem contar as pausas")
+            if not self.previsao.winfo_ismapped():
+                self.previsao.pack(fill="x", pady=(4, 0))
             return
         notas, feitas = e["notas"], e["feitas"]
         util = self._tempo_util()
