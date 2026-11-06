@@ -55,6 +55,8 @@ O app guarda as linhas já concluídas. Ao abrir de novo a mesma planilha (sem m
 
 ## Aba SNAC0236 (Digitação Documento Recebimento)
 
+Use `planilhas\BASE PADRAO SNAC0236.xlsx` como modelo: a aba **Notas** tem o cabeçalho e as colunas já formatadas (CHAVE NF como texto, data, valores, lista CIF/FOB), e a aba **Instrucoes** tem as regras e um exemplo fictício. Salve com a aba Notas selecionada: o robô lê a aba aberta.
+
 Lança notas de recebimento a partir de uma planilha com as colunas: CHAVE NF, FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE (CIF ou FOB), ITEM, OPER SPM, QTD FISCAL, VALOR UNIT, VALOR DO ICMS, BASE CALC. ICMS (base de cálculo da linha ICMS TERCEIROS; o nome antigo ICMS TERCEIROS (BASE DE CALCULO NF) também serve) e ALIQUOTA.
 
 - **CHAVE NF** como texto (44 dígitos). Linhas seguidas com a mesma chave são itens da mesma nota. Nos itens seguintes da nota, a chave e o cabeçalho (FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE) podem ficar em branco; chave em branco com o cabeçalho preenchido é erro.

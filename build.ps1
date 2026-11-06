@@ -2,7 +2,7 @@
 # O exe acha o Tesseract numa pasta tesseract ao lado dele (como no zip/instalacao); a raiz do projeto fica sem exe.
 # Abertura medida (30/10/2026): ~4,6 s, quase tudo antes do Python comecar (verificacao do Windows/antivirus);
 # o formato de pasta (--onedir) deu o mesmo tempo, por isso ficou o arquivo unico.
-# Depois do exe, monta release\RPA-SRP-vX.Y.Z.zip (exe + tesseract\ + BASE PADRAO.xlsx + instalar.cmd) para o GitHub Releases;
+# Depois do exe, monta release\RPA-SRP-vX.Y.Z.zip (exe + tesseract\ + BASE PADRAO*.xlsx + instalar.cmd) para o GitHub Releases;
 # o exe e o zip nao vao ao git.
 $raiz = $PWD.Path
 & "$raiz\.venv\Scripts\python.exe" src\icone.py
@@ -18,7 +18,7 @@ if (Test-Path $pacote) { Remove-Item $pacote -Recurse -Force }
 New-Item -ItemType Directory -Force "$pacote\planilhas", "$raiz\release" | Out-Null
 Copy-Item "$raiz\build\dist\RPA-SRP.exe" $pacote
 Copy-Item "$raiz\vendor\tesseract" "$pacote\tesseract" -Recurse
-Copy-Item "$raiz\planilhas\BASE PADRAO.xlsx" "$pacote\planilhas"
+Copy-Item "$raiz\planilhas\BASE PADRAO*.xlsx" "$pacote\planilhas"  # SNAC0234 e SNAC0236
 Copy-Item "$raiz\scripts\instalar.cmd", "$raiz\scripts\instalar.ps1" $pacote
 $zip = "$raiz\release\RPA-SRP-v$versao"
 # so a versao atual fica na pasta: as anteriores estao no GitHub Releases
