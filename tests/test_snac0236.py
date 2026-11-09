@@ -453,6 +453,24 @@ class Planilha(unittest.TestCase):
         registros, _, erros = snac0236.carregar(caminho)
         self.assertEqual(erros, [])
         self.assertEqual([r["verde"] for r in registros], [True, True, True, False, False])
+        self.assertEqual([r["serie_ponto"] for r in registros], [False] * 5)
+
+    def test_verde_da_serie_com_ponto(self):
+        """Nota pintada com VERDE_SERIE_PONTO ('.' na Serie): continua verde e o app sabe qual e."""
+        from openpyxl import load_workbook
+        from openpyxl.styles import PatternFill
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", 900135, 5101, 1, 1, 0, 0, 0],
+            [CHAVE_B, "30 47", "02/11/2026", 10, "FOB", 900135, 5102, 1, 1, 0, 0, 0],
+        ])
+        livro = load_workbook(caminho)
+        for linha, cor in ((2, core.VERDE_SERIE_PONTO), (3, core.VERDE_CONCLUIDA)):
+            for coluna in range(1, 13):
+                livro.active.cell(row=linha, column=coluna).fill = PatternFill("solid", fgColor=cor)
+        livro.save(caminho)
+        registros, _, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual([(r["verde"], r["serie_ponto"]) for r in registros], [(True, True), (True, False)])
 
     def test_fundo_verde(self):
         from openpyxl.styles import PatternFill

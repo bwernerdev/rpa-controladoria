@@ -31,14 +31,14 @@ PALETAS = {
         "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
         "ok": "#1a7f37", "ok_fundo": "#d9f2e1", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
         "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
-        "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb",
+        "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb", "ok_serie_fundo": "#b4e0c1",
     },
     "escuro": {
         "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
         "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
         "ok": "#57c27a", "ok_fundo": "#1f3d2a", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
         "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
-        "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730",
+        "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730", "ok_serie_fundo": "#2c5a3b",
     },
 }
 TEMAS = {"auto": "Automático (igual ao Windows)", "claro": "Claro", "escuro": "Escuro"}

@@ -125,6 +125,13 @@ def formatar_filial(valor):
     return tuple(partes), None
 
 
+def _cor_rgb(fill):
+    """'RRGGBB' do fundo solido em RGB (sem cor do tema), ou None."""
+    if fill is None or fill.fill_type != "solid" or fill.fgColor.type != "rgb" or not isinstance(fill.fgColor.rgb, str):
+        return None
+    return fill.fgColor.rgb[-6:].upper()
+
+
 def ler_planilha(caminho):
     """Linhas da planilha ja formatadas para o SRP. Devolve (registros, erros)."""
     from openpyxl import load_workbook
@@ -162,6 +169,9 @@ def ler_planilha(caminho):
         preenchidas = [celulas[numero - 1][p] for c, p in indices.items()
                        if p < len(celulas[numero - 1]) and not (bruto[c] is None or str(bruto[c]).strip() == "")]
         r = {"linha": numero, "verde": all(core.fundo_verde(getattr(c, "fill", None), tema) for c in preenchidas)}
+        # nota lancada com "." na Serie: o robo pinta com VERDE_SERIE_PONTO (o app mostra outro verde na tabela)
+        r["serie_ponto"] = r["verde"] and any(_cor_rgb(getattr(c, "fill", None)) == core.VERDE_SERIE_PONTO
+                                              for c in preenchidas)
         problemas = []
         r["chave"], erro = formatar_chave(bruto["chave"])
         problemas.append(erro)

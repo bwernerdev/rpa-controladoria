@@ -74,6 +74,8 @@ Cada nota concluída fica **verde no app e na planilha**: o robô pinta de verde
 
 Nota lançada com ponto na Série (o SRP disse que o documento já existia) fica num **verde mais escuro**, com um comentário na célula da CHAVE NF explicando. As mensagens da pintura também vão para o log da execução.
 
+Na aba, os filtros acima da tabela contam as notas (Todas, Pendentes, Pausadas, Erros, Concluídas). Nota lançada com ponto na Série aparece num verde mais escuro (passe o mouse para ver o motivo). Os detalhes ficam recolhidos (**Detalhes ▸** no rodapé) e abrem sozinhos quando há erro ou aviso. Durante o preenchimento só aparecem **Parar** e, na pausa, **Continuar**.
+
 **Conferir com os logs** (link no rodapé da aba): compara a planilha carregada com os logs dos últimos 30 dias e mostra nos detalhes: notas que o robô integrou ("Integrado com Sucesso") e não estão verdes, e oferece pintá-las; notas verdes sem essa confirmação (terminadas à mão ou sem a mensagem: confira no SRP); notas verdes que não aparecem nos logs; e as lançadas com ponto na Série. Os logs guardam só os 6 últimos dígitos da chave. No **Iniciar**, se alguma nota do lote já foi integrada segundo os logs e não está verde, o robô pergunta se pinta e pula essas (lançar de novo duplicaria o documento com ponto na Série).
 
 Ao carregar a planilha, as notas que **já estão verdes** (pintadas pelo robô ou por você, em qualquer tom de verde, em todas as células preenchidas da linha) contam como feitas: aparecem como Concluídas e o robô começa pela primeira nota que não está verde ("Continuar da linha N"). Nota com só parte das linhas em verde é digitada inteira, com um aviso.
