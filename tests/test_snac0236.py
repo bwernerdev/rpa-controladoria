@@ -563,6 +563,19 @@ class Logs(unittest.TestCase):
         self.assertEqual((logs["000004"]["sem_confirmacao"], logs["000004"]["sucesso"]), (True, False))
         self.assertEqual(logs["000001"]["quando"], "09/11 10:00")
 
+    def test_notas_nos_logs_compactados(self):
+        """Logs com mais de 2 dias ficam no zip do mes: o Conferir le dentro dele."""
+        import zipfile
+        with tempfile.TemporaryDirectory() as pasta:
+            pasta = pathlib.Path(pasta)
+            with zipfile.ZipFile(pasta / "arquivo-202611.zip", "w") as zipado:
+                zipado.writestr("20261101-100000-snac0236.log", self.LOG)
+            (pasta / "20261109-100000-snac0236.log").write_text(
+                "OK Nota ...000007 (linha 9): 1 item(ns) em 40.0s; integrada com sucesso.", encoding="utf-8")
+            logs = snac0236.notas_nos_logs(pasta)
+        self.assertEqual(set(logs), {"000001", "000002", "000003", "000004", "000007"})
+        self.assertEqual((logs["000001"]["quando"], logs["000007"]["quando"]), ("01/11 10:00", "09/11 10:00"))
+
     def test_conferir_com_logs(self):
         def n(sufixo, verde):
             return {"chave": "1" * 38 + sufixo, "itens": [{"linha": int(sufixo), "verde": verde}]}

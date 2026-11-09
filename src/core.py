@@ -827,13 +827,72 @@ def aplicar_atualizacao(pacote, destino):
         close_fds=True, env=ambiente)
 
 
-def limpar_logs(dias=30):
-    """Apaga logs (e recortes de OCR em logs/ocr e prints em logs/telas) com mais de `dias` dias; devolve quantos apagou."""
+COMPACTAR_DEPOIS = 2  # dias: logs de execucao mais velhos que isso vao para logs/arquivo-AAAAMM.zip
+DIAS_TELAS = 7  # prints de logs/telas (cursor parado): so servem para analisar uma pausa recente
+
+
+def _log_de_execucao(arquivo):
+    """Log de uma execucao do robo ('AAAAMMDD-HHMMSS[...].log'), nao o atualizacao.log."""
+    return arquivo.stem[:8].isdigit() and arquivo.stem[8:9] == "-"
+
+
+def compactar_logs(dias=COMPACTAR_DEPOIS):
+    """Move os logs de execucao com mais de `dias` dias para um zip por mes (`logs/arquivo-AAAAMM.zip`, pelo nome do log;
+    texto de log compacta ~90%). Devolve quantos moveu. Falha num arquivo = ele fica como esta (tenta na proxima)."""
+    import zipfile
     limite = time.time() - dias * 86400
-    apagados = 0
-    for arquivo in [*pasta_logs().glob("*.log"), *pasta_logs().glob("ocr/*.png"), *pasta_logs().glob("telas/*.png")]:
+    movidos = 0
+    for arquivo in sorted(pasta_logs().glob("*.log")):
         try:
-            if arquivo.stat().st_mtime < limite:
+            if not _log_de_execucao(arquivo) or arquivo.stat().st_mtime >= limite:
+                continue
+            with zipfile.ZipFile(pasta_logs() / f"arquivo-{arquivo.stem[:6]}.zip", "a", zipfile.ZIP_DEFLATED) as pacote:
+                if arquivo.name not in pacote.namelist():
+                    pacote.write(arquivo, arquivo.name)
+            arquivo.unlink()
+            movidos += 1
+        except (OSError, zipfile.BadZipFile):
+            pass
+    return movidos
+
+
+def ler_logs(padrao="*.log", pasta=None):
+    """[(nome, texto)] dos logs de execucao que casam com `padrao`, soltos e dentro dos zips mensais, em ordem de nome
+    (= ordem de hora)."""
+    import fnmatch
+    import zipfile
+    pasta = pasta or pasta_logs()
+    lidos = {}
+    for pacote in sorted(pasta.glob("arquivo-*.zip")):
+        try:
+            with zipfile.ZipFile(pacote) as zipado:
+                for nome in zipado.namelist():
+                    if fnmatch.fnmatch(nome, padrao):
+                        lidos[nome] = zipado.read(nome).decode("utf-8", errors="replace")
+        except (OSError, zipfile.BadZipFile):
+            continue
+    for arquivo in pasta.glob(padrao):
+        try:
+            lidos[arquivo.name] = arquivo.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return sorted(lidos.items())
+
+
+def limpar_logs(dias=30, dias_telas=DIAS_TELAS):
+    """Compacta os logs de execucao com mais de 2 dias (`compactar_logs`) e apaga o que passou do prazo: logs soltos,
+    zips mensais (30 dias depois do ultimo log que entrou neles) e recortes de OCR (logs/ocr) com mais de `dias` dias;
+    prints de logs/telas com mais de `dias_telas` dias (usuario, 09/11/2026: logs ocupando pouco espaco). Devolve
+    quantos apagou."""
+    compactar_logs()
+    limite, limite_telas = time.time() - dias * 86400, time.time() - dias_telas * 86400
+    apagados = 0
+    pasta = pasta_logs()
+    for arquivo, prazo in [*((a, limite) for a in pasta.glob("*.log")), *((a, limite) for a in pasta.glob("arquivo-*.zip")),
+                           *((a, limite) for a in pasta.glob("ocr/*.png")),
+                           *((a, limite_telas) for a in pasta.glob("telas/*.png"))]:
+        try:
+            if arquivo.stat().st_mtime < prazo:
                 arquivo.unlink()
                 apagados += 1
         except OSError:

@@ -883,13 +883,9 @@ def notas_nos_logs(pasta):
     robo integrou mas nao viu a mensagem de sucesso (pausou para conferir). Serve para conferir a planilha (usuario,
     09/11/2026). Os logs ficam 30 dias."""
     notas = {}
-    for arquivo in sorted(pasta.glob("*-snac0236.log")):
-        nome = arquivo.name
+    # os logs com mais de 2 dias ficam em logs/arquivo-AAAAMM.zip (core.compactar_logs): le soltos e zipados
+    for nome, texto in core.ler_logs("*-snac0236.log", pasta):
         quando = f"{nome[6:8]}/{nome[4:6]} {nome[9:11]}:{nome[11:13]}"
-        try:
-            texto = arquivo.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
         for linha in texto.splitlines():
             achado = _OK_NOTA.search(linha)
             if achado:

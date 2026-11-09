@@ -244,6 +244,43 @@ class Logs(unittest.TestCase):
             self.assertEqual(core.limpar_logs(30), 2)
         self.assertEqual([p.name for p in pasta.rglob("*.*")], ["novo.log"])
 
+    def test_compacta_logs_antigos_e_prints_por_7_dias(self):
+        """Logs de execucao com mais de 2 dias vao para o zip do mes (e continuam legiveis); prints de telas ficam 7
+        dias; zip sem log novo ha 30 dias e apagado."""
+        import os
+        import time
+        import zipfile
+        from unittest import mock
+        pasta = pathlib.Path(tempfile.mkdtemp())
+        (pasta / "telas").mkdir()
+        def criar(nome, dias, texto="x"):
+            arquivo = pasta / nome
+            arquivo.write_text(texto, encoding="utf-8")
+            quando = time.time() - dias * 86400
+            os.utime(arquivo, (quando, quando))
+            return arquivo
+        criar("20261101-100000-snac0236.log", 3, "OK Nota ...000001 (linha 2): integrada com sucesso.\n")
+        criar("20261102-090000.log", 5)
+        criar("20261109-100000-snac0236.log", 0)  # recente: fica solto
+        criar("atualizacao.log", 5)  # nao e log de execucao: nao vai para o zip
+        criar("telas/20261101-100000-icms.png", 8)
+        criar("telas/20261107-100000-icms.png", 2)
+        criar("arquivo-202609.zip", 31)
+        with mock.patch.object(core, "pasta_logs", lambda: pasta):
+            self.assertEqual(core.limpar_logs(30), 2)  # o print de 8 dias e o zip velho
+            self.assertEqual(sorted(p.name for p in pasta.rglob("*.*")),
+                             ["20261107-100000-icms.png", "20261109-100000-snac0236.log", "arquivo-202611.zip",
+                              "atualizacao.log"])
+            with zipfile.ZipFile(pasta / "arquivo-202611.zip") as zipado:
+                self.assertEqual(sorted(zipado.namelist()), ["20261101-100000-snac0236.log", "20261102-090000.log"])
+            self.assertEqual([n for n, _ in core.ler_logs("*-snac0236.log")],
+                             ["20261101-100000-snac0236.log", "20261109-100000-snac0236.log"])
+            # um log do mesmo mes entra no mesmo zip
+            criar("20261103-080000.log", 3)
+            self.assertEqual(core.compactar_logs(), 1)
+            with zipfile.ZipFile(pasta / "arquivo-202611.zip") as zipado:
+                self.assertEqual(len(zipado.namelist()), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
