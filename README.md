@@ -65,7 +65,7 @@ Lança notas de recebimento a partir de uma planilha com as colunas: CHAVE NF, F
 - ALIQUOTA como número (12), não como porcentagem do Excel (12% chega como 0,12 e é recusado).
 
 Para usar, deixe o cursor no campo **Chave Acesso NF-e** e clique em Iniciar. O robô:
-1. preenche o cabeçalho e a grade;
+1. preenche o cabeçalho e a grade (se o SRP disser "Documento Recebimento … já existe, foi integrado no sistema em …", dá OK, apaga a Chave e põe um ponto no fim da Série, ex.: `1` vira `1.`; se o SRP recusar de novo, pausa);
 2. preenche a linha ICMS TERCEIROS do Rateio e clica em Tributos OK;
 3. integra e trata as janelas do SRP: despesa acessória de até 0,05 (clica em Ajustar; acima disso, pausa para você conferir), frete alterado para CIF, Resumo dos Tributos, Frete LTCC e Integrado com Sucesso;
 4. volta para a Chave da próxima nota.

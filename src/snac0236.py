@@ -44,7 +44,9 @@ NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fisica (1a parte)", "fi
         "oper": "Oper SPM", "qtd": "Qtd Fiscal", "unit": "Valor Unit", "icms": "Valor do ICMS",
         "icms_terceiro": "ICMS Terceiro", "rateio": "Rateio", "ident": "Ident Tributo (ICMS TERCEIROS)",
         "base": "Base Calculo (ICMS TERCEIROS)", "aliquota": "Aliquota (ICMS TERCEIROS)",
-        "lancamento": "Lancamento (ICMS TERCEIROS)"}
+        "lancamento": "Lancamento (ICMS TERCEIROS)", "serie": "Serie"}
+# depois da Chave + Enter o cursor passa por CNPJ (2 campos), Serie, Docto e cai na Filial Fisica (log de 09/11/2026)
+ENTERS_CHAVE_SERIE = 3
 
 
 def normalizar(texto):
@@ -782,6 +784,13 @@ def area_dialogo(imagem, barras):
             min(max(b[2] for b in barras) + 20, imagem.width), min(int(base), imagem.height))
 
 
+def documento_ja_existe(texto):
+    """Janela "Atencao: Documento Recebimento 184598 ja existe, foi integrado no sistema em 15/10/2010 [OK]", que o SRP
+    abre no Enter depois da Chave Acesso NF-e (o cursor fica parado; 09/11/2026). O robo da OK, apaga a Chave e poe
+    "." no fim da Serie ("1" -> "1."), so quando essa janela aparece (usuario, 09/11/2026)."""
+    return "ja existe" in texto or "integrado no sistema" in texto
+
+
 def janelas_no_texto(texto):
     """Janelas pos-Integrar reconhecidas no texto (normalizado) lido."""
     return [nome for nome, teste in (("referencia", nf_referencia), ("acessoria", ajuste_acessoria),
@@ -810,6 +819,10 @@ class Travou(Exception):
         self.campo, self.motivo = campo, motivo
 
 
+class DocumentoExiste(Travou):
+    """Janela "Documento Recebimento ... ja existe" no Enter depois da Chave (motivo = texto lido da janela)."""
+
+
 def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0):
     """Preenche as notas no SRP. `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
     acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
@@ -821,6 +834,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     confia_barra = [True]  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
     ultimo_log = [time.time()]
     atual = []  # linhas marcadas 'executando'
+    serie_com_ponto_feita = [False]  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
 
     def registrar(texto, mostrar=True):
         """Linha no log com hora e o tempo desde a linha anterior (+s), para achar o que demora."""
@@ -861,11 +875,11 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             core.send_keys(texto.replace(",", "{,}"), pause=0.03)
             time.sleep(min(pausa, 0.05))
 
-    def limpar_campo(campo):
+    def limpar_campo(campo, quantos=10):
         """Apaga o conteudo do campo em foco: End + Backspace (serve com o texto selecionado ou com o cursor no meio)."""
         checar_parada()
         devagar(f"apagar o que houver em {NOME[campo]}")
-        core.send_keys("{END}{BACKSPACE 10}", pause=0.03)
+        core.send_keys(f"{{END}}{{BACKSPACE {quantos}}}", pause=0.03)
 
     def enters(campo, quantos, foco):
         """Enter `quantos` vezes; cada um precisa mover o foco ou, na grade rolada, rolar a grade (senao: aviso do SRP
@@ -881,6 +895,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     def depois_do_enter(campo, vez, foco, antes=None):
         """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou."""
         novo = aguardar(janela, foco, render, fixos, antes=antes)
+        if novo in (None, "aviso") and campo in ("chave", "serie"):
+            texto = janela_ja_existe()
+            if texto and campo == "chave" and not serie_com_ponto_feita[0]:
+                raise DocumentoExiste(campo, texto)
+            if texto:
+                raise Travou(campo, f"o SRP diz que o Documento Recebimento ja existe mesmo com '.' na Serie ('{texto[:90]}')")
         if novo in (None, "aviso"):
             motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
             raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
@@ -934,6 +954,58 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 registrar(f"  NF de referencia: fechou com {vez + 1} Enter", mostrar=False)
                 return
         raise Travou("item", "a janela 'Nota Fiscal de Referencia' nao fechou (nao li o botao OK e 8 Enter nao bastaram)")
+
+    def janela_ja_existe():
+        """Texto (normalizado) da janela "Documento Recebimento ... ja existe" se ela estiver aberta; senao None. So e
+        chamada quando o cursor nao anda depois da Chave ou da Serie (le o recorte da barra azul; sem barra, a tela)."""
+        if not tesseract:
+            return None
+        imagem = core.capturar(janela)
+        barras = barras_dialogo(imagem)
+        alvo = imagem.crop(area_dialogo(imagem, barras)) if barras else imagem
+        for escala in ((2, 4) if barras else (2,)):  # em 1366x768 o texto da janela e pequeno
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(alvo, tesseract, escala=escala)))
+            if documento_ja_existe(texto):
+                return texto
+        return None
+
+    def serie_com_ponto(nota, foco, texto):
+        """Janela "Documento Recebimento ... ja existe, foi integrado no sistema em ..." depois da Chave (usuario,
+        09/11/2026): Enter (OK), apaga a Chave, Enter ate a Serie e poe "." no fim dela ("1" -> "1."); depois segue
+        com Enter ate a Filial Fisica, como sempre. Devolve o foco na Filial Fisica."""
+        registrar(f"  janela 'ja existe': {texto[:120]!r}", mostrar=False)
+        checar_parada()
+        devagar("Enter no aviso 'Documento Recebimento ja existe' (OK)")
+        antes = core.capturar(janela)
+        core.send_keys("{ENTER}", pause=0.03)
+        esperar_tela(antes, render)
+        if janela_ja_existe():
+            raise Travou("chave", "a janela 'Documento Recebimento ja existe' nao fechou com Enter")
+        foco = foco_tela(janela) or foco
+        if posicao_ok("chave", foco, rotulos, None, lidas) is False:
+            raise Travou("chave", f"depois do OK na janela 'ja existe' o cursor nao voltou para a Chave{local(foco)}")
+        limpar_campo("chave", 60)
+        serie_com_ponto_feita[0] = True
+        rotulo = next((c for t, c in lidas if t.startswith("serie")), None)
+        if not rotulo:
+            raise Travou("serie", "o SRP disse que o Documento Recebimento ja existe, mas nao li o rotulo Serie na tela")
+        limite = ENTERS_CHAVE_SERIE + 4
+        for vez in range(limite):
+            checar_parada()
+            devagar(f"Enter {vez + 1} depois de apagar a Chave (procurando a Serie)")
+            core.send_keys("{ENTER}", pause=0.03)
+            foco = depois_do_enter("chave", vez, foco)
+            if foco and ao_lado(foco, rotulo, lidas):
+                break
+        else:
+            raise Travou("serie", f"nao cheguei na Serie com {limite} Enter depois de apagar a Chave{local(foco)}")
+        checar_parada()
+        devagar("ir para o fim da Serie e digitar '.'")
+        core.send_keys("{END}.", pause=0.03)
+        time.sleep(min(pausa, 0.05))
+        registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse que o Documento Recebimento ja existe; apaguei a Chave e "
+                  "pus '.' no fim da Serie.")
+        return ir_ate("serie", "filial1", 2, foco, anterior=foco)
 
     def janela_no_caminho(foco):
         """Depois de cada Enter do Frete ao Item: janela por cima (barra de titulo azul, ~0,07 s)? A "Nota fiscal de
@@ -1472,6 +1544,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             t0 = time.time()
             etiqueta = f"Nota ...{nota['chave'][-6:]} (linha{'s' if len(linhas) > 1 else ''} {linhas[0]}" + \
                        (f"-{linhas[-1]})" if len(linhas) > 1 else ")")
+            serie_com_ponto_feita[0] = False
             try:
                 marcar([linhas[0]], "executando")
                 if posicao_ok("chave", foco, rotulos, None, lidas) is False:
@@ -1483,7 +1556,10 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     if campo == "frete":  # ultimo do cabecalho: Enter ate o Item da grade (janela de NF de referencia no caminho)
                         foco = ir_para_item(foco)
                         continue
-                    foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
+                    try:
+                        foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
+                    except DocumentoExiste as existe:  # so no Enter depois da Chave
+                        foco = serie_com_ponto(nota, foco, existe.motivo)
                 caixa_item = None  # Item da linha do item anterior
                 topos_linha1 = {}  # campo -> topo dele no 1o item (1a linha da grade): o titulo da coluna fica acima
                 for indice, r in enumerate(nota["itens"]):

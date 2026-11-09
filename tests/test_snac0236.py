@@ -24,7 +24,7 @@ PALAVRAS = [
     ("Filial", 10, 130, 35, 12), ("Física:", 50, 130, 40, 12), ("Filial", 500, 130, 35, 12), ("Pagamento:", 540, 130, 70, 12),
     ("Data", 10, 160, 30, 12), ("Emissão:", 45, 160, 55, 12), ("Entrada:", 200, 160, 50, 12),
     ("Valor", 400, 190, 35, 12), ("Total", 440, 190, 35, 12), ("Documento:", 480, 190, 70, 12),
-    ("Frete:", 10, 220, 40, 12),
+    ("Frete:", 10, 220, 40, 12), ("Série:", 650, 64, 40, 12),
     ("Integrar", 500, 300, 50, 12), ("Coleta", 600, 300, 40, 12), ("Frete", 645, 300, 35, 12),
     ("Item", 10, 370, 30, 12), ("Documento", 45, 370, 70, 12), ("Recebimento", 120, 370, 90, 12),
     ("tem", 240, 400, 30, 12), ("Descrição", 400, 400, 60, 12), ("Spm", 900, 400, 30, 12), ("Nat", 990, 385, 30, 12),
@@ -53,6 +53,8 @@ REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
 BOTAO_OK_REF = (700, 760, 720, 772)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
 BOTAO_AJUSTAR = (800, 700, 860, 712)
+JA_EXISTE = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
+    "Documento Recebimento 184598 já existe, foi integrado no sistema em 15/10/2010".split())] + [("OK", 700, 700, 20, 12)]
 
 
 def acessoria(geral, documento, diferenca):
@@ -97,7 +99,7 @@ class SRP0236:
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
         # conteudo que o SRP ja traz no campo (Ident do ICMS TERCEIROS = 1, 05/11/2026). Chegando pelo Enter o texto vem
         # selecionado (digitar substitui); pelo clique o cursor fica no fim (digitar acrescenta).
-        self.iniciais = {"t114ident": "1"}
+        self.iniciais = {"t114ident": "1", "serie": "1"}
         # Tributos OK deixa o foco no Item da mesma linha (SRP real, 05/11/2026); seta para baixo vai a linha de baixo
         self.ok_desce = False  # True: o Tributos OK ja desce para o Item da linha de baixo
         self.ignora_seta = False  # seta para baixo que nao faz nada
@@ -110,9 +112,12 @@ class SRP0236:
         # janela "Valor Calculado para Documento" logo depois do 1o Integrar (SRP real, 06/11/2026): Ajustar segue com o
         # aviso do frete; Enter cai no Cancelar (foco no botao)
         self.com_acessoria, self.acessoria, self.ajustou, self.cancelou = None, None, 0, 0
+        # janela "Documento Recebimento ... ja existe" no Enter depois da Chave (SRP real, 09/11/2026); com "." na Serie
+        # o documento passa (a nao ser que `existe_com_ponto`)
+        self.existe, self.ja_existe, self.ok_existe, self.existe_com_ponto = set(), False, 0, False
 
     def campos(self):
-        cab = (["chave", None, None, None, None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
+        cab = (["chave", None, None, "serie", None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
         tributos = [f"t{cod}{col}" for cod in LINHAS_TRIBUTO for col in self.colunas_tributo]
         rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * (6 + self.extras_rateio) + tributos
@@ -163,10 +168,10 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+        return self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
 
     def palavras_janelas(self):
-        return (([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
+        return ((JA_EXISTE if self.ja_existe else []) + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
                 + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
                 + (SUCESSO if self.sucesso else []))
 
@@ -185,6 +190,9 @@ class SRP0236:
         with self.lock:
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
+            if texto == "{ENTER}" and self.ja_existe:  # OK: o foco fica na Chave
+                self.ja_existe, self.ok_existe = False, self.ok_existe + 1
+                return
             if texto == "{ENTER}" and self.referencia:  # no SRP real a janela fechou no 7o Enter
                 self.enters_referencia += 1
                 if self.enters_referencia >= 7:
@@ -219,6 +227,11 @@ class SRP0236:
                     return
                 if base in self.parado:
                     return
+                serie = self.atual.get("serie", self.iniciais["serie"])
+                if (base == "chave" and self.atual.get("chave") in self.existe) or (
+                        base == "serie" and serie.endswith(".") and self.existe_com_ponto):
+                    self.ja_existe = True
+                    return
                 self.indice += 1
                 self.selecionado = True
                 cab = self.campos()[0]
@@ -227,7 +240,9 @@ class SRP0236:
             elif nome:
                 valor = "" if self.selecionado else self.atual.get(nome, self.iniciais.get(base, ""))
                 for tecla in re.findall(r"\{[^}]*\}|[^{]+", texto):
-                    if tecla == "{END}":
+                    if tecla == "{END}":  # tira a selecao: o texto do campo volta, cursor no fim
+                        if self.selecionado:
+                            valor = self.atual.get(nome, self.iniciais.get(base, ""))
                         self.selecionado = False
                     elif tecla.startswith("{BACKSPACE"):
                         partes = tecla.strip("{}").split()
@@ -830,6 +845,40 @@ class Fluxo(unittest.TestCase):
             self.assertTrue(any("Valor Calculado para Documento" in a and "Ajustar ou Cancelar" in a for a in avisos), avisos)
             self.assertTrue(any("PAUSADO" in a for a in avisos), avisos)  # na 1a nota espera o usuario
             self.assertEqual(len(srp.integradas), 2)
+
+    def test_documento_ja_existe_apaga_chave_e_poe_ponto_na_serie(self):
+        srp = SRP0236()
+        srp.existe = {CHAVE_A}
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.ok_existe, 1)
+        self.assertFalse(any("Termine esta nota a mao" in x for x in avisos), avisos)
+        a, b = srp.integradas
+        self.assertEqual((a["chave"], a["serie"], a["item0"]), ("", "1.", "900135"))  # Chave apagada, Serie "1."
+        self.assertEqual((b["chave"], "serie" in b), (CHAVE_B, False))  # so na nota da janela
+        self.assertTrue(any("ja existe" in x and "'.' no fim da Serie" in x for x in avisos), avisos)
+
+    def test_documento_ja_existe_mesmo_com_ponto_pausa(self):
+        srp = SRP0236()
+        srp.existe, srp.existe_com_ponto = {CHAVE_A}, True
+
+        def usuario(srp):  # resolve no SRP e volta o cursor para a Chave
+            srp.ja_existe, srp.atual, srp.indice = False, {}, 0
+
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])],
+                                            ao_pausar=usuario)
+        self.assertEqual(codigo, 0, avisos)
+        self.assertTrue(any("ja existe mesmo com '.' na Serie" in x and "PAUSADO" in x for x in avisos), avisos)
+        self.assertIn((2, "pausado"), estados)
+        self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_B])
+
+    def test_texto_documento_ja_existe(self):
+        ler = lambda t: snac0236.documento_ja_existe(snac0236.normalizar(t))  # noqa: E731
+        self.assertTrue(ler("Atenção Documento Recebimento 184598 já existe, foi integrado no sistema em 15/10/2010 OK"))
+        self.assertTrue(ler("Documento Recebimento 184598 ja existe,"))
+        self.assertFalse(ler("Documento Integrado com Sucesso."))
 
     def test_valores_da_despesa_acessoria(self):
         ler = lambda t: snac0236.valores_acessoria(snac0236.normalizar(t))  # noqa: E731
