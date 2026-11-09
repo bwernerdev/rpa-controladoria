@@ -354,7 +354,7 @@ def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="0", ali
     return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t, "aliquota_icms": aliq}
 
 
-def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0):
+def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0, serie_ponto=None):
     avisos, estados = [], []
     retomar = threading.Event() if com_continuar else None
 
@@ -368,7 +368,8 @@ def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0):
             threading.Timer(0.05, soltar).start()
 
     with mock.patch.object(snac0236.time, "sleep", lambda s: None if s >= 0.1 else threading.Event().wait(s)):
-        codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar, intervalo)
+        codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar,
+                                   intervalo, serie_ponto=serie_ponto)
     return codigo, avisos, estados
 
 
@@ -507,6 +508,49 @@ class Planilha(unittest.TestCase):
         wb.save(caminho)
         with self.assertRaises(ValueError):
             snac0236.ler_planilha(caminho)
+
+
+class Logs(unittest.TestCase):
+    """Conferir a planilha com os logs (usuario, 09/11/2026); numeros ficticios."""
+    LOG = ("10:00:01 +  0.1s OK Nota ...000001 (linha 2): 1 item(ns) em 40.0s; integrada com sucesso.\n"
+           "10:01:00 +  0.1s Nota ...000002: o SRP disse que o Documento Recebimento ja existe; apaguei a Chave e pus "
+           "'.' no fim da Serie.\n"
+           "10:01:40 +  0.1s OK Nota ...000002 (linhas 3-4): 2 item(ns) em 70.0s; integrada com sucesso.\n"
+           "10:02:00 +  0.1s OK Nota ...000003 (linha 5): terminada a mao.\n"
+           "10:03:00 +  0.1s OK Nota ...000004 (linha 6): 1 item(ns) em 41.0s.\n")
+
+    def test_notas_nos_logs(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            pasta = pathlib.Path(pasta)
+            (pasta / "20261109-100000-snac0236.log").write_text(self.LOG, encoding="utf-8")
+            (pasta / "20261109-100000.log").write_text("OK Nota ...000009 (linha 2): x; integrada com sucesso.", encoding="utf-8")
+            logs = snac0236.notas_nos_logs(pasta)
+        self.assertEqual(set(logs), {"000001", "000002", "000003", "000004"})  # so os logs da SNAC0236
+        self.assertTrue(logs["000001"]["sucesso"] and not logs["000001"]["serie_ponto"])
+        self.assertTrue(logs["000002"]["sucesso"] and logs["000002"]["serie_ponto"])
+        self.assertEqual((logs["000003"]["a_mao"], logs["000003"]["sucesso"]), (True, False))
+        self.assertEqual((logs["000004"]["sem_confirmacao"], logs["000004"]["sucesso"]), (True, False))
+        self.assertEqual(logs["000001"]["quando"], "09/11 10:00")
+
+    def test_conferir_com_logs(self):
+        def n(sufixo, verde):
+            return {"chave": "1" * 38 + sufixo, "itens": [{"linha": int(sufixo), "verde": verde}]}
+        logs = {"000001": {"sucesso": True, "a_mao": False, "sem_confirmacao": False, "serie_ponto": False},
+                "000002": {"sucesso": True, "a_mao": False, "sem_confirmacao": False, "serie_ponto": True},
+                "000003": {"sucesso": False, "a_mao": True, "sem_confirmacao": False, "serie_ponto": False}}
+        notas = [n("000001", False), n("000002", True), n("000003", True), n("000005", True), n("000006", False)]
+        achado = snac0236.conferir_com_logs(notas, logs)
+        sufixos = {k: [x["chave"][-6:] for x in v] for k, v in achado.items()}
+        self.assertEqual(sufixos, {"nao_pintadas": ["000001"], "sem_confirmacao": ["000003"],
+                                   "fora_dos_logs": ["000005"], "serie_ponto": ["000002"]})
+
+    def test_registrar_no_log_depois_da_execucao(self):
+        srp = SRP0236()
+        with ambiente(srp) as pasta:
+            rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            snac0236.registrar_no_log("  pintura: Planilha: linha(s) 2 pintada(s) de verde (arquivo gravado)")
+            texto = next(pasta.glob("*-snac0236.log")).read_text(encoding="utf-8")
+        self.assertTrue(texto.rstrip().endswith("pintura: Planilha: linha(s) 2 pintada(s) de verde (arquivo gravado)"))
 
 
 class PassoAPasso(unittest.TestCase):
@@ -849,9 +893,16 @@ class Fluxo(unittest.TestCase):
     def test_documento_ja_existe_apaga_chave_e_poe_ponto_na_serie(self):
         srp = SRP0236()
         srp.existe = {CHAVE_A}
-        with ambiente(srp):
-            codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
+        marcadas = []
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp) as pasta:
+            codigo, avisos, estados = rodar(srp, notas, serie_ponto=marcadas.append)
+            logs = snac0236.notas_nos_logs(pasta)
         self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(marcadas, [[2]])  # so a nota da janela
+        self.assertTrue(logs[CHAVE_A[-6:]]["serie_ponto"])
+        self.assertFalse(logs[CHAVE_B[-6:]]["serie_ponto"])
         self.assertEqual(srp.ok_existe, 1)
         self.assertFalse(any("Termine esta nota a mao" in x for x in avisos), avisos)
         a, b = srp.integradas

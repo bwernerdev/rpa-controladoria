@@ -548,6 +548,9 @@ def arquivo_progresso():
 
 # ---------- linhas concluidas pintadas na planilha (usuario, 06/11/2026) ----------
 VERDE_CONCLUIDA = "C6EFCE"  # o verde do estilo "Bom" do Excel
+# nota lancada com "." na Serie (o SRP disse que o documento ja existia; usuario, 09/11/2026): verde mais escuro
+# ("Verde, Enfase 6, 40% mais claro" do Excel; ainda conta como verde = feita ao recarregar) e comentario na CHAVE NF
+VERDE_SERIE_PONTO = "A9D08E"
 
 
 def cores_do_tema(xml):
@@ -598,25 +601,33 @@ def fundo_verde(fill, tema=()):
     return 75 <= matiz * 360 <= 165 and saturacao >= 0.07 and valor >= 0.25
 
 
-def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA):
-    """Fundo `cor` nas `linhas` da aba ativa (a que o robo le), nas colunas do cabecalho. Planilha fechada: grava o
+def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
+    """Fundo `cor` nas `linhas` da aba ativa (a que o robo le), nas colunas do cabecalho; `comentarios` {linha: texto}
+    vao na celula da coluna CHAVE (sem ela, na coluna A), no lugar de um comentario que ja houver ali. Planilha fechada: grava o
     arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade). Aberta no Excel (o Excel
     trava o arquivo): pinta na janela do Excel aberta, sem salvar (o usuario salva). Devolve 'arquivo' ou 'excel';
     falha = excecao (quem chama avisa e segue: pintar nunca para o robo)."""
     from openpyxl import load_workbook
+    from openpyxl.comments import Comment
     from openpyxl.styles import PatternFill
 
     caminho = Path(caminho)
+    comentarios = comentarios or {}
     linhas = sorted(set(linhas))
     if not linhas:
         return None
     livro = load_workbook(caminho, keep_vba=caminho.suffix.lower() == ".xlsm")
     aba = livro.active
     colunas = max((c.column for c in aba[1] if c.value not in (None, "")), default=1)
+    coluna_chave = next((c.column for c in aba[1] if str(c.value or "").strip().lower().startswith("chave")), 1)
     fundo = PatternFill("solid", fgColor=cor)
     for linha in linhas:
         for coluna in range(1, colunas + 1):
             aba.cell(row=linha, column=coluna).fill = fundo
+    for linha, texto in comentarios.items():
+        comentario = Comment(texto, "Robô SRP")
+        comentario.width, comentario.height = 300, 80
+        aba.cell(row=linha, column=coluna_chave).comment = comentario
     temporario = caminho.with_name(f"~rpa-{caminho.name}")
     try:
         livro.save(temporario)
@@ -630,11 +641,11 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA):
                 temporario.unlink()
             except OSError:
                 pass
-    _pintar_no_excel(caminho, aba.title, linhas, colunas, cor)
+    _pintar_no_excel(caminho, aba.title, linhas, colunas, cor, comentarios, coluna_chave)
     return "excel"
 
 
-def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor):
+def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, coluna_chave=1):
     """Pinta pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o arquivo nem salva."""
     import pythoncom
     import win32com.client
@@ -650,6 +661,10 @@ def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor):
         ultima = get_column_letter(colunas)
         for linha in linhas:
             aba.Range(f"A{linha}:{ultima}{linha}").Interior.Color = r + g * 256 + b * 65536
+        for linha, texto in (comentarios or {}).items():
+            celula = aba.Cells(linha, coluna_chave)
+            celula.ClearComments()
+            celula.AddComment(texto)
     finally:
         pythoncom.CoUninitialize()
 

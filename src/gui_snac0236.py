@@ -3,12 +3,14 @@ redesenhada por tema ou monitor); `montar(pai)` refaz so os widgets. `ui` e o mo
 import queue
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
 import snac0236
-from core import VK_F8, atalhos_globais, citrix_aberto, fechar_no_excel, pasta_logs, pintar_linhas
+from core import (VERDE_CONCLUIDA, VERDE_SERIE_PONTO, VK_F8, atalhos_globais, citrix_aberto, fechar_no_excel,
+                  pasta_logs, pintar_linhas)
 
 
 class Pagina0236:
@@ -31,6 +33,9 @@ class Pagina0236:
         self.qtd_nfs.trace_add("write", lambda *_: self._mudou_qtd())
         # linhas das notas concluidas pintadas de verde na planilha (usuario, 06/11/2026), numa thread so
         self.fila_pintar, self.pintadas, self.avisou_excel = queue.Queue(), set(), False
+        # linhas das notas lancadas com "." na Serie (janela "ja existe"; usuario, 09/11/2026): outro verde e comentario
+        self.serie_ponto = set()
+        self.trava_pintura = threading.Lock()  # o pintor (thread) e o Conferir/Iniciar nao gravam ao mesmo tempo
         threading.Thread(target=self._pintor, daemon=True).start()
         app.after(100, self._drenar)
         app.after(1000, self._tique)
@@ -54,6 +59,7 @@ class Pagina0236:
         self.app._link(rodape, "Copiar detalhes", self.copiar).pack(side="left")
         self.app._link(rodape, "Abrir pasta de logs", lambda: __import__("os").startfile(pasta_logs())).pack(
             side="left", padx=(px(14), 0))
+        self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(px(14), 0))
         tk.Label(rodape, text=f"v{ui.VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
         caixa = self.app._cartao(pai)
         caixa.pack(side="bottom", fill="x")
@@ -226,7 +232,7 @@ class Pagina0236:
             messagebox.showerror("Planilha", f"Não consegui ler a planilha:\n{erro}")
             return
         self.caminho, self.registros, self.notas, self.erros, self.estados = caminho, registros, notas, erros, {}
-        self.pintadas = set()
+        self.pintadas, self.serie_ponto = set(), set()
         self.escrever(f"Planilha {Path(caminho).name}: {len(notas)} nota(s), {len(registros)} item(ns).")
         # notas ja pintadas de verde na planilha = ja feitas: o robo pula e segue pelas outras (usuario, 06/11/2026)
         verdes, partidas = [], []
@@ -307,6 +313,8 @@ class Pagina0236:
         self._status("Simulação no console (nada foi digitado)", "suave")
 
     def iniciar(self):
+        if not self._lote() or not self._pular_ja_integradas():
+            return
         notas = self._lote()
         if not notas:
             return
@@ -377,7 +385,8 @@ class Pagina0236:
     def _rodar(self, notas, intervalo):
         try:
             snac0236.executar(notas, "Desktop Viewer", 0.25, 4.0, 5, self.parar, self.fila.put,
-                              lambda linha, nome: self.fila.put((linha, nome)), self.retomar, intervalo)
+                              lambda linha, nome: self.fila.put((linha, nome)), self.retomar, intervalo,
+                              serie_ponto=lambda linhas: self.fila.put(("serie_ponto", tuple(linhas))))
         finally:
             self.fila.put(None)
 
@@ -403,6 +412,8 @@ class Pagina0236:
                 elif item == ("parar",):
                     self.escrever("F8: parando.")
                     self.parar.set()
+                elif isinstance(item, tuple) and item[0] == "serie_ponto":
+                    self.serie_ponto.update(item[1])
                 elif isinstance(item, tuple):
                     self._estado(*item)
                 else:
@@ -521,7 +532,17 @@ class Pagina0236:
         linhas = [r["linha"] for r in nota["itens"]]
         if all(self.estados.get(l) == "ok" for l in linhas) and not set(linhas) <= self.pintadas:
             self.pintadas.update(linhas)
-            self.fila_pintar.put((self.caminho, linhas))
+            self.fila_pintar.put(self._pedido_pintura(nota))
+
+    def _pedido_pintura(self, nota, quando=None):
+        """(planilha, linhas, cor, comentarios) para o pintor. Nota com "." na Serie: verde mais escuro e comentario
+        na CHAVE NF da 1a linha (usuario, 09/11/2026). `quando`: data do log em que isso aconteceu (texto)."""
+        linhas = [r["linha"] for r in nota["itens"]]
+        if not set(linhas) & self.serie_ponto:
+            return self.caminho, linhas, VERDE_CONCLUIDA, {}
+        texto = (f"Robô SRP ({quando or f'{datetime.now():%d/%m/%Y %H:%M}'}): o SRP disse que o Documento "
+                 "Recebimento já existia; o robô apagou a Chave e pôs '.' no fim da Série.")
+        return self.caminho, linhas, VERDE_SERIE_PONTO, {linhas[0]: texto}
 
     def _pintor(self):
         """Thread unica: uma gravacao da planilha por vez; junta as notas que terminaram enquanto pintava."""
@@ -532,22 +553,152 @@ class Pagina0236:
                     pedidos.append(self.fila_pintar.get_nowait())
                 except queue.Empty:
                     break
-            por_planilha = {}
-            for caminho, linhas in pedidos:
-                por_planilha.setdefault(caminho, []).extend(linhas)
-            for caminho, linhas in por_planilha.items():
-                lista = ", ".join(str(l) for l in sorted(linhas))
-                try:
-                    como = pintar_linhas(caminho, linhas)
-                except Exception as erro:  # pintar nunca para o robo
-                    self.fila.put(f"Aviso: não pintei de verde a(s) linha(s) {lista} na planilha ({erro}).")
-                    continue
-                if como == "excel" and not self.avisou_excel:
-                    self.avisou_excel = True
-                    self.fila.put("Aviso: a planilha está aberta no Excel: pinto as linhas concluídas lá; salve a "
-                                  "planilha no Excel para manter as cores.")
-                self.fila.put(f"  Planilha: linha(s) {lista} pintada(s) de verde"
-                              + (" (no Excel aberto)" if como == "excel" else ""))
+            self._pintar(pedidos)
+
+    def _pintar(self, pedidos):
+        """Grava os pedidos (planilha, linhas, cor, comentarios), juntando os da mesma planilha e cor."""
+        with self.trava_pintura:
+            self._gravar_pedidos(pedidos)
+
+    def _gravar_pedidos(self, pedidos):
+        juntos = {}  # (planilha, cor) -> (linhas, comentarios)
+        for caminho, linhas, cor, comentarios in pedidos:
+            grupo = juntos.setdefault((caminho, cor), ([], {}))
+            grupo[0].extend(linhas)
+            grupo[1].update(comentarios)
+        for (caminho, cor), (linhas, comentarios) in juntos.items():
+            lista = ", ".join(str(l) for l in sorted(linhas))
+            serie = " (verde mais escuro e comentário na CHAVE NF: '.' na Série)" if cor == VERDE_SERIE_PONTO else ""
+            try:
+                como = pintar_linhas(caminho, linhas, cor, comentarios)
+            except Exception as erro:  # pintar nunca para o robo
+                self._avisar_pintura(f"Aviso: não pintei de verde a(s) linha(s) {lista} na planilha "
+                                     f"{Path(caminho).name} ({erro}).")
+                continue
+            if como == "excel" and not self.avisou_excel:
+                self.avisou_excel = True
+                self._avisar_pintura("Aviso: a planilha está aberta no Excel: pinto as linhas concluídas lá; salve "
+                                     "a planilha no Excel para manter as cores.")
+            if caminho == self.caminho:  # a planilha carregada passa a ter essas linhas verdes (o Iniciar compara)
+                for r in self.registros:
+                    if r["linha"] in linhas:
+                        r["verde"] = True
+            self._avisar_pintura(f"  Planilha: linha(s) {lista} pintada(s) de verde{serie}"
+                                 + (" (no Excel aberto, falta salvar)" if como == "excel" else " (arquivo gravado)"))
+
+    def _avisar_pintura(self, texto):
+        """Mensagem da pintura no console e no log da execucao (usuario, 09/11/2026: antes so ia para o console)."""
+        self.fila.put(texto)
+        snac0236.registrar_no_log("  pintura: " + texto.strip())
+
+    # ---------- conferir a planilha com os logs (usuario, 09/11/2026) ----------
+    def _ler_conferencia(self):
+        """(notas da planilha relidas, com a cor atual de cada linha; resultado de conferir_com_logs; logs) ou None."""
+        try:
+            _, notas, _ = snac0236.carregar(self.caminho)
+            logs = snac0236.notas_nos_logs(pasta_logs())
+        except Exception as erro:
+            messagebox.showerror("Conferir com os logs", f"Não consegui ler a planilha ou os logs:\n{erro}")
+            return None
+        return notas, snac0236.conferir_com_logs(notas, logs), logs
+
+    def _linhas(self, nota):
+        linhas = [r["linha"] for r in nota["itens"]]
+        return str(linhas[0]) if len(linhas) == 1 else f"{linhas[0]}-{linhas[-1]}"
+
+    def _pintar_lancadas(self, notas, logs):
+        """Pinta na hora (nao pelo pintor: o Iniciar confere a planilha logo depois) as notas que o robo integrou e que
+        nao estao verdes, e marca como concluidas no app."""
+        pedidos = []
+        for nota in notas:
+            info = logs.get(nota["chave"][-6:], {})
+            linhas = [r["linha"] for r in nota["itens"]]
+            if info.get("serie_ponto"):
+                self.serie_ponto.update(linhas)
+            for linha in linhas:
+                self._estado(linha, "ok")
+            self.pintadas.update(linhas)
+            pedidos.append(self._pedido_pintura(nota, f"log de {info.get('quando', '?')}"))
+        self._pintar(pedidos)
+
+    def conferir(self):
+        """Confere a planilha carregada com os logs da SNAC0236 (ultimos 30 dias) e mostra no console: notas lancadas
+        e nao pintadas (oferece pintar), verdes sem o 'Integrado com Sucesso' nos logs, verdes fora dos logs e as
+        lancadas com '.' na Serie."""
+        if not self.caminho:
+            messagebox.showinfo("Conferir com os logs", "Carregue a planilha da SNAC0236 primeiro.")
+            return
+        if self.ocupado:
+            return
+        lido = self._ler_conferencia()
+        if not lido:
+            return
+        notas, achado, logs = lido
+        nome = Path(self.caminho).name
+        self.escrever(f"Conferência de {nome} com os logs ({len(logs)} nota(s) nos logs dos últimos 30 dias; os logs "
+                      "guardam só os 6 últimos dígitos da chave):")
+
+        def lista(notas_, extra=lambda n: ""):
+            return "; ".join(f"linha {self._linhas(n)} (…{n['chave'][-6:]}{extra(n)})" for n in notas_)
+
+        quando = lambda n: f", {logs[n['chave'][-6:]]['quando']}"  # noqa: E731
+        nao = achado["nao_pintadas"]
+        self.escrever(f"Aviso: {len(nao)} nota(s) integrada(s) pelo robô e sem verde na planilha: {lista(nao, quando)}."
+                      if nao else "  Nenhuma nota integrada pelo robô ficou sem verde.")
+        sem = achado["sem_confirmacao"]
+        if sem:
+            motivo = lambda n: (", terminada à mão" if logs[n['chave'][-6:]]["a_mao"]  # noqa: E731
+                                else ", sem 'Integrado com Sucesso'")
+            self.escrever(f"Aviso: {len(sem)} nota(s) verde(s) sem a confirmação do SRP nos logs (confira no SRP): "
+                          f"{lista(sem, motivo)}.")
+        fora = achado["fora_dos_logs"]
+        if fora:
+            self.escrever(f"  {len(fora)} nota(s) verde(s) que não aparecem nos logs (pintadas à mão ou lançadas há "
+                          f"mais de 30 dias): {lista(fora)}.")
+        serie = achado["serie_ponto"]
+        if serie:
+            self.escrever(f"  {len(serie)} nota(s) lançada(s) com '.' na Série (o SRP disse que já existia): "
+                          f"{lista(serie, quando)}.")
+        if not (nao or sem):
+            self._status(f"Conferência: a planilha bate com os logs ({nome})", "ok")
+            return
+        self._status(f"Conferência: {len(nao)} sem verde, {len(sem)} sem confirmação (veja os detalhes)", "aviso")
+        if nao and messagebox.askyesno(
+                "Conferir com os logs", f"{len(nao)} nota(s) foram integradas pelo robô (o SRP disse 'Integrado com "
+                                        f"Sucesso') e não estão verdes na planilha:\n\n"
+                                        + "\n".join(f"linha {self._linhas(n)}  (…{n['chave'][-6:]})" for n in nao[:15])
+                                        + ("\n..." if len(nao) > 15 else "") + "\n\nPintar de verde agora?"):
+            self._pintar_lancadas([n for n in self.notas if n["chave"] in {x["chave"] for x in nao}], logs)
+            self._status(f"{len(nao)} nota(s) pintada(s) de verde (veja os detalhes)", "ok")
+
+    def _pular_ja_integradas(self):
+        """Antes do Iniciar: notas do lote que os logs dizem integradas com sucesso (e nao estao verdes). Lancar de
+        novo daria a janela "ja existe" e o robo poria '.' na Serie, duplicando o documento. Pergunta: pintar e pular
+        (Sim), lancar assim mesmo (Nao) ou cancelar. Devolve False para nao iniciar."""
+        try:
+            logs = snac0236.notas_nos_logs(pasta_logs())
+        except Exception:
+            return True
+        lote = self._lote()
+        ja = [n for n in lote if logs.get(n["chave"][-6:], {}).get("sucesso")]
+        if not ja:
+            return True
+        resposta = messagebox.askyesnocancel(
+            "Notas já integradas", f"Segundo os logs, {len(ja)} nota(s) deste lote já foram integradas pelo robô (o "
+                                   "SRP disse 'Integrado com Sucesso'), mas não estão verdes na planilha:\n\n"
+                                   + "\n".join(f"linha {self._linhas(n)}  (…{n['chave'][-6:]}, "
+                                                f"{logs[n['chave'][-6:]]['quando']})" for n in ja[:15])
+                                   + ("\n..." if len(ja) > 15 else "")
+                                   + "\n\nLançar de novo faria o SRP dizer que o documento já existe e o robô poria "
+                                     "'.' na Série (documento duplicado).\n\nSim: pintar de verde e pular essas.\n"
+                                     "Não: lançar assim mesmo.\nCancelar: não iniciar.")
+        if resposta is None:
+            return False
+        if resposta:
+            self.escrever(f"Aviso: {len(ja)} nota(s) já integrada(s) segundo os logs: pintadas de verde e puladas "
+                          f"(linhas {', '.join(self._linhas(n) for n in ja)}).")
+            self._pintar_lancadas(ja, logs)
+        return True
 
     # ---------- mensagens ----------
     def escrever(self, texto):

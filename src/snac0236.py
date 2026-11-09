@@ -823,27 +823,114 @@ class DocumentoExiste(Travou):
     """Janela "Documento Recebimento ... ja existe" no Enter depois da Chave (motivo = texto lido da janela)."""
 
 
-def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0):
-    """Preenche as notas no SRP. `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
+# log da execucao atual (ou da ultima): `registrar_no_log` escreve nele de fora do robo, ex.: a pintura da planilha
+# (usuario, 09/11/2026: as mensagens da pintura so iam para o console e nao deu para saber por que 2 notas lancadas
+# ficaram sem verde)
+_LOG = {"caminho": None, "arquivo": None, "ultimo": 0.0}
+_TRAVA_LOG = threading.Lock()
+
+
+def _escrever_log(texto):
+    """Linha no log com hora e o tempo desde a linha anterior (+s). Chamar com `_TRAVA_LOG`."""
+    arquivo = _LOG["arquivo"]
+    fechar = arquivo is None or arquivo.closed
+    if fechar:  # a execucao ja terminou: acrescenta no fim do log dela
+        if not _LOG["caminho"]:
+            return
+        try:
+            arquivo = open(_LOG["caminho"], "a", encoding="utf-8")
+        except OSError:
+            return
+    agora = time.time()
+    arquivo.write(f"{datetime.now():%H:%M:%S} +{agora - _LOG['ultimo']:5.1f}s {texto}\n")
+    _LOG["ultimo"] = agora
+    arquivo.flush()
+    if fechar:
+        arquivo.close()
+
+
+def registrar_no_log(texto):
+    """Linha no log da execucao atual (ou da ultima, se ja terminou); sem execucao nenhuma ainda, nada."""
+    with _TRAVA_LOG:
+        _escrever_log(texto)
+
+
+_OK_NOTA = re.compile(r"OK Nota \.\.\.(\d{6}) \(linhas? [\d-]+\): (.*)")
+_JA_EXISTE = re.compile(r"Nota \.\.\.(\d{6}): o SRP disse que o Documento Recebimento ja existe")
+
+
+def notas_nos_logs(pasta):
+    """O que os logs da SNAC0236 em `pasta` dizem de cada nota, pelos 6 ultimos digitos da chave (os logs so guardam
+    esses): {sufixo: {"sucesso", "a_mao", "sem_confirmacao", "serie_ponto": bool, "quando": 'dd/mm hh:mm'}}.
+    sucesso = o robo viu "Integrado com Sucesso"; a_mao = o usuario terminou a nota numa pausa; sem_confirmacao = o
+    robo integrou mas nao viu a mensagem de sucesso (pausou para conferir). Serve para conferir a planilha (usuario,
+    09/11/2026). Os logs ficam 30 dias."""
+    notas = {}
+    for arquivo in sorted(pasta.glob("*-snac0236.log")):
+        nome = arquivo.name
+        quando = f"{nome[6:8]}/{nome[4:6]} {nome[9:11]}:{nome[11:13]}"
+        try:
+            texto = arquivo.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for linha in texto.splitlines():
+            achado = _OK_NOTA.search(linha)
+            if achado:
+                nota = notas.setdefault(achado.group(1), {"sucesso": False, "a_mao": False, "sem_confirmacao": False,
+                                                          "serie_ponto": False, "quando": quando})
+                resto = achado.group(2)
+                chave = ("sucesso" if "integrada com sucesso" in resto else "a_mao" if "terminada a mao" in resto
+                         else "sem_confirmacao")
+                nota[chave], nota["quando"] = True, quando
+                continue
+            achado = _JA_EXISTE.search(linha)
+            if achado:
+                notas.setdefault(achado.group(1), {"sucesso": False, "a_mao": False, "sem_confirmacao": False,
+                                                   "serie_ponto": False, "quando": quando})["serie_ponto"] = True
+    return notas
+
+
+def conferir_com_logs(notas, logs):
+    """Compara as notas da planilha (com r["verde"] de cada linha) com `notas_nos_logs`. Devolve listas de notas:
+    'nao_pintadas' (o robo viu o sucesso, mas a nota nao esta toda verde), 'sem_confirmacao' (verde, mas nos logs nao
+    ha o sucesso: terminada a mao ou sem a mensagem), 'fora_dos_logs' (verde, sem nada nos logs: pintada a mao ou
+    ha mais de 30 dias) e 'serie_ponto' (o robo pos "." na Serie)."""
+    saida = {"nao_pintadas": [], "sem_confirmacao": [], "fora_dos_logs": [], "serie_ponto": []}
+    for nota in notas:
+        info = logs.get(nota["chave"][-6:])
+        verde = all(r.get("verde") for r in nota["itens"])
+        if info and info["serie_ponto"]:
+            saida["serie_ponto"].append(nota)
+        if info and info["sucesso"] and not verde:
+            saida["nao_pintadas"].append(nota)
+        elif verde and info and not info["sucesso"]:
+            saida["sem_confirmacao"].append(nota)
+        elif verde and not info:
+            saida["fora_dos_logs"].append(nota)
+    return saida
+
+
+def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0,
+             serie_ponto=None):
+    """Preenche as notas no SRP. `serie_ponto(linhas)`: chamado antes de marcar 'ok' a nota em que o robo pos "." na
+    Serie (janela "ja existe"). `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
     acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
     as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. Devolve 0 se concluiu."""
     core.limpar_logs()
-    log = open(core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log", "w", encoding="utf-8")
-    trava_log = threading.Lock()
+    caminho_log = core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log"
+    log = open(caminho_log, "w", encoding="utf-8")
+    with _TRAVA_LOG:
+        _LOG.update(caminho=caminho_log, arquivo=log, ultimo=time.time())
     rateio_salvo = [None]
     confia_barra = [True]  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
-    ultimo_log = [time.time()]
     atual = []  # linhas marcadas 'executando'
     serie_com_ponto_feita = [False]  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
 
     def registrar(texto, mostrar=True):
         """Linha no log com hora e o tempo desde a linha anterior (+s), para achar o que demora."""
-        with trava_log:
+        with _TRAVA_LOG:
             if not log.closed:
-                agora = time.time()
-                log.write(f"{datetime.now():%H:%M:%S} +{agora - ultimo_log[0]:5.1f}s {texto}\n")
-                ultimo_log[0] = agora
-                log.flush()
+                _escrever_log(texto)
         if mostrar:
             aviso(texto)
 
@@ -1612,6 +1699,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                         f"{etiqueta}: {travou.motivo}. PAUSADO. Termine esta nota a mao no SRP (inclusive Integrar), "
                         "deixe o cursor na Chave Acesso NF-e da proxima nota e clique em Continuar.", linhas)
                 registrar(f"OK {etiqueta}: terminada a mao.")
+                if serie_com_ponto_feita[0] and serie_ponto:
+                    serie_ponto(linhas)
                 marcar(linhas, "ok")
                 continue
             cliques = integrar(nota)
@@ -1620,6 +1709,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                       ("; integrada com sucesso." if cliques == 3 else "."))
             if cliques == 0:
                 registrar(f"{etiqueta}: nao achei o botao Integrar na tela. Clique em Integrar no SRP.")
+            if serie_com_ponto_feita[0] and serie_ponto:  # antes do "ok": a pintura da planilha usa a outra cor
+                serie_ponto(linhas)
             marcar(linhas, "ok")
             if cliques == 3:  # integrada com sucesso: clica na Chave (tambem na ultima nota, para a proxima planilha)
                 foco_chave = ir_para_chave()
@@ -1651,4 +1742,5 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         if atual and estado:
             for linha in atual:
                 estado(linha, "erro")
-        log.close()
+        with _TRAVA_LOG:
+            log.close()

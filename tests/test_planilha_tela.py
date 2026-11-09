@@ -144,8 +144,19 @@ class PintarLinhas(unittest.TestCase):
                 self.assertEqual(core.pintar_linhas(caminho, [4]), "excel")
             finally:
                 core.os.replace, core._pintar_no_excel = original_replace, original_excel
-            self.assertEqual(chamadas, [(caminho, "Notas", [4], 3, core.VERDE_CONCLUIDA)])
+            self.assertEqual(chamadas, [(caminho, "Notas", [4], 3, core.VERDE_CONCLUIDA, {}, 1)])
             self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])
+
+    def test_serie_com_ponto_outro_verde_e_comentario_na_chave(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            self.assertEqual(core.pintar_linhas(caminho, [2, 3], core.VERDE_SERIE_PONTO, {2: "lançada com '.'"}), "arquivo")
+            ws = load_workbook(caminho).active
+            self.assertEqual(ws.cell(row=3, column=2).fill.fgColor.rgb[-6:], core.VERDE_SERIE_PONTO)
+            self.assertTrue(core.fundo_verde(ws.cell(row=2, column=1).fill))  # ainda conta como feita ao recarregar
+            self.assertEqual(ws.cell(row=2, column=1).comment.text, "lançada com '.'")  # na coluna CHAVE NF
+            self.assertIsNone(ws.cell(row=3, column=1).comment)
 
 
 class PlanilhaSolta(unittest.TestCase):
