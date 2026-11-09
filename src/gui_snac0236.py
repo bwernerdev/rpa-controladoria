@@ -28,7 +28,6 @@ class Pagina0236:
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
         self.passo_a_passo.trace_add("write", lambda *_: self._gravar_passo())
         self.execucao = None  # andamento da execucao em curso, para o tempo previsto
-        self.filtro = "todas"
         self.console_aberto = bool(app.config_usuario.get("console_0236", False))
         # quantas NFs lancar nesta execucao (usuario, 06/11/2026): vazio = todas as pendentes; so numeros
         self.qtd_nfs = tk.StringVar(app, value="")
@@ -146,16 +145,9 @@ class Pagina0236:
         self.previsao.bind("<Configure>", quebrar)
         self._atualizar_previsao()
 
-        # filtros com a contagem de notas (como na SNAC0234) e a tabela: so depois de carregar a planilha; sem
-        # planilha, a area de arrastar ocupa o lugar (`_arrumar_vazia`)
-        self.filtros = tk.Frame(pai, bg=COR["fundo"])
-        self.botoes_filtro = {}
-        for chave, titulo, _ in ui.FILTROS:
-            rotulo = tk.Label(self.filtros, text=titulo, bg=COR["fundo"], fg=COR["suave"], font=fonte(9), cursor="hand2",
-                              padx=px(10), pady=px(3))
-            rotulo.pack(side="left", padx=(0, px(4)))
-            rotulo.bind("<Button-1>", lambda _e, c=chave: self.filtrar(c))
-            self.botoes_filtro[chave] = (rotulo, titulo)
+        # tabela: so depois de carregar a planilha; sem planilha, a area de arrastar ocupa o lugar (`_arrumar_vazia`).
+        # Sem filtros (usuario, 09/11/2026): o robo para na 1a pausa ou erro, entao Pausadas/Erros nunca passam de 1;
+        # a contagem de concluidas/pendentes fica no cartao da planilha (`_resumo`)
         self.cartao = self.app._cartao(pai)
         colunas = ("linha", "nota", "item", "oper", "qtd", "unit", "status")
         self.tabela = ttk.Treeview(self.cartao, columns=colunas, show="headings", height=3)
@@ -190,7 +182,6 @@ class Pagina0236:
                                                            tags=self._tags(r["linha"], zebra))
         self._pintar_zona()
         self._arrumar_vazia()
-        self.filtrar(self.filtro)
         self.barra.configure(maximum=max(len(self.registros), 1), value=self._feitas())
         self._status(*self.status_atual)
         self.saida.configure(state="normal")
@@ -231,48 +222,28 @@ class Pagina0236:
             self.tabela.item(iid, tags=self._tags(linha, self._zebra(linha)))
 
     def _arrumar_vazia(self):
-        """Sem planilha: so a area de arrastar (grande), sem filtros nem tabela vazia. Com planilha: filtros e tabela."""
+        """Sem planilha: so a area de arrastar (grande), sem a tabela vazia. Com planilha: cartao compacto e tabela."""
         if not self.caminho:
-            self.filtros.pack_forget()
             self.cartao.pack_forget()
             self.zona.pack_configure(fill="both", expand=True)
         else:
             self.zona.pack_configure(fill="x", expand=False)
-            self.filtros.pack(fill="x", pady=(self.ui.px(10), self.ui.px(6)))
-            self.cartao.pack(fill="both", expand=True)
+            self.cartao.pack(fill="both", expand=True, pady=(self.ui.px(12), 0))
 
-    # ---------- filtros (notas, como na SNAC0234) ----------
-    def _estado_nota(self, nota):
-        """Estado da nota para o filtro: erro > pausado > executando > pendente > ok (todas as linhas)."""
-        nomes = {self.estados.get(r["linha"], "pendente") for r in nota["itens"]}
-        return next((n for n in ("erro", "pausado", "executando", "pendente") if n in nomes), "ok")
+    def _resumo(self):
+        """Texto do cartao da planilha: notas, itens e, sem erros, concluidas e pendentes (contadas por nota)."""
+        texto = f"{len(self.notas)} nota(s)  ·  {len(self.registros)} item(ns)"
+        if self.erros:
+            return texto + f"  ·  {len(self.erros)} erro(s) na planilha"
+        feitas = sum(1 for n in self.notas if all(self.estados.get(r["linha"]) == "ok" for r in n["itens"]))
+        return texto + f"  ·  {feitas} concluída(s)  ·  {len(self.notas) - feitas} pendente(s)"
 
-    def filtrar(self, chave):
-        self.filtro = chave
-        alvo = dict((c, estados) for c, _, estados in self.ui.FILTROS)[chave]
-        posicao = 0
-        for nota in self.notas:
-            mostrar = alvo is None or self._estado_nota(nota) in alvo
-            for r in nota["itens"]:
-                iid = self.iids.get(r["linha"])
-                if not iid:
-                    continue
-                if mostrar:
-                    self.tabela.move(iid, "", posicao)
-                    posicao += 1
-                else:
-                    self.tabela.detach(iid)
-        self._contar_filtros()
-
-    def _contar_filtros(self):
-        COR, fonte = self.ui.COR, self.ui.fonte
-        for chave, _, estados in self.ui.FILTROS:
-            rotulo, titulo = self.botoes_filtro[chave]
-            total = len(self.notas) if estados is None else sum(1 for n in self.notas if self._estado_nota(n) in estados)
-            ativo = chave == self.filtro
-            rotulo.configure(text=f"{titulo}  {total}", bg=COR["azul_fundo"] if ativo else COR["fundo"],
-                             fg=COR["destaque"] if ativo else (COR["erro"] if chave == "erros" and total else COR["suave"]),
-                             font=fonte(9, forte=ativo))
+    def _atualizar_resumo(self):
+        try:
+            if getattr(self, "rotulo_resumo", None) and self.caminho:
+                self.rotulo_resumo.configure(text=self._resumo())
+        except tk.TclError:
+            pass  # cartao sendo refeito
 
     # ---------- dica da nota com "." na Serie ----------
     def _dica_serie(self, evento):
@@ -346,11 +317,9 @@ class Pagina0236:
         textos.pack(side="left", fill="x", expand=True, pady=px(8))
         tk.Label(textos, text=Path(self.caminho).name, bg=COR["cartao"], fg=COR["texto"], font=fonte(10, forte=True),
                  anchor="w").pack(fill="x")
-        resumo = f"{len(self.notas)} nota(s)  ·  {len(self.registros)} item(ns)"
-        if self.erros:
-            resumo += f"  ·  {len(self.erros)} erro(s) na planilha"
-        tk.Label(textos, text=resumo, bg=COR["cartao"], fg=COR["erro"] if self.erros else COR["suave"], font=fonte(9),
-                 anchor="w").pack(fill="x")
+        self.rotulo_resumo = tk.Label(textos, text=self._resumo(), bg=COR["cartao"],
+                                      fg=COR["erro"] if self.erros else COR["suave"], font=fonte(9), anchor="w")
+        self.rotulo_resumo.pack(fill="x")
 
     def _ultima_planilha(self):
         """Caminho da ultima planilha carregada nesta aba (config.json, chave `ultima_0236`), se o arquivo ainda existir."""
@@ -430,7 +399,7 @@ class Pagina0236:
         if self.app.config_usuario.get("ultima_0236") != caminho:  # atalho "Abrir a ultima" na tela vazia
             self.app.config_usuario["ultima_0236"] = caminho
             self.ui.gravar_config(self.app.config_usuario)
-        self.pintadas, self.filtro = set(), "todas"
+        self.pintadas = set()
         self.serie_ponto = {r["linha"] for r in registros if r.get("serie_ponto")}  # o verde mais escuro da planilha
         self.escrever(f"Planilha {Path(caminho).name}: {len(notas)} nota(s), {len(registros)} item(ns).")
         # notas ja pintadas de verde na planilha = ja feitas: o robo pula e segue pelas outras (usuario, 06/11/2026)
@@ -466,7 +435,7 @@ class Pagina0236:
         else:
             self._status(f"Pronta: {len(notas) - len(verdes)} de {len(notas)} nota(s) a fazer. Simular mostra as "
                          "teclas sem digitar", "suave")
-        for iid in self.iids.values():  # as escondidas pelo filtro nao aparecem em get_children
+        for iid in self.iids.values():
             self.tabela.delete(iid)
         self.iids = {}
         self._repovoar()
@@ -733,16 +702,10 @@ class Pagina0236:
         if nome == "ok" and self.ocupado:
             self._pintar_nota(linha)
         self._atualizar_linha(linha)
-        if self.filtro == "todas":
-            self._contar_filtros()
-        else:
-            self.filtrar(self.filtro)
+        self._atualizar_resumo()
         iid = self.iids.get(linha)
         if iid and nome in ("executando", "pausado"):
-            try:
-                self.tabela.see(iid)
-            except tk.TclError:  # linha escondida pelo filtro
-                pass
+            self.tabela.see(iid)
         self.barra.configure(value=self._feitas())
         self._botoes()
 
