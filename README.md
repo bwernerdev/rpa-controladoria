@@ -90,7 +90,7 @@ Se algo não confere, ele pausa: termine a nota à mão no SRP, deixe o cursor n
 
 | Arquivo | O que é |
 |---|---|
-| `logs\` | um registro por execução. Depois de 2 dias, os registros vão para um `.zip` por mês (`arquivo-AAAAMM.zip`), que ocupa ~10% do espaço; tudo com mais de 30 dias é apagado sozinho. Os prints de `logs	elas` ficam 7 dias |
+| `logs\` | um registro por execução. Depois de 2 dias, os registros vão para um `.zip` por mês (`arquivo-AAAAMM.zip`), que ocupa ~10% do espaço; tudo com mais de 30 dias é apagado sozinho. Os prints de `logs\telas` ficam 7 dias |
 | `aprendizado.json` | contas corretas informadas pelo SRP (item + C/Custo) |
 | `progresso.json` | linhas concluídas da última planilha |
 | `posicoes_0236.json` | posições do Rateio da SNAC0236 na tela (para a primeira nota também ser rápida) |
