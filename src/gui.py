@@ -16,6 +16,7 @@ from PIL import ImageTk
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from gui_snac0236 import Pagina0236
+from snac0236 import texto_duracao
 from icone import desenhar
 from versao import NOME, VERSAO
 
@@ -44,6 +45,8 @@ PALETAS = {
 TEMAS = {"auto": "Automático (igual ao Windows)", "claro": "Claro", "escuro": "Escuro"}
 FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
+# ritmo da SNAC0234 para o tempo previsto antes de iniciar (v1.8.0: media de ~2,3 s por linha, 194 linhas dos logs de 30/10)
+SEG_LINHA = 2.3
 MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
 # telas do SRP, uma aba cada: (chave, codigo, nome no SRP, subtitulo da janela)
 TELAS = (("snac0234", "SNAC0234", "Requisição Suprimento", "Preenchimento de requisições do SRP a partir da planilha"),
@@ -357,11 +360,47 @@ class App(RaizTk):
                          upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
         estilo.map("TCheckbutton", background=[("active", COR["fundo"])],
                    indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
+        self._caixa_de_marcar(estilo)
         estilo.configure("TRadiobutton", background=COR["fundo"], foreground=COR["texto"], font=fonte(9),
                          indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
                          upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
         estilo.map("TRadiobutton", background=[("active", COR["fundo"])],
                    indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
+
+    def _caixa_de_marcar(self, estilo):
+        """Caixa de marcar com ✓ (usuario, 09/11/2026: o X do tema clam parecia Windows antigo): imagens desenhadas no
+        tamanho do DPI (4x e reduzidas, para suavizar), uma por estado, num elemento novo a cada tema (o ttk nao deixa
+        recriar um elemento com o mesmo nome)."""
+        from PIL import Image, ImageDraw
+        lado = px(16)
+        grande = lado * 4
+
+        def caixa(marcada, ativa):
+            imagem = Image.new("RGBA", (grande, grande), (0, 0, 0, 0))
+            desenho = ImageDraw.Draw(imagem)
+            fundo = COR["destaque"] if marcada else COR["cartao"]
+            borda = COR["destaque"] if marcada else COR["borda_forte"]
+            if not ativa:
+                fundo = COR["borda_forte"] if marcada else COR["cinza_fundo"]
+                borda = COR["borda_forte"]
+            desenho.rounded_rectangle((2, 2, grande - 3, grande - 3), radius=grande // 5, fill=fundo, outline=borda,
+                                      width=max(4, grande // 14))
+            if marcada:
+                desenho.line([(grande * 0.26, grande * 0.52), (grande * 0.43, grande * 0.69), (grande * 0.75, grande * 0.33)],
+                             fill=COR["no_destaque"] if ativa else COR["cartao"], width=max(6, grande // 9), joint="curve")
+            final = Image.new("RGBA", (lado + px(8), lado), (0, 0, 0, 0))  # vao transparente entre a caixa e o texto
+            final.paste(imagem.resize((lado, lado), Image.LANCZOS), (0, 0))
+            return ImageTk.PhotoImage(final)
+        self._imagens_marca = {(m, a): caixa(m, a) for m in (False, True) for a in (False, True)}
+        self._marca_n = getattr(self, "_marca_n", 0) + 1
+        nome = f"Marca{self._marca_n}.indicator"
+        img = self._imagens_marca
+        estilo.element_create(nome, "image", img[(False, True)], ("disabled", "selected", img[(True, False)]),
+                              ("disabled", img[(False, False)]), ("selected", img[(True, True)]))
+        estilo.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
+            (nome, {"side": "left", "sticky": ""}),
+            ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})])
+        estilo.configure("TCheckbutton", padding=(0, px(2)))
 
     def _cartao(self, pai):
         return tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda"], highlightcolor=COR["borda"],
@@ -383,9 +422,8 @@ class App(RaizTk):
         lado.pack(side="right", anchor="n")
         titulos = tk.Frame(topo, bg=COR["fundo"])
         titulos.pack(side="left", fill="x", expand=True)
+        # so o nome (usuario, 09/11/2026): o subtitulo repetia o que a aba ja diz e tirava altura da tabela
         tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").pack(fill="x")
-        self.subtitulo = tk.Label(titulos, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
-        self.subtitulo.pack(fill="x")
         self.b_opcoes = self._link(lado, "⚙  Opções", self.abrir_opcoes, cor="suave")
         self.b_opcoes.pack(side="right")
         self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
@@ -458,7 +496,7 @@ class App(RaizTk):
         self.painel_detalhe.pack(fill="x")
 
         # filtros da tabela (com a contagem de cada estado)
-        filtros = tk.Frame(corpo, bg=COR["fundo"])
+        filtros = self.filtros = tk.Frame(corpo, bg=COR["fundo"])
         filtros.pack(fill="x", pady=(10, 6))
         self.botoes_filtro = {}
         for chave, titulo, _ in FILTROS:
@@ -485,23 +523,25 @@ class App(RaizTk):
 
         self.botoes = tk.Frame(corpo, bg=COR["fundo"])
         self.botoes.pack(side="bottom", fill="x", pady=(12, 10))
+        # so os botoes que servem agora (usuario, 09/11/2026; `_atualizar_botoes`): parado = Iniciar (+ Continuar da
+        # linha N) + Simular; executando = Parar (o Continuar da pausa fica na faixa amarela)
         self.b_iniciar = ttk.Button(self.botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
-        self.b_iniciar.pack(side="left")
         self.b_continuar = ttk.Button(self.botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
-        self.b_continuar.pack(side="left", padx=(8, 0))
         self.b_simular = ttk.Button(self.botoes, text="Simular", style="Secundario.TButton", command=self.simular)
-        self.b_simular.pack(side="left", padx=(8, 0))
         self.b_parar = ttk.Button(self.botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
-        self.b_parar.pack(side="right")
+        self.botoes_visiveis = None
 
         progresso = tk.Frame(corpo, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
+        progresso.columnconfigure(0, weight=1)
         self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
-        self.status.pack(fill="x")
+        self.status.grid(row=0, column=0, sticky="w")
+        # tempo previsto antes de iniciar (usuario, 09/11/2026); durante a execucao o painel mostra o restante
+        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte(9, forte=True), anchor="e")
         self.barra = BarraFina(progresso)
-        self.barra.pack(fill="x", pady=(4, 0))
+        self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(6), 0))
 
-        cartao = self._cartao(corpo)
+        cartao = self.cartao = self._cartao(corpo)
         cartao.pack(fill="both", expand=True)
         colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
         self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
@@ -543,7 +583,6 @@ class App(RaizTk):
                 pagina.pack(fill="both", expand=True, padx=px(20), pady=(14, 12))
             else:
                 pagina.pack_forget()
-        self.subtitulo.configure(text=next(t[3] for t in TELAS if t[0] == self.aba))
         self._pintar_abas()
 
     def trocar_aba(self, chave):
@@ -558,25 +597,86 @@ class App(RaizTk):
         gravar_config(self.config_usuario)
         self._mostrar_aba()
 
+    # ---------- tela sem planilha (as duas abas; usuario, 09/11/2026) ----------
+    def _ultima_planilha(self, chave):
+        """Caminho da ultima planilha carregada na aba (config.json, `chave`), se o arquivo ainda existir."""
+        caminho = self.config_usuario.get(chave)
+        return caminho if caminho and Path(caminho).is_file() else None
+
+    def _lembrar_planilha(self, chave, caminho):
+        if self.config_usuario.get(chave) != caminho:
+            self.config_usuario[chave] = caminho
+            gravar_config(self.config_usuario)
+
+    def _zona_vazia(self, zona, titulo, colunas, escolher, abrir, chave_ultima):
+        """Sem planilha: a zona ocupa o lugar da tabela, com borda tracejada (realce no mouse), botao Escolher planilha,
+        atalho para a ultima planilha (`chave_ultima` no config.json) e as colunas exigidas."""
+        zona.configure(cursor="", highlightthickness=0)
+        tela = tk.Canvas(zona, bg=COR["cartao"], highlightthickness=0, cursor="hand2")
+        tela.pack(fill="both", expand=True)
+        centro = tk.Frame(tela, bg=COR["cartao"])
+        janela = tela.create_window(0, 0, window=centro, anchor="center")
+        borda = {"cor": COR["borda_forte"]}
+
+        def desenhar_borda(_evento=None):
+            largura, altura = tela.winfo_width(), tela.winfo_height()
+            tela.delete("borda")
+            tela.create_rectangle(px(1), px(1), largura - px(1) - 1, altura - px(1) - 1, outline=borda["cor"], width=px(2),
+                                  dash=(px(6), px(4)), tags="borda")
+            tela.coords(janela, largura / 2, altura / 2)
+
+        def realce(cor):
+            borda["cor"] = cor
+            tela.itemconfigure("borda", outline=cor)
+        tela.bind("<Configure>", desenhar_borda)
+        icone = tk.Label(centro, text="▦", bg=COR["cartao"], fg=COR["suave"], font=fonte(28), cursor="hand2")
+        icone.pack()
+        rotulo = tk.Label(centro, text=titulo, bg=COR["cartao"], fg=COR["texto"], font=fonte(11, forte=True), cursor="hand2")
+        rotulo.pack(pady=(px(4), 0))
+        sub = tk.Label(centro, text="ou escolha o arquivo (.xlsx)", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
+                       cursor="hand2")
+        sub.pack()
+        ttk.Button(centro, text="Escolher planilha", style="Primario.TButton", command=escolher).pack(pady=(px(14), 0))
+        ultima = self._ultima_planilha(chave_ultima)
+        if ultima:
+            quando = time.strftime("%d/%m %H:%M", time.localtime(Path(ultima).stat().st_mtime))
+            self._link(centro, f"Abrir a última: {Path(ultima).name}  ·  alterada em {quando}", lambda: abrir(ultima),
+                       bg=COR["cartao"]).pack(pady=(px(10), 0))
+        tk.Label(centro, text="Colunas da planilha: " + "  ·  ".join(colunas), bg=COR["cartao"], fg=COR["suave"],
+                 font=fonte(8), wraplength=px(560), justify="center").pack(pady=(px(16), 0))
+        for parte in (tela, icone, rotulo, sub):
+            parte.bind("<Button-1>", lambda _e: escolher())
+        for parte in (tela, centro, icone, rotulo, sub):
+            parte.bind("<Enter>", lambda _e: realce(COR["destaque"]), add="+")
+            parte.bind("<Leave>", lambda _e: realce(COR["borda_forte"]), add="+")
+            if DND_FILES:
+                parte.drop_target_register(DND_FILES)
+                parte.dnd_bind("<<Drop>>", self._soltou)
+
+    def _arrumar_vazia(self):
+        """SNAC0234 sem planilha: so a zona (grande), sem filtros nem tabela vazia."""
+        if not self.caminho_atual:
+            self.filtros.pack_forget()
+            self.cartao.pack_forget()
+            self.zona.pack_configure(fill="both", expand=True)
+        else:
+            self.zona.pack_configure(fill="x", expand=False)
+            if not self.filtros.winfo_manager():
+                self.filtros.pack(fill="x", pady=(10, 6), after=self.area_avisos)
+                self.cartao.pack(fill="both", expand=True, after=self.filtros)
+                self.tabela.yview_moveto(0)
+
     def _pintar_zona(self):
         """Antes da planilha: area grande de arrastar. Depois: cartao com nome, resumo e acoes."""
         for filho in self.zona.winfo_children():
             filho.destroy()
         self.b_recarregar = None
+        self._arrumar_vazia()
         if not self.caminho_atual:
-            self.zona.configure(cursor="hand2", highlightbackground=COR["borda_forte"])
-            titulo = tk.Label(self.zona, text="Arraste a planilha aqui", bg=COR["cartao"], fg=COR["texto"],
-                              font=fonte(11, forte=True), cursor="hand2")
-            titulo.pack(pady=(px(16), 0))
-            sub = tk.Label(self.zona, text="ou clique para escolher o arquivo (.xlsx)", bg=COR["cartao"],
-                           fg=COR["suave"], font=fonte(9), cursor="hand2")
-            sub.pack(pady=(0, px(16)))
-            for parte in (self.zona, titulo, sub):
-                parte.bind("<Button-1>", lambda _e: self.escolher())
-                parte.bind("<Enter>", lambda _e: self.zona.configure(highlightbackground=COR["destaque"]))
-                parte.bind("<Leave>", lambda _e: self.zona.configure(highlightbackground=COR["borda_forte"]))
+            self._zona_vazia(self.zona, "Arraste a planilha da SNAC0234 aqui", ("Item", "C/Custo", "Conta", "Quantidade"),
+                             self.escolher, self.carregar, "ultima_0234")
             return
-        self.zona.configure(cursor="", highlightbackground=COR["borda"])
+        self.zona.configure(cursor="", highlightbackground=COR["borda"], highlightthickness=1)
         self.zona.unbind("<Button-1>")
         self.zona.unbind("<Enter>")
         self.zona.unbind("<Leave>")
@@ -726,7 +826,11 @@ class App(RaizTk):
         margem = px(16)
         corpo = tk.Frame(janela, bg=COR["fundo"])
         corpo.pack(fill="both", padx=margem, pady=margem)
-        tk.Label(corpo, text="Preenchimento", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True), anchor="w").pack(fill="x")
+        # estas opcoes valem so para a SNAC0234; as da SNAC0236 ficam na propria aba (usuario, 09/11/2026)
+        tk.Label(corpo, text="SNAC0234  ·  Requisição Suprimento", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
+                 anchor="w").pack(fill="x")
+        tk.Label(corpo, text="As opções da SNAC0236 (Passo a passo, NFs a lançar) ficam na própria aba.", bg=COR["fundo"],
+                 fg=COR["suave"], font=fonte(8), anchor="w").pack(fill="x")
         ttk.Checkbutton(corpo, text="Conferir a quantidade na tela (OCR)", variable=self.conferir).pack(anchor="w", pady=(px(6), 0))
         for rotulo, variavel, ajuda in (("Limite de linhas", self.limite, "0 = todas"),
                                         ("Pausa entre teclas (s)", self.pausa, "padrão 0.25")):
@@ -882,9 +986,35 @@ class App(RaizTk):
         self.iids = {}
         self._construir()
 
+    def _atualizar_previsao(self):
+        """Antes de iniciar: linhas que o Iniciar (ou o Continuar) vai preencher, tempo e horario de termino, pelo ritmo
+        medido (`SEG_LINHA`). Some durante a execucao (o painel mostra o restante) e sem planilha pronta."""
+        try:
+            if self.ocupado or not self.registros:
+                self.previsao.grid_remove()
+                return
+            try:
+                limite = int(self.limite.get() or 0)
+            except ValueError:
+                limite = 0
+            pendentes = [r for r in self.registros if self.estados.get(r["linha"]) != "ok"]
+            base = pendentes if 0 < self.concluidas < len(self.registros) else self.registros
+            linhas = len(base[:limite] if limite > 0 else base)
+            if not linhas:
+                self.previsao.grid_remove()
+                return
+            segundos = linhas * SEG_LINHA
+            termino = time.strftime("%H:%M", time.localtime(time.time() + segundos))
+            self.previsao.configure(text=f"{linhas} linha(s)  ·  {texto_duracao(segundos)}  ·  término ~{termino} (sem pausas)")
+            if not self.previsao.winfo_manager():
+                self.previsao.grid(row=0, column=1, sticky="ne", padx=(px(16), 0))
+        except (tk.TclError, AttributeError):
+            pass  # widgets sendo refeitos
+
     def _tique(self):
         """A cada segundo: relogio e estimativa do painel, pulso do Citrix procurado e tema automatico."""
         try:
+            self._atualizar_previsao()
             self._atualizar_painel()
             if self.citrix is not True:
                 self.pulso = not self.pulso
@@ -1005,16 +1135,28 @@ class App(RaizTk):
     def _atualizar_botoes(self):
         pronto = bool(self.registros) and not self.ocupado
         retomar = pronto and 0 < self.concluidas < len(self.registros)
-        self.b_iniciar.configure(state="normal" if pronto else "disabled")
-        self.b_simular.configure(state="normal" if pronto else "disabled")
-        self.b_parar.configure(state="normal" if self.ocupado else "disabled")
+        # retomando: Continuar da linha N e o principal; Iniciar recomeca do zero
+        self.b_iniciar.configure(text="Recomeçar do início" if retomar else "Iniciar preenchimento",
+                                 style="Secundario.TButton" if retomar else "Primario.TButton")
+        self.b_continuar.configure(text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar",
+                                   style="Primario.TButton")
         if self.ocupado:
-            self.b_continuar.configure(state="normal" if self.pausado else "disabled",
-                                       text="Continuar (corrigido no SRP)" if self.pausado else "Continuar")
+            visiveis = (self.b_parar,)
+        elif pronto:
+            visiveis = (self.b_continuar, self.b_iniciar, self.b_simular) if retomar else (self.b_iniciar, self.b_simular)
         else:
-            self.b_continuar.configure(state="normal" if retomar else "disabled",
-                                       text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar")
+            visiveis = ()
+        if visiveis != self.botoes_visiveis:
+            self.botoes_visiveis = visiveis
+            for botao in (self.b_iniciar, self.b_continuar, self.b_simular, self.b_parar):
+                botao.pack_forget()
+            esquerda = [b for b in visiveis if b is not self.b_parar]
+            for indice, botao in enumerate(esquerda):
+                botao.pack(side="left", padx=(8 if indice else 0, 0))
+            if self.b_parar in visiveis:
+                self.b_parar.pack(side="right")
         self.b_continuar_faixa.configure(text="Continuar (corrigido no SRP)")
+        self._atualizar_previsao()
         if self.b_recarregar:
             self.b_recarregar.configure(state="disabled" if self.ocupado else "normal", disabledforeground=COR["borda_forte"])
 
@@ -1086,6 +1228,7 @@ class App(RaizTk):
             messagebox.showerror("Planilha", str(erro))
             self._atualizar_botoes()
             return
+        self._lembrar_planilha("ultima_0234", caminho)  # atalho "Abrir a ultima" na tela sem planilha
         erros = validar(registros)
         for indice, r in enumerate(registros):
             self.zebra[r["linha"]] = "par" if indice % 2 else "impar"

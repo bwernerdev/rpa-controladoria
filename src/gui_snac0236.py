@@ -321,61 +321,11 @@ class Pagina0236:
                                       fg=COR["erro"] if self.erros else COR["suave"], font=fonte(9), anchor="w")
         self.rotulo_resumo.pack(fill="x")
 
-    def _ultima_planilha(self):
-        """Caminho da ultima planilha carregada nesta aba (config.json, chave `ultima_0236`), se o arquivo ainda existir."""
-        caminho = self.app.config_usuario.get("ultima_0236")
-        return caminho if caminho and Path(caminho).is_file() else None
-
     def _pintar_zona_vazia(self):
-        """Sem planilha (usuario, 09/11/2026): a zona ocupa o lugar da tabela (`_arrumar_vazia`) com borda tracejada,
-        botao Escolher planilha, atalho para a ultima planilha e as colunas exigidas."""
-        COR, px, fonte = self.ui.COR, self.ui.px, self.ui.fonte
-        self.zona.configure(cursor="", highlightthickness=0)
-        tela = tk.Canvas(self.zona, bg=COR["cartao"], highlightthickness=0, cursor="hand2")
-        tela.pack(fill="both", expand=True)
-        centro = tk.Frame(tela, bg=COR["cartao"])
-        janela = tela.create_window(0, 0, window=centro, anchor="center")
-        borda = {"cor": COR["borda_forte"]}
-
-        def desenhar(_evento=None):
-            largura, altura = tela.winfo_width(), tela.winfo_height()
-            tela.delete("borda")
-            margem = px(1)
-            tela.create_rectangle(margem, margem, largura - margem - 1, altura - margem - 1, outline=borda["cor"],
-                                  width=px(2), dash=(px(6), px(4)), tags="borda")
-            tela.coords(janela, largura / 2, altura / 2)
-
-        def realce(cor):
-            borda["cor"] = cor
-            tela.itemconfigure("borda", outline=cor)
-        tela.bind("<Configure>", desenhar)
-
-        icone = tk.Label(centro, text="▦", bg=COR["cartao"], fg=COR["suave"], font=fonte(28), cursor="hand2")
-        icone.pack()
-        titulo = tk.Label(centro, text="Arraste a planilha da SNAC0236 aqui", bg=COR["cartao"], fg=COR["texto"],
-                          font=fonte(11, forte=True), cursor="hand2")
-        titulo.pack(pady=(px(4), 0))
-        sub = tk.Label(centro, text="ou escolha o arquivo (.xlsx)", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
-                       cursor="hand2")
-        sub.pack()
-        ttk.Button(centro, text="Escolher planilha", style="Primario.TButton", command=self.escolher).pack(
-            pady=(px(14), 0))
-        ultima = self._ultima_planilha()
-        if ultima:
-            quando = datetime.fromtimestamp(Path(ultima).stat().st_mtime).strftime("%d/%m %H:%M")
-            self.app._link(centro, f"Abrir a última: {Path(ultima).name}  ·  alterada em {quando}",
-                           lambda: self.carregar(ultima), bg=COR["cartao"]).pack(pady=(px(10), 0))
-        colunas = "  ·  ".join(snac0236.TITULOS.values())
-        tk.Label(centro, text=f"Colunas da planilha: {colunas}", bg=COR["cartao"], fg=COR["suave"], font=fonte(8),
-                 wraplength=px(560), justify="center").pack(pady=(px(16), 0))
-        for parte in (tela, icone, titulo, sub):
-            parte.bind("<Button-1>", lambda _e: self.escolher())
-        for parte in (tela, centro, icone, titulo, sub):
-            parte.bind("<Enter>", lambda _e: realce(COR["destaque"]), add="+")
-            parte.bind("<Leave>", lambda _e: realce(COR["borda_forte"]), add="+")
-            if self.ui.DND_FILES:
-                parte.drop_target_register(self.ui.DND_FILES)
-                parte.dnd_bind("<<Drop>>", self.app._soltou)
+        """Sem planilha (usuario, 09/11/2026): a zona ocupa o lugar da tabela (`_arrumar_vazia`); desenho comum as duas
+        abas em `App._zona_vazia` (borda tracejada, Escolher planilha, Abrir a ultima, colunas exigidas)."""
+        self.app._zona_vazia(self.zona, "Arraste a planilha da SNAC0236 aqui", snac0236.TITULOS.values(), self.escolher,
+                             self.carregar, "ultima_0236")
 
     # ---------- planilha ----------
     def escolher(self):
@@ -396,9 +346,7 @@ class Pagina0236:
             messagebox.showerror("Planilha", f"Não consegui ler a planilha:\n{erro}")
             return
         self.caminho, self.registros, self.notas, self.erros, self.estados = caminho, registros, notas, erros, {}
-        if self.app.config_usuario.get("ultima_0236") != caminho:  # atalho "Abrir a ultima" na tela vazia
-            self.app.config_usuario["ultima_0236"] = caminho
-            self.ui.gravar_config(self.app.config_usuario)
+        self.app._lembrar_planilha("ultima_0236", caminho)  # atalho "Abrir a ultima" na tela sem planilha
         self.pintadas = set()
         self.serie_ponto = {r["linha"] for r in registros if r.get("serie_ponto")}  # o verde mais escuro da planilha
         self.escrever(f"Planilha {Path(caminho).name}: {len(notas)} nota(s), {len(registros)} item(ns).")
