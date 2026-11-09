@@ -434,7 +434,14 @@ def ler_estado(janela, fixos=(), imagem=None):
 # 1,2 s sem ciano = campo sem cor (lista Lemg...). Ja foi 0,8 s (04/11/2026: na rolagem da grade o robo achou que era
 # campo sem cor e digitou o Valor Unit no Vlr ICMS) e 2 s; hoje o Valor Unit tem entrada propria (entrar_no_valor_unit)
 # e a grade rolada e conferida pela faixa acima do foco. Cada campo sem cor custava 2 s parado.
-def aguardar(janela, referencia, limite, fixos=(), sem_cor=1.2, antes=None):
+SEM_COR = 1.2
+# onde o foco ja ficou sem cor nesta execucao (mesmo campo, mesmo Enter): 0,4 s. Nos logs de 09/11/2026 sao sempre os
+# mesmos 4 pontos por nota (Enter 3 e 5 depois da Data, Enter 8 e 9 depois do Valor do ICMS), ~1,8 s cada. O robo so
+# aperta Enter nesses campos (nunca digita sem ver o campo); campo lento continua com o ciano velho e nao conta.
+SEM_COR_CONHECIDO = 0.4
+
+
+def aguardar(janela, referencia, limite, fixos=(), sem_cor=SEM_COR, antes=None):
     """Depois de um Enter: a nova caixa do foco; "aviso" se o aviso do SRP aparecer; "sem_cor" se nenhum campo ficar
     ciano por `sem_cor` s (listas como o Lemg so ganham borda pontilhada); None se o foco nao andar em `limite` s.
     Com `referencia` None (vindo de um campo sem cor), qualquer ciano que aparecer conta. Com `antes` (captura de antes
@@ -925,6 +932,7 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
     confia_barra = [True]  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
     atual = []  # linhas marcadas 'executando'
     serie_com_ponto_feita = [False]  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
+    sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor nesta execucao: ali a espera e curta
 
     def registrar(texto, mostrar=True):
         """Linha no log com hora e o tempo desde a linha anterior (+s), para achar o que demora."""
@@ -980,21 +988,58 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         return foco
 
     def depois_do_enter(campo, vez, foco, antes=None):
-        """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou."""
-        novo = aguardar(janela, foco, render, fixos, antes=antes)
+        """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou. Onde o foco ja
+        ficou sem cor nesta execucao (mesmo campo e mesmo Enter), espera so SEM_COR_CONHECIDO s sem ciano."""
+        curto = (campo, vez) in sem_cor_visto
+        novo = aguardar(janela, foco, render, fixos, sem_cor=SEM_COR_CONHECIDO if curto else SEM_COR, antes=antes)
         if novo in (None, "aviso") and campo in ("chave", "serie"):
             texto = janela_ja_existe()
             if texto and campo == "chave" and not serie_com_ponto_feita[0]:
                 raise DocumentoExiste(campo, texto)
             if texto:
                 raise Travou(campo, f"o SRP diz que o Documento Recebimento ja existe mesmo com '.' na Serie ('{texto[:90]}')")
+        if novo is None:
+            # 09/11/2026 13:04: o Enter depois do Valor do ICMS ficou 4,5 s parado (nas outras notas, ate 0,7 s) e o robo
+            # pausou sem saber por que. Antes de pausar espera mais uma vez (SRP lento), sem apertar nada.
+            novo = aguardar(janela, foco, render, fixos, antes=antes)
+            if novo is not None:
+                registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: o SRP demorou mais de {render:.0f} s", mostrar=False)
         if novo in (None, "aviso"):
             motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor nao saiu do lugar"
-            raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}")
+            raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}{diagnostico(campo)}")
+        if novo == "sem_cor" and not curto:
+            sem_cor_visto.add((campo, vez))
         novo = None if novo == "sem_cor" else novo
         registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: foco={novo} perto de {onde_esta(novo, lidas)!r}",
                   mostrar=False)
         return novo
+
+    def diagnostico(campo):
+        """Quando o cursor prende: texto da janela do SRP por cima (barra azul), se houver, e um print da janela do
+        Citrix em logs\\telas (fica so neste computador; apagado com os logs, em 30 dias). Texto para a mensagem."""
+        try:
+            imagem = core.capturar(janela)
+        except Exception:
+            return ""
+        nome = f"{datetime.now():%Y%m%d-%H%M%S}-{campo}.png"
+        try:
+            pasta = core.pasta_logs() / "telas"
+            pasta.mkdir(exist_ok=True)
+            imagem.save(pasta / nome)
+            registrar(f"  print da tela: logs\\telas\\{nome}", mostrar=False)
+        except Exception as erro:
+            registrar(f"  print da tela falhou: {erro}", mostrar=False)
+        texto = ""
+        if tesseract:
+            try:
+                barras = barras_dialogo(imagem)
+                if barras:
+                    texto = normalizar(" ".join(p[0] for p in core.palavras_tela(
+                        imagem.crop(area_dialogo(imagem, barras)), tesseract, escala=4 if imagem.width < 2000 else 2)))
+            except Exception as erro:
+                registrar(f"  leitura da janela por cima falhou: {erro}", mostrar=False)
+        registrar(f"  janela por cima: {texto[:200]!r}" if texto else "  nenhuma janela do SRP por cima", mostrar=False)
+        return f" (janela do SRP na tela: '{texto[:100]}')" if texto else ""
 
     def local(caixa):
         if caixa is None:

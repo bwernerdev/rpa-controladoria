@@ -828,10 +828,10 @@ def aplicar_atualizacao(pacote, destino):
 
 
 def limpar_logs(dias=30):
-    """Apaga logs (e recortes de OCR em logs/ocr) com mais de `dias` dias; devolve quantos apagou."""
+    """Apaga logs (e recortes de OCR em logs/ocr e prints em logs/telas) com mais de `dias` dias; devolve quantos apagou."""
     limite = time.time() - dias * 86400
     apagados = 0
-    for arquivo in [*pasta_logs().glob("*.log"), *pasta_logs().glob("ocr/*.png")]:
+    for arquivo in [*pasta_logs().glob("*.log"), *pasta_logs().glob("ocr/*.png"), *pasta_logs().glob("telas/*.png")]:
         try:
             if arquivo.stat().st_mtime < limite:
                 arquivo.unlink()

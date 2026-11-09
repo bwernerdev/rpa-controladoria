@@ -115,6 +115,9 @@ class SRP0236:
         # janela "Documento Recebimento ... ja existe" no Enter depois da Chave (SRP real, 09/11/2026); com "." na Serie
         # o documento passa (a nao ser que `existe_com_ponto`)
         self.existe, self.ja_existe, self.ok_existe, self.existe_com_ponto = set(), False, 0, False
+        # campo em que o SRP so processa o Enter depois de `lento[campo]` s; campo em que o Enter abre uma janela
+        # qualquer (palavras) e o foco fica parado (09/11/2026: Enter depois do ICMS parado 4,5 s)
+        self.lento, self.janela_no_enter, self.janela_extra = {}, {}, None
 
     def campos(self):
         cab = (["chave", None, None, "serie", None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -168,10 +171,10 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+        return self.janela_extra or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
 
     def palavras_janelas(self):
-        return ((JA_EXISTE if self.ja_existe else []) + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
+        return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else []) + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
                 + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
                 + (SUCESSO if self.sucesso else []))
 
@@ -226,6 +229,16 @@ class SRP0236:
                     self.alerta = True
                     return
                 if base in self.parado:
+                    return
+                if base in self.lento:  # o SRP processa o Enter so depois de um tempo
+                    def andar():
+                        with self.lock:
+                            self.indice += 1
+                            self.selecionado = True
+                    threading.Timer(self.lento.pop(base), andar).start()
+                    return
+                if base in self.janela_no_enter:
+                    self.janela_extra = self.janela_no_enter.pop(base)
                     return
                 serie = self.atual.get("serie", self.iniciais["serie"])
                 if (base == "chave" and self.atual.get("chave") in self.existe) or (
@@ -774,6 +787,50 @@ class Fluxo(unittest.TestCase):
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.integradas[0]["valor_total"], "47407.28")
+
+    def test_campo_sem_cor_ja_visto_espera_pouco(self):
+        srp = SRP0236(sem_cor={10, 11})
+        esperas, original = [], snac0236.aguardar
+
+        def aguardar(*a, **k):
+            esperas.append(k.get("sem_cor", snac0236.SEM_COR))
+            return original(*a, **k)
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp), mock.patch.object(snac0236, "aguardar", aguardar):
+            codigo, avisos, _ = rodar(srp, notas)
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(len(srp.integradas), 2)
+        self.assertEqual(esperas.count(snac0236.SEM_COR_CONHECIDO), 2)  # so na 2a nota, nos 2 campos sem cor
+
+    def test_srp_lento_no_enter_espera_mais_antes_de_pausar(self):
+        srp = SRP0236()
+        srp.lento = {"icms": 0.45}  # mais que o render (0,3 s nos testes), menos que 2 vezes
+        with ambiente(srp) as pasta:
+            codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+        self.assertEqual(codigo, 0, avisos)
+        self.assertNotIn((2, "pausado"), estados[:-2])
+        self.assertIn("Enter 1 depois do Valor do ICMS: o SRP demorou", log)
+        self.assertEqual(srp.integradas[0]["icms0"], "1.89")
+
+    def test_cursor_parado_le_a_janela_e_guarda_print(self):
+        srp = SRP0236()
+        srp.janela_no_enter = {"icms": [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate("Valor do ICMS invalido".split())]}
+
+        def usuario(srp):  # termina a nota a mao e volta o cursor para a Chave
+            srp.janela_extra, srp.atual, srp.indice = None, {}, 0
+
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, notas, ao_pausar=usuario)
+            prints = list((pasta / "telas").glob("*-icms.png"))
+        self.assertEqual(codigo, 0, avisos)
+        self.assertTrue(any("nao saiu do lugar no Enter 1 depois do Valor do ICMS (janela do SRP na tela: 'valor do icms "
+                            "invalido')" in a for a in avisos), avisos)
+        self.assertEqual(len(prints), 1)
+        self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_B])
 
     def test_cliques_no_item_e_no_ident_terceiros(self):
         srp = SRP0236()
