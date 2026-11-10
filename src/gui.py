@@ -1,6 +1,7 @@
 """Janela do robo do SRP: arrastar a planilha, simular, preencher, retomar e recarregar."""
 import ctypes
 import json
+import math
 import os
 import queue
 import re
@@ -233,6 +234,55 @@ class Botao(ctk.CTkButton):
             super().configure(require_redraw, **mudou, **opcoes)
 
     config = configure
+
+
+class Cartao(ctk.CTkFrame):
+    """Cartao de cantos redondos (customtkinter) que aceita as opcoes de tk.Frame que o app usa: bg (fundo),
+    highlightbackground (borda), highlightthickness (0 = sem borda); highlightcolor e cursor sao ignorados (o
+    CTkFrame e coberto pelo proprio Canvas). Filhos tk com o fundo do cartao precisam de margem de ~4 px para nao
+    cobrir os cantos. Arrastar e soltar: registra o cartao e o Canvas de dentro (e ele que recebe o mouse)."""
+
+    def __init__(self, pai, bg=None, borda=None, raio=8):
+        super().__init__(pai, corner_radius=px(raio), border_width=1, fg_color=bg or COR["cartao"],
+                         border_color=borda or COR["borda"], width=px(40), height=px(40))
+        self._pronto = True
+
+    def configure(self, require_redraw=False, **opcoes):
+        if not hasattr(self, "_pronto"):
+            return super().configure(require_redraw, **opcoes)
+        traduzidas = {}
+        for chave, valor in opcoes.items():
+            if chave in ("bg", "background"):
+                traduzidas["fg_color"] = valor
+            elif chave == "highlightbackground":
+                traduzidas["border_color"] = valor
+            elif chave == "highlightthickness":
+                traduzidas["border_width"] = 1 if valor else 0
+            elif chave not in ("highlightcolor", "cursor"):
+                traduzidas[chave] = valor
+        return super().configure(require_redraw, **traduzidas) if traduzidas or require_redraw else None
+
+    config = configure
+
+    def drop_target_register(self, *tipos):
+        tk.BaseWidget.drop_target_register(self, *tipos)
+        self._canvas.drop_target_register(*tipos)
+
+    def dnd_bind(self, sequencia=None, funcao=None, add=None):
+        self._canvas.dnd_bind(sequencia, funcao, add)
+        return tk.BaseWidget.dnd_bind(self, sequencia, funcao, add)
+
+
+def retangulo_redondo(tela, x1, y1, x2, y2, raio, **opcoes):
+    """Retangulo de cantos redondos num Canvas (aceita fill, outline, width, dash, tags). Cada canto = arco de 9
+    pontos: o smooth=True do Tk so chanfrava o canto."""
+    pontos = []
+    for cx, cy, inicio in ((x2 - raio, y1 + raio, -90), (x2 - raio, y2 - raio, 0), (x1 + raio, y2 - raio, 90),
+                           (x1 + raio, y1 + raio, 180)):
+        for passo in range(9):
+            angulo = math.radians(inicio + passo * 90 / 8)
+            pontos += (cx + raio * math.cos(angulo), cy + raio * math.sin(angulo))
+    return tela.create_polygon(pontos, **opcoes)
 
 
 class App(RaizTk):
@@ -566,9 +616,8 @@ class App(RaizTk):
             ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})])
         estilo.configure("TCheckbutton", padding=(0, px(2)))
 
-    def _cartao(self, pai):
-        return tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda"], highlightcolor=COR["borda"],
-                        highlightthickness=1)
+    def _cartao(self, pai, bg=None):
+        return Cartao(pai, bg=bg)
 
     def _link(self, pai, texto, comando, cor="destaque", bg=None):
         """Texto clicavel (sem borda de botao)."""
@@ -621,8 +670,7 @@ class App(RaizTk):
         self.paginas["snac0234"] = corpo
 
         # planilha: area grande de arrastar ate carregar; depois, cartao compacto
-        self.zona = tk.Frame(corpo, bg=COR["cartao"], highlightbackground=COR["borda_forte"], highlightcolor=COR["borda_forte"],
-                             highlightthickness=1)
+        self.zona = Cartao(corpo, borda=COR["borda_forte"])
         self.zona.pack(fill="x")
         if DND_FILES:
             self.zona.drop_target_register(DND_FILES)
@@ -631,8 +679,7 @@ class App(RaizTk):
         # faixa de pausa e painel da execucao (aparecem so quando servem)
         self.area_avisos = tk.Frame(corpo, bg=COR["fundo"])
         self.area_avisos.pack(fill="x")
-        self.faixa_pausa = tk.Frame(self.area_avisos, bg=COR["aviso_fundo"], highlightbackground=COR["aviso_borda"],
-                                    highlightcolor=COR["aviso_borda"], highlightthickness=1)
+        self.faixa_pausa = Cartao(self.area_avisos, bg=COR["aviso_fundo"], borda=COR["aviso_borda"])
         textos = tk.Frame(self.faixa_pausa, bg=COR["aviso_fundo"])
         textos.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(10))
         self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"], font=fonte(11, forte=True), anchor="w")
@@ -677,11 +724,11 @@ class App(RaizTk):
         self.b_copiar = self._link(rodape, "Copiar", self.copiar_console)
         self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(px(14), 0))
         self._link_versao(rodape).pack(side="right")
-        self.caixa_saida = self._cartao(corpo)
+        self.caixa_saida = self._cartao(corpo, bg=COR["console"])
         self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
                              font=fonte(9, mono=True), relief="flat", borderwidth=0, padx=px(10), pady=px(6),
                              insertbackground=COR["texto"], highlightthickness=0)
-        self.saida.pack(fill="x")
+        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o Text quadrado cobriria os cantos
         for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
             self.saida.tag_configure(tipo, foreground=COR[cor])
 
@@ -715,8 +762,8 @@ class App(RaizTk):
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
         rolagem = ttk.Scrollbar(cartao, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y")
-        self.tabela.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
+        self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
         # ordem importa: tags configuradas depois tem prioridade (o fundo do estado vence o da zebra)
         self.tabela.tag_configure("par", background=COR["zebra"])
         self.tabela.tag_configure("impar", background=COR["cartao"])
@@ -776,7 +823,7 @@ class App(RaizTk):
         """Sem planilha: a zona ocupa o lugar da tabela, com borda tracejada (realce no mouse), botao Escolher planilha,
         atalho para a ultima planilha (`chave_ultima` no config.json) e as colunas exigidas."""
         zona.configure(cursor="", highlightthickness=0)
-        tela = tk.Canvas(zona, bg=COR["cartao"], highlightthickness=0, cursor="hand2")
+        tela = tk.Canvas(zona, bg=COR["fundo"], highlightthickness=0, cursor="hand2")
         tela.pack(fill="both", expand=True)
         centro = tk.Frame(tela, bg=COR["cartao"])
         janela = tela.create_window(0, 0, window=centro, anchor="center")
@@ -785,8 +832,9 @@ class App(RaizTk):
         def desenhar_borda(_evento=None):
             largura, altura = tela.winfo_width(), tela.winfo_height()
             tela.delete("borda")
-            tela.create_rectangle(px(1), px(1), largura - px(1) - 1, altura - px(1) - 1, outline=borda["cor"], width=px(2),
-                                  dash=(px(6), px(4)), tags="borda")
+            retangulo_redondo(tela, px(1), px(1), largura - px(1) - 1, altura - px(1) - 1, px(10), fill=COR["cartao"],
+                              outline=borda["cor"], width=px(2), dash=(px(6), px(4)), tags="borda")
+            tela.tag_lower("borda")
             tela.coords(janela, largura / 2, altura / 2)
 
         def realce(cor):
@@ -1481,8 +1529,8 @@ class App(RaizTk):
         if len(suspeitas) > 10:
             rolagem = ttk.Scrollbar(cartao, orient="vertical", command=tabela.yview)
             tabela.configure(yscrollcommand=rolagem.set)
-            rolagem.pack(side="right", fill="y")
-        tabela.pack(fill="both", expand=True, padx=1, pady=1)
+            rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
+        tabela.pack(fill="both", expand=True, padx=px(4), pady=px(4))
 
         def alternar(evento):
             iid = tabela.identify_row(evento.y)

@@ -50,8 +50,7 @@ class Pagina0236:
     # ---------- montagem ----------
     def montar(self, pai):
         ui, COR, px, fonte = self.ui, self.ui.COR, self.ui.px, self.ui.fonte
-        self.zona = tk.Frame(pai, bg=COR["cartao"], highlightbackground=COR["borda_forte"], highlightcolor=COR["borda_forte"],
-                             highlightthickness=1)
+        self.zona = ui.Cartao(pai, borda=COR["borda_forte"])
         self.zona.pack(fill="x")
         if ui.DND_FILES:
             self.zona.drop_target_register(ui.DND_FILES)
@@ -59,8 +58,7 @@ class Pagina0236:
 
         # faixa de pausa (usuario, 10/11/2026: igual a da SNAC0234; antes a pausa era so o texto amarelo do status,
         # facil de passar batido): nota, motivo, o que fazer e o Continuar. Aparece so na pausa (`_mostrar_pausa`)
-        self.faixa_pausa = tk.Frame(pai, bg=COR["aviso_fundo"], highlightbackground=COR["aviso_borda"],
-                                    highlightcolor=COR["aviso_borda"], highlightthickness=1)
+        self.faixa_pausa = ui.Cartao(pai, bg=COR["aviso_fundo"], borda=COR["aviso_borda"])
         textos = tk.Frame(self.faixa_pausa, bg=COR["aviso_fundo"])
         textos.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(10))
         self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"],
@@ -88,11 +86,11 @@ class Pagina0236:
             side="left", padx=(px(14), 0))
         self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(px(14), 0))
         self.app._link_versao(rodape).pack(side="right")
-        self.caixa_saida = self.app._cartao(pai)
+        self.caixa_saida = self.app._cartao(pai, bg=COR["console"])
         self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"],
                              fg=COR["console_texto"], font=fonte(9, mono=True), relief="flat", borderwidth=0,
                              padx=px(10), pady=px(6), highlightthickness=0)
-        self.saida.pack(fill="x")
+        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o Text quadrado cobriria os cantos
         for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
             self.saida.tag_configure(tipo, foreground=COR[cor])
 
@@ -180,8 +178,8 @@ class Pagina0236:
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
         rolagem = ttk.Scrollbar(self.cartao, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y")
-        self.tabela.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
+        self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
         self.tabela.tag_configure("nota_par", background=COR["zebra"])
         self.tabela.tag_configure("nota_impar", background=COR["cartao"])
         self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok"])
