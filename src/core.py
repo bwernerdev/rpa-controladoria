@@ -746,6 +746,51 @@ def ler_progresso(registros):
     return {l for l in dados.get("ok", []) if l in validas}, dados.get("em")
 
 
+# palavras sem acento das mensagens do robo (core/snac0236 escrevem sem acento: logs e console) -> como aparecem na
+# barra de status e na faixa de pausa (`com_acentos`; usuario, 10/11/2026). Ambiguas ("e", "esta") so em frases certas.
+_ACENTOS = {
+    "nao": "não", "mao": "mão", "maos": "mãos", "sao": "são", "entao": "então", "ja": "já", "ate": "até", "so": "só",
+    "ha": "há", "voce": "você", "apos": "após", "tambem": "também", "robo": "robô", "serie": "série",
+    "proxima": "próxima", "proximo": "próximo", "proximas": "próximas", "proximos": "próximos",
+    "ultima": "última", "ultimo": "último", "ultimas": "últimas", "ultimos": "últimos",
+    "possivel": "possível", "disponivel": "disponível", "numero": "número", "numeros": "números",
+    "aliquota": "alíquota", "contabil": "contábil", "emissao": "emissão", "fisica": "física",
+    "calculo": "cálculo", "descricao": "descrição", "operacao": "operação", "cabecalho": "cabeçalho",
+    "digitacao": "digitação", "integracao": "integração", "conferencia": "conferência", "referencia": "referência",
+    "padrao": "padrão", "rotulo": "rótulo", "rotulos": "rótulos", "acao": "ação", "acoes": "ações", "area": "área",
+    "inicio": "início", "concluida": "concluída", "concluidas": "concluídas", "concluido": "concluído",
+    "concluidos": "concluídos", "invalida": "inválida", "invalido": "inválido", "obrigatorio": "obrigatório",
+    "obrigatoria": "obrigatória", "lancamento": "lançamento", "lancar": "lançar", "lancada": "lançada",
+    "lancadas": "lançadas", "lancado": "lançado", "comecar": "começar", "comeca": "começa", "faca": "faça",
+    "atencao": "atenção", "posicao": "posição", "posicoes": "posições", "selecao": "seleção", "versao": "versão",
+    "atualizacao": "atualização", "atualizacoes": "atualizações", "dialogo": "diálogo", "botao": "botão",
+    "titulo": "título", "minimo": "mínimo", "maximo": "máximo", "tera": "terá", "sera": "será", "estao": "estão",
+    "nao esta": "não está", "cursor esta": "cursor está", "onde esta": "onde está", "ja esta": "já está",
+    "a correta e": "a correta é", "nao e": "não é", "unitario": "unitário", "rapido": "rápido",
+    "previsao": "previsão", "duvida": "dúvida", "codigo": "código", "valido": "válido",
+    "valida": "válida", "necessario": "necessário", "periodo": "período", "mes": "mês", "pagina": "página",
+}
+_RE_ACENTOS = re.compile(r"(?<![\w\\/.])(" + "|".join(sorted(map(re.escape, _ACENTOS), key=len, reverse=True))
+                         + r")(?!\w|\.\w)", re.IGNORECASE)
+
+
+def com_acentos(texto):
+    """Poe os acentos nas palavras conhecidas das mensagens do robo (so para mostrar na tela; logs ficam como estao).
+    Mantem maiusculas ('NAO' -> 'NÃO', 'Nao' -> 'Não'); nao mexe em nomes de arquivo ('proxima.xlsx')."""
+    def troca(achado):
+        palavra = achado.group(0)
+        novo = _ACENTOS[palavra.lower()]
+        if len(palavra) > 1 and palavra.isupper():
+            return novo.upper()
+        return novo[:1].upper() + novo[1:] if palavra[:1].isupper() else novo
+    return _RE_ACENTOS.sub(troca, texto)
+
+
+def qtd(n, um, varios):
+    """Quantidade com o plural certo para os textos da tela: qtd(1, "nota", "notas") -> '1 nota'."""
+    return f"{n} {um if n == 1 else varios}"
+
+
 REPOSITORIO = "bwernerdev/rpa-controladoria"  # publico: os releases sao lidos sem token
 
 
@@ -810,7 +855,7 @@ def verificar_atualizacao(atual, tempo_limite=5):
     try:
         versao = str(dados.get("tag_name", "")).lstrip("vV")
         if versao_tupla(versao) <= versao_tupla(atual):
-            return None, f"Atualizacoes: a v{atual} e a mais nova (ultima publicada: v{versao}; consulta {caminho})"
+            return None, f"Atualizacoes: a v{atual} é a mais nova (ultima publicada: v{versao}; consulta {caminho})"
         zips = [a for a in dados.get("assets", []) if str(a.get("name", "")).lower().endswith(".zip")]
         if not zips:
             return None, f"Atualizacoes: v{versao} publicada sem o zip; nada a fazer (consulta {caminho})"

@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import ImageTk
 
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
-                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
+                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, com_acentos)
 from gui_snac0236 import Pagina0236
 from snac0236 import texto_duracao
 from icone import desenhar
@@ -772,7 +772,7 @@ class App(RaizTk):
             partes[:0] = [f"{linhas} linhas", f"{com_conta} com conta"]
         tk.Label(linha, text="  ·  ".join(partes), bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="w").pack(side="left")
         if self.resumo and self.resumo[2]:
-            tk.Label(linha, text=f"  ·  {self.resumo[2]} erro(s) na planilha", bg=COR["cartao"], fg=COR["erro"],
+            tk.Label(linha, text=f"  ·  {qtd(self.resumo[2], 'erro', 'erros')} na planilha", bg=COR["cartao"], fg=COR["erro"],
                      font=fonte(9)).pack(side="left")
 
     def _tags(self, linha, nome):
@@ -971,7 +971,7 @@ class App(RaizTk):
             texto = f"~{max(1, round(resta / 60))} min restantes" if resta >= 90 else f"~{max(5, round(resta / 5) * 5)} s restantes"
         else:
             texto = "calculando o tempo restante…" if faltam else "terminando…"
-        self.painel_resta.configure(text=texto + (f"  ·  {e['pausas']} pausa(s)" if e["pausas"] else ""))
+        self.painel_resta.configure(text=texto + (f"  ·  {qtd(e['pausas'], 'pausa', 'pausas')}" if e["pausas"] else ""))
 
     def _registrar_estado_execucao(self, linha, nome, anterior):
         e = self.execucao
@@ -1074,7 +1074,7 @@ class App(RaizTk):
                 return
             segundos = linhas * SEG_LINHA
             termino = time.strftime("%H:%M", time.localtime(time.time() + segundos))
-            self.previsao.configure(text=f"{linhas} linha(s)  ·  {texto_duracao(segundos)}  ·  término ~{termino} (sem pausas)")
+            self.previsao.configure(text=f"{qtd(linhas, 'linha', 'linhas')}  ·  {texto_duracao(segundos)}  ·  término ~{termino} (sem pausas)")
             if not self.previsao.winfo_manager():
                 self.previsao.grid(row=0, column=1, sticky="ne", padx=(px(16), 0))
         except (tk.TclError, AttributeError):
@@ -1115,7 +1115,7 @@ class App(RaizTk):
 
     def _status(self, texto, cor="suave"):
         self.status_atual = (texto, cor)
-        self.status.configure(text=texto, fg=COR[cor])
+        self.status.configure(text=com_acentos(texto), fg=COR[cor])
 
     def _vigiar_citrix(self):
         while True:
@@ -1274,7 +1274,7 @@ class App(RaizTk):
         if not self.caminho_atual:
             return
         if self.concluidas and not messagebox.askokcancel(
-                "Recarregar", f"Recarregar apaga o andamento ({self.concluidas} linha(s) concluída(s)).\nContinuar?"):
+                "Recarregar", f"Recarregar apaga o andamento ({qtd(self.concluidas, 'linha concluída', 'linhas concluídas')}).\nContinuar?"):
             return
         if self.registros:
             gravar_progresso(self.originais, set())
@@ -1347,9 +1347,9 @@ class App(RaizTk):
                     self.escrever(f"AVISO: linha {linha}: item {item} com Conta {conta}, mas o SRP ja informou que a correta e {correta}. "
                                   "O robo vai pausar nela para voce corrigir no SRP.")
                 if recusadas:
-                    self._status(f"{len(recusadas)} conta(s) que o SRP ja recusou: veja o aviso", "aviso")
+                    self._status(f"{qtd(len(recusadas), 'conta que o SRP já recusou', 'contas que o SRP já recusou')}: veja o aviso", "aviso")
                 else:
-                    self._status(f"Pronta para preencher ({len(aceitas)} conta(s) sugerida(s) aceita(s))", "ok")
+                    self._status(f"Pronta para preencher ({qtd(len(aceitas), 'conta sugerida aceita', 'contas sugeridas aceitas')})", "ok")
         self.filtrar("todas")
         self._atualizar_botoes()
 
@@ -1441,15 +1441,15 @@ class App(RaizTk):
             messagebox.showinfo("Nada a fazer", "Não há linhas pendentes.")
             return
         if retomar:
-            aviso = (f"Continuar a partir da linha {registros[0]['linha']} ({len(registros)} linha(s))?\n\n"
+            aviso = (f"Continuar a partir da linha {registros[0]['linha']} ({qtd(len(registros), 'linha', 'linhas')})?\n\n"
                      f"Antes: confira no SRP se a linha {registros[0]['linha']} ficou pela metade e limpe-a se precisar.\n"
                      "Depois do OK você terá 5 segundos para clicar no campo Item dela.")
         else:
-            aviso = (f"Preencher {len(registros)} linha(s) no SRP?\n\n"
+            aviso = (f"Preencher {qtd(len(registros), 'linha', 'linhas')} no SRP?\n\n"
                      "Depois do OK você terá 5 segundos para clicar no campo Item da primeira linha livre.")
         suspeitas = contas_suspeitas(registros)
         if suspeitas:
-            aviso += (f"\n\nATENÇÃO: {len(suspeitas)} linha(s) com Conta que o SRP já recusou (linhas "
+            aviso += (f"\n\nATENÇÃO: {qtd(len(suspeitas), 'linha', 'linhas')} com Conta que o SRP já recusou (linhas "
                       + ", ".join(str(l) for l, *_ in suspeitas[:8]) + "). O robô vai pausar nelas.")
         if self.conferir.get() and itens_repetidos(self.registros):
             aviso += ("\n\nATENÇÃO: a planilha tem itens repetidos e a conferência da quantidade está ligada. "
