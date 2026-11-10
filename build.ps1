@@ -8,7 +8,15 @@ $raiz = $PWD.Path
 & "$raiz\.venv\Scripts\python.exe" src\icone.py
 & "$raiz\.venv\Scripts\python.exe" scripts\gerar_versao.py
 & "$raiz\.venv\Scripts\python.exe" scripts\gerar_splash.py  # a tela de abertura mostra a versao: refeita a cada build
-& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src --collect-all tkinterdnd2 --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
+# Exe enxuto (v1.12.22, usuario 10/11/2026: exe grande; 26,3 -> 17,6 MB, abre ~0,6 s mais rapido): fora os modulos que o app nao usa. O PIL traz
+# AVIF (7,9 MB), WebP, FreeType (o app nao escreve texto em imagem) e perfis de cor; setuptools/pydoc/unittest/doctest/
+# pefile/lib2to3/xmlrpc entram so por dependencia de ferramentas. Sem --collect-all tkinterdnd2: o hook do proprio pacote
+# ja leva so a pasta win-x64-tcl9 (o --collect-all levava as de todos os sistemas). tests\sem_modulos_do_exe.py roda a
+# suite com estes modulos bloqueados: ao incluir um aqui, acrescente la tambem.
+$excluir = "PIL._avif", "PIL.AvifImagePlugin", "PIL._webp", "PIL.WebPImagePlugin", "PIL._imagingft", "PIL._imagingcms",
+           "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "unittest", "doctest", "pefile", "lib2to3", "xmlrpc" |
+           ForEach-Object { "--exclude-module"; $_ }
+& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src @excluir --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou" }
 $ErrorActionPreference = "Stop"  # so depois do PyInstaller: no PowerShell 5.1 o INFO dele no stderr vira erro
 
