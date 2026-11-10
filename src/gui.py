@@ -228,6 +228,7 @@ class App(RaizTk):
         self.atualizacao_pendente = self.atualizacao_disponivel = self.atualizacao_recusada = None
         self.checando = False
         self.links_versao = []
+        self.baixando = None  # versao sendo baixada (o andamento aparece na aba aberta e no link da versao)
         self.p0236 = Pagina0236(self, sys.modules[__name__])
         self._construir()
         self.bind("<Configure>", self._talvez_mudou_monitor)
@@ -251,6 +252,8 @@ class App(RaizTk):
                          daemon=True).start()
 
     def _texto_versao(self):
+        if self.baixando:
+            return f"v{VERSAO} · baixando a v{self.baixando}..."
         if self.checando:
             return f"v{VERSAO} · verificando..."
         if self.atualizacao_disponivel:
@@ -274,7 +277,7 @@ class App(RaizTk):
                                  fg=COR["destaque"] if self.atualizacao_disponivel else COR["suave"])
 
     def _clicou_versao(self):
-        if self.checando:
+        if self.checando or self.baixando:
             return
         if self.atualizacao_disponivel:
             self._oferecer_atualizacao(self.atualizacao_disponivel, manual=True)
@@ -321,8 +324,11 @@ class App(RaizTk):
                           "(ou clique na versao no rodape).")
             return
         self.ocupado = True
+        self.baixando = info["versao"]
         self._atualizar_botoes()
-        self._status(f"Baixando a versão {info['versao']}...", "destaque")
+        self.p0236._botoes()
+        self._pintar_links_versao()
+        self._andamento_atualizacao(f"Baixando a versão {info['versao']}...", 0)
         self.escrever(f"Baixando a versao {info['versao']} do GitHub...")
 
         def baixar():
@@ -337,19 +343,49 @@ class App(RaizTk):
         if item[0] == "atualizacao":
             self._resultado_atualizacao(*item[1:])
         elif item[0] == "baixando" and item[2]:
-            self._status(f"Baixando atualização... {item[1] * 100 // item[2]}%", "destaque")
+            fracao = min(item[1] / item[2], 1)
+            self._andamento_atualizacao(f"Baixando a versão {self.baixando}... {int(fracao * 100)}%", fracao)
         elif item[0] == "baixado":
             self.escrever("Atualizacao baixada e conferida. O app vai fechar e abrir de novo na versao nova.")
-            self._status("Instalando a atualização...", "destaque")
+            self._andamento_atualizacao("Instalando a atualização: o app fecha e abre de novo sozinho...", 1)
             self.update()
             aplicar_atualizacao(item[1], pasta_base())
             self.after(500, self.destroy)
         elif item[0] == "falha_atualizacao":
             self.ocupado = False
+            self.baixando = None
             self._atualizar_botoes()
-            self._status("Atualização falhou: veja o console", "erro")
+            self.p0236._botoes()
+            self._pintar_links_versao()
+            self._restaurar_barras()
+            self._andamento_atualizacao("Atualização falhou: o app continua na versão atual", None, "erro")
             registrar_atualizacao(f"Download/instalacao falhou: {item[1]}")
             self.escrever(f"A atualizacao falhou: {item[1]}. O app continua na versao {VERSAO}.")
+            messagebox.showwarning("Atualização", f"A atualização falhou: {item[1]}\n\nO app continua na versão "
+                                   f"{VERSAO}. O erro fica em logs\\atualizacao.log.")
+
+    def _andamento_atualizacao(self, texto, fracao, cor="destaque"):
+        """Andamento do download no status e na barra da aba ABERTA (ate a v1.12.20 ia so para a SNAC0234: na
+        SNAC0236 nada aparecia ate o app fechar; usuario, 10/11/2026) e no link da versao do rodape."""
+        pagina = self.p0236 if self.aba == "snac0236" else self
+        try:
+            pagina._status(texto, cor)
+            if fracao is not None:
+                pagina.barra.configure(maximum=100, value=round(fracao * 100))
+        except (tk.TclError, AttributeError):
+            pass
+        if self.baixando:
+            for rotulo in self.links_versao:
+                if rotulo.winfo_exists():
+                    rotulo.configure(text=f"v{VERSAO} · baixando a v{self.baixando}"
+                                     + (f" ({int(fracao * 100)}%)" if fracao else "..."))
+
+    def _restaurar_barras(self):
+        try:
+            self.barra.configure(maximum=max(len(self.registros), 1), value=self.concluidas)
+            self.p0236.barra.configure(maximum=max(len(self.p0236.registros), 1), value=self.p0236._feitas())
+        except (tk.TclError, AttributeError):
+            pass
 
     # ---------- visual ----------
     def _aplicar_escala(self, dpi):
@@ -1209,7 +1245,9 @@ class App(RaizTk):
                                  style="Secundario.TButton" if retomar else "Primario.TButton")
         self.b_continuar.configure(text=f"Continuar da linha {self._proxima_linha()}" if retomar else "Continuar",
                                    style="Primario.TButton")
-        if self.ocupado:
+        if self.baixando:
+            visiveis = ()  # baixando a atualizacao: o Parar nao serve
+        elif self.ocupado:
             visiveis = (self.b_parar,)
         elif pronto:
             visiveis = (self.b_continuar, self.b_iniciar, self.b_simular) if retomar else (self.b_iniciar, self.b_simular)
