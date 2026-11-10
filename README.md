@@ -13,6 +13,8 @@ O robô só digita e confere. Ele nunca faz login nem corrige dado sozinho: quan
 
 **Atualizações** (a partir da v1.9.0): ao abrir, o app confere se há versão nova aqui no GitHub e pergunta se quer atualizar. Ele baixa o pacote, confere a integridade (SHA-256), fecha, troca os arquivos e abre de novo sozinho. Configurações, contas aprendidas, andamento e logs são mantidos. Durante um preenchimento ele só pergunta ao terminar. Sem internet, nada acontece.
 
+Com o app aberto, ele confere de novo a cada hora. Para conferir na hora, clique na versão no rodapé ("Verificar atualizações"; com versão nova achada, vira "Atualizar para vX"). O resultado de cada consulta fica nos Detalhes e em `logs\atualizacao.log`. A partir da v1.12.19, se a consulta direta falhar (rede da empresa com proxy automático), o app tenta pelo proxy do Windows. Versões até a v1.12.18 não fazem isso: numa rede assim elas não acham a versão nova e precisam ser atualizadas à mão uma vez.
+
 Para atualizar à mão, faça o mesmo que na instalação com o zip novo (feche o app antes).
 
 Sem instalar: o `RPA-SRP.exe` também roda direto da pasta extraída, desde que a pasta `tesseract\` (leitura da tela) fique ao lado dele.

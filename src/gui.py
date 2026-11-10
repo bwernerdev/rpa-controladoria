@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
-from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, buscar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
+from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, validar)
 from gui_snac0236 import Pagina0236
 from snac0236 import texto_duracao
@@ -47,6 +47,7 @@ FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "ex
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
 # ritmo da SNAC0234 para o tempo previsto antes de iniciar (v1.8.0: media de ~2,3 s por linha, 194 linhas dos logs de 30/10)
 SEG_LINHA = 2.3
+CHECAR_A_CADA = 60 * 60 * 1000  # ms: com o app aberto o dia todo, a versao nova aparece sem precisar reabrir
 MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
 # telas do SRP, uma aba cada: (chave, codigo, nome no SRP, subtitulo da janela)
 TELAS = (("snac0234", "SNAC0234", "Requisição Suprimento", "Preenchimento de requisições do SRP a partir da planilha"),
@@ -224,23 +225,88 @@ class App(RaizTk):
         if DND_FILES:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._soltou)
+        self.atualizacao_pendente = self.atualizacao_disponivel = self.atualizacao_recusada = None
+        self.checando = False
+        self.links_versao = []
         self.p0236 = Pagina0236(self, sys.modules[__name__])
         self._construir()
         self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
         self.after(1000, self._tique)
-        self.atualizacao_pendente = None
-        if getattr(sys, "frozen", False):  # so no exe; rodando pelo codigo-fonte nao se atualiza
-            self.after(2000, lambda: threading.Thread(
-                target=lambda: self.fila.put(("atualizacao", buscar_atualizacao(VERSAO))), daemon=True).start())
+        if getattr(sys, "frozen", False):  # so no exe; rodando pelo codigo-fonte nao se atualiza sozinho
+            self.after(2000, self._checar_atualizacao)
 
     # ---------- atualizacao ----------
-    def _oferecer_atualizacao(self, info):
+    def _checar_atualizacao(self, manual=False):
+        """Consulta o GitHub numa thread (direto e, se falhar, pelo proxy do Windows). Sozinho: ao abrir e a cada
+        CHECAR_A_CADA ms com o app aberto; manual: link da versao no rodape."""
+        if not manual:
+            self.after(CHECAR_A_CADA, self._checar_atualizacao)
+        if self.checando:
+            return
+        self.checando = True
+        self._pintar_links_versao()
+        threading.Thread(target=lambda: self.fila.put(("atualizacao", *verificar_atualizacao(VERSAO), manual)),
+                         daemon=True).start()
+
+    def _texto_versao(self):
+        if self.checando:
+            return f"v{VERSAO} · verificando..."
+        if self.atualizacao_disponivel:
+            return f"v{VERSAO} · Atualizar para v{self.atualizacao_disponivel['versao']}"
+        return f"v{VERSAO} · Verificar atualizações"
+
+    def _link_versao(self, rodape):
+        """Versao no rodape (das duas abas): clique = verifica agora ou, com versao nova achada, oferece de novo."""
+        rotulo = tk.Label(rodape, bg=COR["fundo"], font=fonte(8), cursor="hand2")
+        rotulo.bind("<Button-1>", lambda _e: self._clicou_versao())
+        rotulo.bind("<Enter>", lambda _e: rotulo.configure(fg=COR["destaque_hover"]))
+        rotulo.bind("<Leave>", lambda _e: self._pintar_links_versao())
+        self.links_versao = [r for r in self.links_versao if r.winfo_exists()] + [rotulo]
+        self._pintar_links_versao()
+        return rotulo
+
+    def _pintar_links_versao(self):
+        for rotulo in self.links_versao:
+            if rotulo.winfo_exists():
+                rotulo.configure(text=self._texto_versao(),
+                                 fg=COR["destaque"] if self.atualizacao_disponivel else COR["suave"])
+
+    def _clicou_versao(self):
+        if self.checando:
+            return
+        if self.atualizacao_disponivel:
+            self._oferecer_atualizacao(self.atualizacao_disponivel, manual=True)
+        else:
+            self._checar_atualizacao(manual=True)
+
+    def _resultado_atualizacao(self, info, texto, manual):
+        self.checando = False
+        registrar_atualizacao(texto)
+        if manual or not info or info["versao"] != self.atualizacao_recusada:
+            self.escrever(texto)
+        self.atualizacao_disponivel = info
+        self._pintar_links_versao()
+        if info:
+            if manual or info["versao"] != self.atualizacao_recusada:  # recusada: so de novo se pedir no link
+                self._oferecer_atualizacao(info, manual)
+        elif manual:
+            (messagebox.showwarning if texto.startswith("Nao consegui") else messagebox.showinfo)(
+                "Atualizações", texto.replace("Atualizacoes: ", ""))
+
+    def _oferecer_atualizacao(self, info, manual=False):
         if not info:
             return
         if self.ocupado:  # nao interrompe um preenchimento: pergunta quando terminar
             self.atualizacao_pendente = info
+            if manual:
+                messagebox.showinfo("Atualização disponível",
+                                    f"Versão {info['versao']} disponível. O app pergunta quando o preenchimento terminar.")
+            return
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo("Atualização disponível", f"Versão {info['versao']} disponível. Rodando pelo código-fonte "
+                                "o app não se atualiza: atualize pelo git ou instale o zip do release.")
             return
         self.atualizacao_pendente = None
         notas = re.sub(r"[*#`]", "", info["notas"]).strip()
@@ -250,7 +316,9 @@ class App(RaizTk):
                 f"Versão {info['versao']} disponível (você tem a {VERSAO}).\n\n{notas}\n\n"
                 "Atualizar agora? O app fecha e abre de novo sozinho em alguns segundos. "
                 "Configurações, contas aprendidas, andamento e logs são mantidos."):
-            self.escrever(f"Atualizacao {info['versao']} adiada; o app pergunta de novo na proxima abertura.")
+            self.atualizacao_recusada = info["versao"]
+            self.escrever(f"Atualizacao {info['versao']} adiada; o app pergunta de novo na proxima abertura "
+                          "(ou clique na versao no rodape).")
             return
         self.ocupado = True
         self._atualizar_botoes()
@@ -267,7 +335,7 @@ class App(RaizTk):
 
     def _evento_atualizacao(self, item):
         if item[0] == "atualizacao":
-            self._oferecer_atualizacao(item[1])
+            self._resultado_atualizacao(*item[1:])
         elif item[0] == "baixando" and item[2]:
             self._status(f"Baixando atualização... {item[1] * 100 // item[2]}%", "destaque")
         elif item[0] == "baixado":
@@ -280,6 +348,7 @@ class App(RaizTk):
             self.ocupado = False
             self._atualizar_botoes()
             self._status("Atualização falhou: veja o console", "erro")
+            registrar_atualizacao(f"Download/instalacao falhou: {item[1]}")
             self.escrever(f"A atualizacao falhou: {item[1]}. O app continua na versao {VERSAO}.")
 
     # ---------- visual ----------
@@ -512,7 +581,7 @@ class App(RaizTk):
         self.b_console.pack(side="left")
         self.b_copiar = self._link(rodape, "Copiar", self.copiar_console)
         self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(px(14), 0))
-        tk.Label(rodape, text=f"v{VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
+        self._link_versao(rodape).pack(side="right")
         self.caixa_saida = self._cartao(corpo)
         self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
                              font=fonte(9, mono=True), relief="flat", borderwidth=0, padx=px(10), pady=px(6),

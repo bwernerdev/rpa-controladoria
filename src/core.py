@@ -757,26 +757,111 @@ def versao_tupla(texto):
         return (0,)
 
 
-def buscar_atualizacao(atual, tempo_limite=5):
-    """Release mais nova que `atual` no GitHub: {'versao', 'url', 'sha256', 'tamanho', 'notas'}; None se nao houver,
-    se nao tiver o zip ou sem internet (nunca levanta erro: a checagem nao pode atrapalhar o app)."""
+def _powershell_web(script, tempo_limite):
+    """Roda um trecho do PowerShell que usa o proxy do Windows (PAC/autodetect da rede da empresa, com a credencial do
+    usuario logado). O urllib do Python so enxerga proxy fixo: numa rede com PAC ele tenta ir direto e e barrado."""
+    prefixo = ("$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; "
+               "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
+               "$p=[Net.WebRequest]::DefaultWebProxy; if ($p) { $p.Credentials=[Net.CredentialCache]::DefaultCredentials }; "
+               "[Console]::OutputEncoding=[Text.Encoding]::UTF8; ")
+    resultado = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", prefixo + script],
+                               capture_output=True, encoding="utf-8", errors="replace", timeout=tempo_limite,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if resultado.returncode != 0:
+        erro = " ".join((resultado.stderr or "").split())
+        raise OSError(erro[:300] or f"PowerShell saiu com {resultado.returncode}")
+    return resultado.stdout
+
+
+def _texto_ps(texto):
+    return "'" + str(texto).replace("'", "''") + "'"
+
+
+def _consulta_powershell(url, tempo_limite=40):
+    """GET de uma URL da API do GitHub pelo proxy do Windows; devolve o JSON."""
+    saida = _powershell_web(f"(Invoke-WebRequest -UseBasicParsing -Uri {_texto_ps(url)} -UserAgent 'RPA-SRP' "
+                            "-Headers @{Accept='application/vnd.github+json'} -TimeoutSec 30).Content", tempo_limite)
+    return json.loads(saida)
+
+
+def _erro_curto(erro):
+    texto = " ".join(str(erro).split()) or type(erro).__name__
+    return texto[:200]
+
+
+def verificar_atualizacao(atual, tempo_limite=5):
+    """Consulta o release mais novo do GitHub. Devolve (info, texto): `info` como em `buscar_atualizacao` (ou None) e
+    `texto` = o que aconteceu, para o console e o logs\atualizacao.log. Tenta direto (urllib) e, se falhar, pelo proxy do
+    Windows (PowerShell). Nunca levanta erro: a checagem nao pode atrapalhar o app."""
     import urllib.request
-    pedido = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIO}/releases/latest",
-                                    headers={"Accept": "application/vnd.github+json", "User-Agent": "RPA-SRP"})
+    url = f"https://api.github.com/repos/{REPOSITORIO}/releases/latest"
+    caminho = "direta"
     try:
+        pedido = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "RPA-SRP"})
         with urllib.request.urlopen(pedido, timeout=tempo_limite) as resposta:
             dados = json.load(resposta)
-    except Exception:
-        return None
-    versao = str(dados.get("tag_name", "")).lstrip("vV")
-    if versao_tupla(versao) <= versao_tupla(atual):
-        return None
-    zips = [a for a in dados.get("assets", []) if str(a.get("name", "")).lower().endswith(".zip")]
-    if not zips:
-        return None
-    digest = str(zips[0].get("digest") or "")
-    return {"versao": versao, "url": zips[0]["browser_download_url"], "tamanho": zips[0].get("size"),
-            "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else None, "notas": dados.get("body") or ""}
+    except Exception as erro_direto:
+        caminho = "pelo proxy do Windows"
+        try:
+            dados = _consulta_powershell(url)
+        except Exception as erro_proxy:
+            return None, (f"Nao consegui consultar atualizacoes (direto: {_erro_curto(erro_direto)}; "
+                          f"pelo proxy do Windows: {_erro_curto(erro_proxy)})")
+    try:
+        versao = str(dados.get("tag_name", "")).lstrip("vV")
+        if versao_tupla(versao) <= versao_tupla(atual):
+            return None, f"Atualizacoes: a v{atual} e a mais nova (ultima publicada: v{versao}; consulta {caminho})"
+        zips = [a for a in dados.get("assets", []) if str(a.get("name", "")).lower().endswith(".zip")]
+        if not zips:
+            return None, f"Atualizacoes: v{versao} publicada sem o zip; nada a fazer (consulta {caminho})"
+        digest = str(zips[0].get("digest") or "")
+        info = {"versao": versao, "url": zips[0]["browser_download_url"], "tamanho": zips[0].get("size"),
+                "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else None,
+                "notas": dados.get("body") or "", "proxy": caminho != "direta"}
+    except Exception as erro:
+        return None, f"Resposta do GitHub inesperada: {_erro_curto(erro)} (consulta {caminho})"
+    return info, f"Atualizacoes: v{versao} disponivel (voce tem a v{atual}; consulta {caminho})"
+
+
+def buscar_atualizacao(atual, tempo_limite=5):
+    """Release mais nova que `atual` no GitHub: {'versao', 'url', 'sha256', 'tamanho', 'notas', 'proxy'}; None se nao
+    houver, se nao tiver o zip ou sem internet (nunca levanta erro: a checagem nao pode atrapalhar o app)."""
+    return verificar_atualizacao(atual, tempo_limite)[0]
+
+
+def registrar_atualizacao(texto):
+    """Acrescenta uma linha com data e hora no logs\atualizacao.log (o mesmo do instalar.ps1). Falha = ignora."""
+    try:
+        arquivo = pasta_logs() / "atualizacao.log"
+        arquivo.parent.mkdir(parents=True, exist_ok=True)
+        with open(arquivo, "a", encoding="utf-8") as saida:
+            saida.write(f"{time.strftime('%d/%m/%Y %H:%M:%S')} {texto}\n")
+    except OSError:
+        pass
+
+
+def _baixar_powershell(url, arquivo, total, progresso, tempo_limite=900):
+    """Baixa `url` para `arquivo` pelo proxy do Windows, informando o tamanho do arquivo enquanto cresce."""
+    import threading
+    feito = threading.Event()
+    falha = []
+
+    def rodar():
+        try:
+            _powershell_web(f"Invoke-WebRequest -UseBasicParsing -Uri {_texto_ps(url)} -UserAgent 'RPA-SRP' "
+                            f"-OutFile {_texto_ps(arquivo)} -TimeoutSec 600", tempo_limite)
+        except Exception as erro:
+            falha.append(erro)
+        finally:
+            feito.set()
+    threading.Thread(target=rodar, daemon=True).start()
+    while not feito.wait(0.5):
+        if progresso and arquivo.exists():
+            progresso(arquivo.stat().st_size, total)
+    if falha:
+        raise OSError(f"download pelo proxy do Windows falhou: {_erro_curto(falha[0])}")
+    if progresso and arquivo.exists():
+        progresso(arquivo.stat().st_size, total)
 
 
 def baixar_atualizacao(info, progresso=None):
@@ -788,17 +873,24 @@ def baixar_atualizacao(info, progresso=None):
     arquivo = pasta / "pacote.zip"
     soma = hashlib.sha256()
     pedido = urllib.request.Request(info["url"], headers={"User-Agent": "RPA-SRP"})
-    with urllib.request.urlopen(pedido, timeout=30) as resposta, open(arquivo, "wb") as saida:
-        total, baixados = info.get("tamanho") or int(resposta.headers.get("Content-Length") or 0), 0
-        while True:
-            bloco = resposta.read(256 * 1024)
-            if not bloco:
-                break
-            saida.write(bloco)
-            soma.update(bloco)
-            baixados += len(bloco)
-            if progresso:
-                progresso(baixados, total)
+    try:
+        if info.get("proxy"):  # a consulta so passou pelo proxy do Windows: o download direto tambem seria barrado
+            raise OSError("consulta feita pelo proxy do Windows")
+        with urllib.request.urlopen(pedido, timeout=30) as resposta, open(arquivo, "wb") as saida:
+            total, baixados = info.get("tamanho") or int(resposta.headers.get("Content-Length") or 0), 0
+            while True:
+                bloco = resposta.read(256 * 1024)
+                if not bloco:
+                    break
+                saida.write(bloco)
+                soma.update(bloco)
+                baixados += len(bloco)
+                if progresso:
+                    progresso(baixados, total)
+    except OSError:
+        arquivo.unlink(missing_ok=True)
+        _baixar_powershell(info["url"], arquivo, info.get("tamanho") or 0, progresso)
+        soma = hashlib.sha256(arquivo.read_bytes())
     if info.get("sha256") and soma.hexdigest() != info["sha256"].lower():
         raise ValueError("o arquivo baixado nao confere com o publicado (SHA-256 diferente); atualizacao cancelada")
     destino = pasta / "pacote"

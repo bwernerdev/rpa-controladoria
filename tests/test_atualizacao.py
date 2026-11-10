@@ -43,8 +43,31 @@ class Buscar(unittest.TestCase):
         self.assertIsNone(self.buscar({**RELEASE, "assets": []}))
 
     def test_sem_internet_nao_levanta_erro(self):
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("sem rede")):
-            self.assertIsNone(core.buscar_atualizacao("1.0.0"))
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("sem rede")),                 mock.patch.object(core, "_consulta_powershell", side_effect=OSError("proxy fora")):
+            info, texto = core.verificar_atualizacao("1.0.0")
+        self.assertIsNone(info)
+        self.assertIn("sem rede", texto)
+        self.assertIn("proxy fora", texto)
+
+    def test_direto_barrado_vai_pelo_proxy_do_windows(self):
+        """Rede com PAC: o urllib nao ve o proxy e e barrado; o PowerShell usa o proxy do Windows."""
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")),                 mock.patch.object(core, "_consulta_powershell", return_value=RELEASE) as ps:
+            info, texto = core.verificar_atualizacao("1.9.0")
+        ps.assert_called_once()
+        self.assertEqual((info["versao"], info["proxy"]), ("1.10.0", True))
+        self.assertIn("proxy do Windows", texto)
+
+    def test_texto_sem_versao_nova(self):
+        with mock.patch("urllib.request.urlopen", return_value=resposta_api(RELEASE)):
+            info, texto = core.verificar_atualizacao("1.10.0")
+        self.assertIsNone(info)
+        self.assertIn("mais nova", texto)
+
+    def test_registra_no_log(self):
+        pasta = pathlib.Path(tempfile.mkdtemp())
+        with mock.patch.object(core, "pasta_logs", return_value=pasta):
+            core.registrar_atualizacao("Atualizacoes: teste")
+        self.assertIn("Atualizacoes: teste", (pasta / "atualizacao.log").read_text(encoding="utf-8"))
 
 
 class Baixar(unittest.TestCase):
@@ -64,6 +87,25 @@ class Baixar(unittest.TestCase):
                                           lambda feito, total: passos.append((feito, total)))
         self.assertTrue((destino / "instalar.ps1").exists() and (destino / "tesseract" / "tesseract.exe").exists())
         self.assertEqual(passos[-1][0], arquivo.stat().st_size)
+
+    def test_download_pelo_proxy_do_windows(self):
+        """Consulta que so passou pelo proxy: baixa pelo PowerShell e confere o SHA-256 do mesmo jeito."""
+        origem, soma = self.pacote()
+
+        def falso(url, arquivo, total, progresso):
+            arquivo.write_bytes(origem.read_bytes())
+        with mock.patch.object(core, "_baixar_powershell", side_effect=falso) as ps,                 mock.patch("urllib.request.urlopen", side_effect=AssertionError("nao devia ir direto")):
+            destino = core.baixar_atualizacao({"url": "https://exemplo/x.zip", "sha256": soma, "tamanho": None,
+                                               "proxy": True})
+        ps.assert_called_once()
+        self.assertTrue((destino / "RPA-SRP.exe").exists())
+
+    def test_download_direto_barrado_tenta_o_proxy(self):
+        origem, _ = self.pacote()
+        with mock.patch.object(core, "_baixar_powershell",
+                               side_effect=lambda url, arquivo, *_: arquivo.write_bytes(origem.read_bytes())) as ps,                 mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")):
+            core.baixar_atualizacao({"url": "https://exemplo/x.zip", "sha256": None, "tamanho": None})
+        ps.assert_called_once()
 
     def test_sha256_diferente_cancela(self):
         arquivo, _ = self.pacote()

@@ -65,7 +65,7 @@ class Pagina0236:
         self.app._link(rodape, "Abrir pasta de logs", lambda: __import__("os").startfile(pasta_logs())).pack(
             side="left", padx=(px(14), 0))
         self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(px(14), 0))
-        tk.Label(rodape, text=f"v{ui.VERSAO}", bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="right")
+        self.app._link_versao(rodape).pack(side="right")
         self.caixa_saida = self.app._cartao(pai)
         self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"],
                              fg=COR["console_texto"], font=fonte(9, mono=True), relief="flat", borderwidth=0,
