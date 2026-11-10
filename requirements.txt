@@ -3,3 +3,4 @@ openpyxl>=3.1
 pillow>=10
 pyinstaller>=6.15
 tkinterdnd2>=0.4
+customtkinter==6.0.0

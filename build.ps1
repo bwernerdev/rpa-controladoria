@@ -14,7 +14,7 @@ $raiz = $PWD.Path
 # ja leva so a pasta win-x64-tcl9 (o --collect-all levava as de todos os sistemas). tests\sem_modulos_do_exe.py roda a
 # suite com estes modulos bloqueados: ao incluir um aqui, acrescente la tambem.
 $excluir = "PIL._avif", "PIL.AvifImagePlugin", "PIL._webp", "PIL.WebPImagePlugin", "PIL._imagingft", "PIL._imagingcms",
-           "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "unittest", "doctest", "pefile", "lib2to3", "xmlrpc" |
+           "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "unittest", "doctest", "pefile", "lib2to3", "xmlrpc", "darkdetect" |
            ForEach-Object { "--exclude-module"; $_ }
 & "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src @excluir --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou" }

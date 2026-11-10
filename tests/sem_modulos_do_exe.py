@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 BLOQUEADOS = ("PIL._avif", "PIL.AvifImagePlugin", "PIL._webp", "PIL.WebPImagePlugin", "PIL._imagingft",
-              "PIL._imagingcms", "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "pefile", "lib2to3", "xmlrpc")
+              "PIL._imagingcms", "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "pefile", "lib2to3", "xmlrpc", "darkdetect")
 SO_NOS_TESTES = ("PIL._imagingft",)
 
 pasta = Path(__file__).parent

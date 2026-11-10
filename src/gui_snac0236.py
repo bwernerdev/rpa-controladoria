@@ -72,7 +72,7 @@ class Pagina0236:
         self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte(9),
                                         anchor="w", justify="left")
         self.pausa_instrucao.pack(fill="x", pady=(px(2), 0))
-        ttk.Button(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar).pack(
+        ui.Botao(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar).pack(
             side="right", padx=px(14))
         textos.bind("<Configure>", lambda e: [r.configure(wraplength=max(e.width, px(200)))
                                               for r in (self.pausa_motivo, self.pausa_instrucao)])
@@ -105,9 +105,9 @@ class Pagina0236:
         barra.columnconfigure(2, weight=1)
         botoes = tk.Frame(barra, bg=COR["fundo"])
         botoes.grid(row=0, column=0, sticky="w")
-        self.b_iniciar = ttk.Button(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
-        self.b_simular = ttk.Button(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
-        self.b_continuar = ttk.Button(botoes, text="Continuar", style="Primario.TButton",
+        self.b_iniciar = ui.Botao(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
+        self.b_simular = ui.Botao(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
+        self.b_continuar = ui.Botao(botoes, text="Continuar", style="Primario.TButton",
                                       command=self.continuar)
         self.botoes_visiveis = None
         opcoes = tk.Frame(barra, bg=COR["fundo"])
@@ -125,7 +125,7 @@ class Pagina0236:
         self.dica_qtd.bind("<Button-1>", lambda _e: self.e_qtd.focus_set())
         for evento in ("<FocusIn>", "<FocusOut>"):
             self.e_qtd.bind(evento, lambda _e: self._dica_qtd(), add="+")
-        self.b_parar = ttk.Button(barra, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_parar = ui.Botao(barra, text="Parar", style="Perigo.TButton", command=self.parar.set)
         embaixo = [None]
 
         def arrumar(_evento=None):

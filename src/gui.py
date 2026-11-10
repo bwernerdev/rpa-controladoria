@@ -8,10 +8,24 @@ import sys
 import threading
 import time
 import tkinter as tk
+import types
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
+
+# customtkinter (v1.13.0; usuario, 10/11/2026: visual limitado): botoes arredondados (`Botao`) e a barra (`BarraFina`).
+# O app cuida sozinho do tema (PALETAS) e da escala (px/fonte), entao: sem o darkdetect (o platform.release() dele
+# custava ~0,1 s na abertura), escala do customtkinter fixa em 1 e sem os lacos dele rodando junto com o robo
+# (tema a cada 30 ms e DPI a cada 100 ms; a troca de monitor e o _talvez_mudou_monitor).
+if sys.modules.get("darkdetect") is None:  # o exe sai sem ele (build.ps1)
+    sys.modules["darkdetect"] = types.SimpleNamespace(theme=lambda: "Light")
+import customtkinter as ctk  # noqa: E402
+
+ctk.deactivate_automatic_dpi_awareness()
+ctk.set_appearance_mode("light")
+ctk.AppearanceModeTracker.update = classmethod(lambda cls: None)
+ctk.ScalingTracker.check_dpi_scaling = classmethod(lambda cls: None)
 
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
                   gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, com_acentos)
@@ -146,26 +160,32 @@ def gravar_config(dados):
         pass
 
 
-class BarraFina(tk.Frame):
-    """Barra de progresso de 4 px; aceita configure(value=, maximum=) e barra["value"] como a ttk.Progressbar."""
+class BarraFina(ctk.CTkProgressBar):
+    """Barra de progresso fina de pontas redondas; aceita configure(value=, maximum=) e barra["value"] como a
+    ttk.Progressbar (a do clam ignora a espessura). So redesenha quando a fracao muda."""
 
     def __init__(self, pai):
-        super().__init__(pai, bg=COR["borda"], height=px(4))
-        self.preenchido = tk.Frame(self, bg=COR["destaque"], height=px(4))
-        self._valor, self._maximo = 0, 1
+        self._valor, self._maximo, self._fracao, self._cor = 0, 1, None, COR["destaque"]
+        super().__init__(pai, height=px(6), corner_radius=px(3), border_width=0, fg_color=COR["borda"],
+                         progress_color=COR["destaque"], mode="determinate")
         self._desenhar()
 
     def _desenhar(self):
         fracao = max(0.0, min(1.0, self._valor / self._maximo)) if self._maximo else 0.0
-        self.preenchido.place(x=0, y=0, relheight=1, relwidth=fracao)
+        if fracao != self._fracao:
+            self._fracao = fracao
+            self.set(fracao)
+            cor = COR["destaque"] if fracao > 0 else COR["borda"]  # em 0 o customtkinter ainda desenha a ponta redonda
+            if cor != self._cor:
+                self._cor = cor
+                ctk.CTkProgressBar.configure(self, progress_color=cor)
 
-    def configure(self, cnf=None, **opcoes):
-        if "value" in opcoes:
-            self._valor = opcoes.pop("value")
-        if "maximum" in opcoes:
-            self._maximo = opcoes.pop("maximum") or 1
-        self._desenhar()
-        return super().configure(cnf, **opcoes) if (cnf or opcoes) else None
+    def configure(self, require_redraw=False, **opcoes):
+        if "value" in opcoes or "maximum" in opcoes:
+            self._valor = opcoes.pop("value", self._valor)
+            self._maximo = opcoes.pop("maximum", self._maximo) or 1
+            self._desenhar()
+        return super().configure(require_redraw, **opcoes) if (require_redraw or opcoes) else None
 
     config = configure
 
@@ -174,6 +194,45 @@ class BarraFina(tk.Frame):
 
     def __getitem__(self, chave):
         return {"value": self._valor, "maximum": self._maximo}.get(chave) if chave in ("value", "maximum") else super().__getitem__(chave)
+
+
+class Botao(ctk.CTkButton):
+    """Botao de cantos redondos (customtkinter) que aceita os style= dos ttk.Button de antes ("Primario.TButton",
+    "Secundario.TButton", "Perigo.TButton") e state=. Largura = texto + 16 px de cada lado (o CTkButton nao tem
+    padding). O configure so repassa o que mudou: o _atualizar_botoes reconfigura a cada estado."""
+
+    def __init__(self, pai, text="", style="Secundario.TButton", command=None, state="normal"):
+        self._tk_pai, self._estilo, self._estado, self._texto = pai.tk, style, state, text
+        super().__init__(pai, command=command, corner_radius=px(6), border_width=0, height=px(34), **self._opcoes())
+        self._aplicadas = self._opcoes()
+
+    def _opcoes(self):
+        tipo = self._estilo.split(".")[0]
+        primario = tipo == "Primario"
+        letra = fonte(10, forte=primario)
+        largura = max(px(72), int(self._tk_pai.call("font", "measure", letra, self._texto)) + px(32))
+        opcoes = dict(text=self._texto, font=letra, width=largura, state=self._estado,
+                      fg_color=COR["destaque"] if primario else COR["botao"],
+                      hover_color=COR["destaque_hover"] if primario else COR["botao_hover"],
+                      text_color=COR["no_destaque"] if primario else COR["erro"] if tipo == "Perigo" else COR["texto"],
+                      text_color_disabled=COR["suave"] if primario else COR["borda_forte"])
+        if self._estado == "disabled":
+            opcoes["fg_color"] = COR["cinza_fundo"]
+        return opcoes
+
+    def configure(self, require_redraw=False, **opcoes):
+        if not hasattr(self, "_aplicadas"):  # chamadas do proprio CTkButton durante o __init__ (cursor)
+            return super().configure(require_redraw, **opcoes)
+        self._estilo = opcoes.pop("style", self._estilo)
+        self._estado = opcoes.pop("state", self._estado)
+        self._texto = opcoes.pop("text", self._texto)
+        novas = self._opcoes()
+        mudou = {k: v for k, v in novas.items() if self._aplicadas.get(k) != v}
+        self._aplicadas = novas
+        if mudou or opcoes or require_redraw:
+            super().configure(require_redraw, **mudou, **opcoes)
+
+    config = configure
 
 
 class App(RaizTk):
@@ -583,7 +642,7 @@ class App(RaizTk):
         self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte(9), anchor="w",
                                         justify="left", wraplength=px(560))
         self.pausa_instrucao.pack(fill="x", pady=(px(2), 0))
-        self.b_continuar_faixa = ttk.Button(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar)
+        self.b_continuar_faixa = Botao(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar)
         self.b_continuar_faixa.pack(side="right", padx=px(14))
 
         self.painel = self._cartao(self.area_avisos)
@@ -630,10 +689,10 @@ class App(RaizTk):
         self.botoes.pack(side="bottom", fill="x", pady=(12, 10))
         # so os botoes que servem agora (usuario, 09/11/2026; `_atualizar_botoes`): parado = Iniciar (+ Continuar da
         # linha N) + Simular; executando = Parar (o Continuar da pausa fica na faixa amarela)
-        self.b_iniciar = ttk.Button(self.botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
-        self.b_continuar = ttk.Button(self.botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
-        self.b_simular = ttk.Button(self.botoes, text="Simular", style="Secundario.TButton", command=self.simular)
-        self.b_parar = ttk.Button(self.botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_iniciar = Botao(self.botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
+        self.b_continuar = Botao(self.botoes, text="Continuar", style="Secundario.TButton", command=self.continuar)
+        self.b_simular = Botao(self.botoes, text="Simular", style="Secundario.TButton", command=self.simular)
+        self.b_parar = Botao(self.botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.botoes_visiveis = None
 
         progresso = tk.Frame(corpo, bg=COR["fundo"])
@@ -741,7 +800,7 @@ class App(RaizTk):
         sub = tk.Label(centro, text="ou escolha o arquivo (.xlsx)", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
                        cursor="hand2")
         sub.pack()
-        ttk.Button(centro, text="Escolher planilha", style="Primario.TButton", command=escolher).pack(pady=(px(14), 0))
+        Botao(centro, text="Escolher planilha", style="Primario.TButton", command=escolher).pack(pady=(px(14), 0))
         ultima = self._ultima_planilha(chave_ultima)
         if ultima:
             quando = time.strftime("%d/%m %H:%M", time.localtime(Path(ultima).stat().st_mtime))
@@ -953,7 +1012,7 @@ class App(RaizTk):
             self.escolher_tema(escolha.get())
         for chave, titulo in TEMAS.items():
             ttk.Radiobutton(corpo, text=titulo, value=chave, variable=escolha, command=mudar_tema).pack(anchor="w", pady=(px(4), 0))
-        ttk.Button(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
+        Botao(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
         janela.update_idletasks()
         janela.geometry(f"+{self.b_opcoes.winfo_rootx() + self.b_opcoes.winfo_width() - janela.winfo_width()}"
                         f"+{self.b_opcoes.winfo_rooty() + self.b_opcoes.winfo_height() + px(6)}")
@@ -1064,9 +1123,9 @@ class App(RaizTk):
         def nova():
             janela.destroy()
             self.escolher()
-        ttk.Button(botoes, text="Fechar", style="Primario.TButton", command=janela.destroy).pack(side="right")
-        ttk.Button(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, px(8)))
-        ttk.Button(botoes, text="Abrir log", style="Secundario.TButton", command=self.abrir_ultimo_log).pack(side="right",
+        Botao(botoes, text="Fechar", style="Primario.TButton", command=janela.destroy).pack(side="right")
+        Botao(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, px(8)))
+        Botao(botoes, text="Abrir log", style="Secundario.TButton", command=self.abrir_ultimo_log).pack(side="right",
                                                                                                        padx=(0, px(8)))
         janela.update_idletasks()
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
@@ -1437,8 +1496,8 @@ class App(RaizTk):
         tabela.bind("<Button-1>", alternar)
         botoes = tk.Frame(janela, bg=COR["fundo"])
         botoes.pack(fill="x", padx=margem, pady=margem)
-        ttk.Button(botoes, text="Usar as marcadas", style="Primario.TButton", command=usar).pack(side="right")
-        ttk.Button(botoes, text="Manter a planilha", style="Secundario.TButton", command=janela.destroy).pack(side="right",
+        Botao(botoes, text="Usar as marcadas", style="Primario.TButton", command=usar).pack(side="right")
+        Botao(botoes, text="Manter a planilha", style="Secundario.TButton", command=janela.destroy).pack(side="right",
                                                                                                          padx=(0, px(8)))
         janela.update_idletasks()
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
