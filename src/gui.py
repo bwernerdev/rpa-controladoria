@@ -273,6 +273,26 @@ class Cartao(ctk.CTkFrame):
         return tk.BaseWidget.dnd_bind(self, sequencia, funcao, add)
 
 
+def icone_planilha(lado, cor, fundo):
+    """Icone de planilha desenhado (v1.13.3; o caractere da fonte saia serrilhado): folha de cantos redondos na `cor`,
+    com a linha do cabecalho e a grade vazadas na cor do `fundo`; desenhado 4x e reduzido para suavizar."""
+    from PIL import Image, ImageDraw
+    grande = lado * 4
+    imagem = Image.new("RGBA", (grande, grande), (0, 0, 0, 0))
+    desenho = ImageDraw.Draw(imagem)
+    x0 = y0 = grande * 0.08
+    x1 = y1 = grande * 0.92
+    desenho.rounded_rectangle((x0, y0, x1, y1), radius=grande * 0.16, fill=cor)
+    traco = max(4, grande // 16)
+    cabecalho = y0 + (y1 - y0) * 0.32
+    for fracao in (0.32, 0.55, 0.78):
+        y = y0 + (y1 - y0) * fracao
+        desenho.line([(x0, y), (x1, y)], fill=fundo, width=traco)
+    x = x0 + (x1 - x0) * 0.38
+    desenho.line([(x, cabecalho), (x, y1)], fill=fundo, width=traco)
+    return ImageTk.PhotoImage(imagem.resize((lado, lado), Image.LANCZOS))
+
+
 def retangulo_redondo(tela, x1, y1, x2, y2, raio, **opcoes):
     """Retangulo de cantos redondos num Canvas (aceita fill, outline, width, dash, tags). Cada canto = arco de 9
     pontos: o smooth=True do Tk so chanfrava o canto."""
@@ -622,6 +642,23 @@ class App(RaizTk):
     def _cartao(self, pai, bg=None):
         return Cartao(pai, bg=bg)
 
+    def _campo(self, pai, variavel, largura=56, **opcoes):
+        """Campo de texto de cantos redondos (CTkEntry; v1.13.3), borda azul com o cursor dentro. O foco fica no
+        tk.Entry de dentro (`campo._entry`); bind e focus_set do CTkEntry ja vao para ele."""
+        campo = ctk.CTkEntry(pai, textvariable=variavel, width=px(largura), height=px(30), corner_radius=px(6),
+                             border_width=1, fg_color=COR["cartao"], border_color=COR["borda_forte"],
+                             text_color=COR["texto"], font=fonte(10), justify="center", **opcoes)
+        campo.bind("<FocusIn>", lambda _e: campo.configure(border_color=COR["destaque"]), add="+")
+        campo.bind("<FocusOut>", lambda _e: campo.configure(border_color=COR["borda_forte"]), add="+")
+        return campo
+
+    def _opcao(self, pai, texto, valor, variavel, comando):
+        """Botao de opcao redondo (CTkRadioButton; v1.13.3) no lugar do ttk.Radiobutton do clam."""
+        return ctk.CTkRadioButton(pai, text=texto, value=valor, variable=variavel, command=comando, font=fonte(9),
+                                  text_color=COR["texto"], fg_color=COR["destaque"], hover_color=COR["destaque_hover"],
+                                  border_color=COR["borda_forte"], radiobutton_width=px(16), radiobutton_height=px(16),
+                                  border_width_unchecked=px(2), border_width_checked=px(5))
+
     def _rolagem(self, pai, comando):
         """Barra de rolagem fina, de pontas redondas e sem setas (a ttk do clam destoava dos cartoes; v1.13.2)."""
         return ctk.CTkScrollbar(pai, orientation="vertical", command=comando, width=px(12), corner_radius=px(6),
@@ -782,9 +819,10 @@ class App(RaizTk):
         colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
         self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
         for coluna, titulo, largura, ancora in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
-                                                   tuple(px(v) for v in (56, 120, 100, 90, 100, 140)), ("center", "w", "w", "w", "center", "w")):
+                                                   tuple(px(v) for v in (64, 130, 110, 110, 100, 180)), ("center", "w", "w", "w", "center", "w")):
+            # so o Status estica (v1.13.3; usuario, 10/11/2026: com todas esticando, as colunas ficavam espalhadas)
             self.tabela.heading(coluna, text=titulo, anchor=ancora)
-            self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
+            self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=coluna == "status")
         rolagem = self._rolagem(cartao, self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
@@ -866,7 +904,9 @@ class App(RaizTk):
             borda["cor"] = cor
             tela.itemconfigure("borda", outline=cor)
         tela.bind("<Configure>", desenhar_borda)
-        icone = tk.Label(centro, text="▦", bg=COR["cartao"], fg=COR["suave"], font=fonte(28), cursor="hand2")
+        imagem = icone_planilha(px(40), COR["suave"], COR["cartao"])
+        icone = tk.Label(centro, image=imagem, bg=COR["cartao"], cursor="hand2")
+        icone.image = imagem
         icone.pack()
         rotulo = tk.Label(centro, text=titulo, bg=COR["cartao"], fg=COR["texto"], font=fonte(11, forte=True), cursor="hand2")
         rotulo.pack(pady=(px(4), 0))
@@ -933,7 +973,10 @@ class App(RaizTk):
         self.b_recarregar = self._link(acoes, "Recarregar", self.recarregar, bg=COR["cartao"])
         self.b_recarregar.pack(side="right")
         self._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, px(14)))
-        tk.Label(self.zona, text="▦", bg=COR["cartao"], fg=COR["ok"], font=fonte(20)).pack(side="left", padx=(px(14), px(8)))
+        imagem = icone_planilha(px(30), COR["ok"], COR["cartao"])
+        icone = tk.Label(self.zona, image=imagem, bg=COR["cartao"])
+        icone.image = imagem
+        icone.pack(side="left", padx=(px(16), px(10)))
         textos = tk.Frame(self.zona, bg=COR["cartao"])
         textos.pack(side="left", fill="x", expand=True, pady=px(8))
         caminho = Path(self.caminho_atual)
@@ -1085,7 +1128,7 @@ class App(RaizTk):
             linha = tk.Frame(corpo, bg=COR["fundo"])
             linha.pack(fill="x", pady=(px(8), 0))
             tk.Label(linha, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte(9), width=22, anchor="w").pack(side="left")
-            ttk.Entry(linha, textvariable=variavel, width=6, justify="center", font=fonte(10)).pack(side="left")
+            self._campo(linha, variavel).pack(side="left")
             tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="left", padx=(px(8), 0))
         tk.Label(corpo, text="Tema", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
                  anchor="w").pack(fill="x", pady=(px(16), 0))
@@ -1095,7 +1138,7 @@ class App(RaizTk):
             janela.destroy()  # a janela principal e refeita no tema novo
             self.escolher_tema(escolha.get())
         for chave, titulo in TEMAS.items():
-            ttk.Radiobutton(corpo, text=titulo, value=chave, variable=escolha, command=mudar_tema).pack(anchor="w", pady=(px(4), 0))
+            self._opcao(corpo, titulo, chave, escolha, mudar_tema).pack(anchor="w", pady=(px(6), 0))
         Botao(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
         janela.update_idletasks()
         janela.geometry(f"+{self.b_opcoes.winfo_rootx() + self.b_opcoes.winfo_width() - janela.winfo_width()}"

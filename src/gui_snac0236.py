@@ -116,8 +116,7 @@ class Pagina0236:
         tk.Label(opcoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte(9)).pack(
             side="left", padx=(px(14), px(6)))
         so_numeros = (pai.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
-        self.e_qtd = ttk.Entry(opcoes, textvariable=self.qtd_nfs, width=5, justify="center", font=fonte(10),
-                               validate="key", validatecommand=so_numeros)
+        self.e_qtd = self.app._campo(opcoes, self.qtd_nfs, largura=64, validate="key", validatecommand=so_numeros)
         self.e_qtd.pack(side="left")
         self.dica_qtd = tk.Label(opcoes, text="todas", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), cursor="xterm")
         self.dica_qtd.bind("<Button-1>", lambda _e: self.e_qtd.focus_set())
@@ -318,7 +317,7 @@ class Pagina0236:
     def _dica_qtd(self):
         """'todas' em cinza dentro do campo NFs a lancar, enquanto ele estiver vazio e sem o cursor."""
         try:
-            vazio = not self.qtd_nfs.get() and self.app.focus_get() is not self.e_qtd
+            vazio = not self.qtd_nfs.get() and self.app.focus_get() not in (self.e_qtd, getattr(self.e_qtd, "_entry", None))
             if vazio:
                 self.dica_qtd.place(in_=self.e_qtd, relx=0.5, rely=0.5, anchor="center")
                 self.dica_qtd.lift()
@@ -341,8 +340,10 @@ class Pagina0236:
         acoes.pack(side="right", padx=px(14))
         self.app._link(acoes, "Recarregar", self.recarregar, bg=COR["cartao"]).pack(side="right")
         self.app._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, px(14)))
-        tk.Label(self.zona, text="▦", bg=COR["cartao"], fg=COR["erro"] if self.erros else COR["ok"],
-                 font=fonte(20)).pack(side="left", padx=(px(14), px(8)))
+        imagem = self.ui.icone_planilha(px(30), COR["erro"] if self.erros else COR["ok"], COR["cartao"])
+        icone = tk.Label(self.zona, image=imagem, bg=COR["cartao"])
+        icone.image = imagem
+        icone.pack(side="left", padx=(px(16), px(10)))
         textos = tk.Frame(self.zona, bg=COR["cartao"])
         textos.pack(side="left", fill="x", expand=True, pady=px(8))
         tk.Label(textos, text=Path(self.caminho).name, bg=COR["cartao"], fg=COR["texto"], font=fonte(10, forte=True),
