@@ -317,7 +317,7 @@ class App(RaizTk):
         self.caminho_atual = None
         self.historico = []
         self.resumo = None  # (linhas, com_conta, erros)
-        self.status_atual = ("Aguardando planilha", "suave")
+        self.status_atual = ("", "suave")  # sem planilha o status fica vazio (a zona ja diz o que fazer)
         self.citrix = None
         self.ocupado = False
         self.fila = queue.Queue()
@@ -478,6 +478,7 @@ class App(RaizTk):
         SNAC0236 nada aparecia ate o app fechar; usuario, 10/11/2026) e no link da versao do rodape."""
         pagina = self.p0236 if self.aba == "snac0236" else self
         try:
+            pagina._arrumar_andamento()
             pagina._status(texto, cor)
             if fracao is not None:
                 pagina.barra.configure(maximum=100, value=round(fracao * 100))
@@ -493,6 +494,8 @@ class App(RaizTk):
         try:
             self.barra.configure(maximum=max(len(self.registros), 1), value=self.concluidas)
             self.p0236.barra.configure(maximum=max(len(self.p0236.registros), 1), value=self.p0236._feitas())
+            self._arrumar_andamento()
+            self.p0236._arrumar_andamento()
         except (tk.TclError, AttributeError):
             pass
 
@@ -619,6 +622,11 @@ class App(RaizTk):
     def _cartao(self, pai, bg=None):
         return Cartao(pai, bg=bg)
 
+    def _rolagem(self, pai, comando):
+        """Barra de rolagem fina, de pontas redondas e sem setas (a ttk do clam destoava dos cartoes; v1.13.2)."""
+        return ctk.CTkScrollbar(pai, orientation="vertical", command=comando, width=px(12), corner_radius=px(6),
+                                fg_color=COR["cartao"], button_color=COR["borda_forte"], button_hover_color=COR["suave"])
+
     def _link(self, pai, texto, comando, cor="destaque", bg=None):
         """Texto clicavel (sem borda de botao)."""
         rotulo = tk.Label(pai, text=texto, bg=bg or COR["fundo"], fg=COR[cor], font=fonte(9), cursor="hand2")
@@ -629,28 +637,31 @@ class App(RaizTk):
 
     def _montar(self):
         margem = px(20)
+        # cabecalho numa linha so (v1.13.2; usuario, 10/11/2026: nome e abas em duas faixas tiravam linhas da tabela):
+        # nome | abas (sublinhado da ativa sobre a linha divisoria) | ... | Citrix e Opcoes. Sem largura, as abas
+        # ficam so com o codigo (`caber`)
         topo = tk.Frame(self, bg=COR["fundo"])
-        topo.pack(fill="x", padx=margem, pady=(12, 10))
-        lado = tk.Frame(topo, bg=COR["fundo"])
-        lado.pack(side="right", anchor="n")
-        titulos = tk.Frame(topo, bg=COR["fundo"])
-        titulos.pack(side="left", fill="x", expand=True)
+        topo.pack(fill="x", padx=margem, pady=(px(8), 0))
+        topo.columnconfigure(2, weight=1)
         # so o nome (usuario, 09/11/2026): o subtitulo repetia o que a aba ja diz e tirava altura da tabela
-        tk.Label(titulos, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").pack(fill="x")
+        tk.Label(topo, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").grid(
+            row=0, column=0, sticky="w", pady=(0, px(3)))
+        lado = tk.Frame(topo, bg=COR["fundo"])
+        lado.grid(row=0, column=3, sticky="e", pady=(0, px(3)))
         self.b_opcoes = self._link(lado, "⚙  Opções", self.abrir_opcoes, cor="suave")
         self.b_opcoes.pack(side="right")
         self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
-        self.chip_citrix.pack(side="right", padx=(0, 16))
+        self.chip_citrix.pack(side="right", padx=(0, px(16)))
 
         # abas: uma por tela do SRP (codigo em destaque + nome; sublinhado na aba ativa, sobre a linha divisoria)
-        barra_abas = tk.Frame(self, bg=COR["fundo"])
-        barra_abas.pack(fill="x", padx=margem)
+        barra_abas = tk.Frame(topo, bg=COR["fundo"])
+        barra_abas.grid(row=0, column=1, sticky="sw", padx=(px(24), 0))
         self.abas = {}
         for chave, codigo, nome, _ in TELAS:
             aba = tk.Frame(barra_abas, bg=COR["fundo"], cursor="hand2")
             aba.pack(side="left", padx=(0, px(6)))
             textos = tk.Frame(aba, bg=COR["fundo"], cursor="hand2")
-            textos.pack(padx=px(12), pady=(px(4), px(6)))
+            textos.pack(padx=px(12), pady=(px(8), px(8)))
             rotulo_codigo = tk.Label(textos, text=codigo, bg=COR["fundo"], font=fonte(10, forte=True), cursor="hand2")
             rotulo_codigo.pack(side="left")
             rotulo_nome = tk.Label(textos, text=nome, bg=COR["fundo"], font=fonte(9), cursor="hand2")
@@ -663,6 +674,19 @@ class App(RaizTk):
                 parte.bind("<Leave>", lambda _e: self._pintar_abas())
             self.abas[chave] = (rotulo_codigo, rotulo_nome, traco)
         tk.Frame(self, bg=COR["borda"], height=1).pack(fill="x")
+
+        def caber(_evento=None):
+            nomes = [nome for _, nome, _ in self.abas.values()]
+            com_nome = bool(nomes[0].winfo_manager())
+            largura = topo.winfo_width()
+            if com_nome and topo.winfo_reqwidth() > largura:
+                for nome in nomes:
+                    nome.pack_forget()
+            elif not com_nome and topo.winfo_reqwidth() + sum(n.winfo_reqwidth() + px(6) for n in nomes) <= largura:
+                for nome in nomes:
+                    nome.pack(side="left", padx=(px(6), 0))
+        topo.bind("<Configure>", caber)
+        lado.bind("<Configure>", caber)  # o texto do Citrix muda de largura
 
         self.paginas = {}
         self._montar_snac0236()
@@ -742,7 +766,7 @@ class App(RaizTk):
         self.b_parar = Botao(self.botoes, text="Parar", style="Perigo.TButton", command=self.parar.set)
         self.botoes_visiveis = None
 
-        progresso = tk.Frame(corpo, bg=COR["fundo"])
+        progresso = self.progresso = tk.Frame(corpo, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
         progresso.columnconfigure(0, weight=1)
         self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
@@ -751,6 +775,7 @@ class App(RaizTk):
         self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte(9, forte=True), anchor="e")
         self.barra = BarraFina(progresso)
         self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(6), 0))
+        self.barra.grid_remove()  # aparece com a planilha (`_arrumar_andamento`)
 
         cartao = self.cartao = self._cartao(corpo)
         cartao.pack(fill="both", expand=True)
@@ -760,7 +785,7 @@ class App(RaizTk):
                                                    tuple(px(v) for v in (56, 120, 100, 90, 100, 140)), ("center", "w", "w", "w", "center", "w")):
             self.tabela.heading(coluna, text=titulo, anchor=ancora)
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
-        rolagem = ttk.Scrollbar(cartao, orient="vertical", command=self.tabela.yview)
+        rolagem = self._rolagem(cartao, self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
         self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
@@ -865,8 +890,19 @@ class App(RaizTk):
                 parte.drop_target_register(DND_FILES)
                 parte.dnd_bind("<<Drop>>", self._soltou)
 
+    def _arrumar_andamento(self):
+        """Barra so com planilha carregada ou com atualizacao baixando (usuario, 10/11/2026: na tela vazia a barra
+        vazia so ocupava lugar). O status aparece sempre que tiver texto (erros, download)."""
+        com_andamento = bool(self.caminho_atual or self.baixando)
+        self.barra.grid() if com_andamento else self.barra.grid_remove()
+        self.status.grid() if com_andamento or self.status_atual[0] else self.status.grid_remove()
+        # sem nada a mostrar, sem as margens dos blocos vazios: a zona desce ate o rodape
+        self.progresso.pack_configure(pady=(12, 0) if com_andamento or self.status_atual[0] else 0)
+        self.botoes.pack_configure(pady=(12, 10) if com_andamento else (0, 10))
+
     def _arrumar_vazia(self):
         """SNAC0234 sem planilha: so a zona (grande), sem filtros nem tabela vazia."""
+        self._arrumar_andamento()
         if not self.caminho_atual:
             self.filtros.pack_forget()
             self.cartao.pack_forget()
@@ -1259,6 +1295,7 @@ class App(RaizTk):
     def _status(self, texto, cor="suave"):
         self.status_atual = (texto, cor)
         self.status.configure(text=com_acentos(texto), fg=COR[cor])
+        self._arrumar_andamento()
 
     def _vigiar_citrix(self):
         while True:
@@ -1527,7 +1564,7 @@ class App(RaizTk):
         for linha, item, conta, correta in suspeitas:
             tabela.insert("", "end", iid=str(linha), values=("✓", linha, item, conta, correta))
         if len(suspeitas) > 10:
-            rolagem = ttk.Scrollbar(cartao, orient="vertical", command=tabela.yview)
+            rolagem = self._rolagem(cartao, tabela.yview)
             tabela.configure(yscrollcommand=rolagem.set)
             rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
         tabela.pack(fill="both", expand=True, padx=px(4), pady=px(4))

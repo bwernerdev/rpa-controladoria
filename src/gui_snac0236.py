@@ -19,7 +19,7 @@ class Pagina0236:
         self.app, self.ui = app, ui
         self.caminho, self.registros, self.notas, self.erros = None, [], [], []
         self.estados, self.historico = {}, []
-        self.status_atual = ("Aguardando planilha", "suave")
+        self.status_atual = ("", "suave")  # sem planilha o status fica vazio (a zona ja diz o que fazer)
         self.ocupado = self.pausado = False
         self.msg_pausa = ""  # ultima mensagem com PAUSADO (texto da faixa de pausa)
         self.fila = queue.Queue()
@@ -145,7 +145,7 @@ class Pagina0236:
         botoes.bind("<Configure>", arrumar)  # o Iniciar muda de texto ("Continuar da linha N") e de largura
 
         # andamento num bloco so (usuario, 09/11/2026): status a esquerda, tempo previsto a direita, barra embaixo
-        progresso = tk.Frame(pai, bg=COR["fundo"])
+        progresso = self.progresso = tk.Frame(pai, bg=COR["fundo"])
         progresso.pack(side="bottom", fill="x", pady=(12, 0))
         progresso.columnconfigure(0, weight=1)
         self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w",
@@ -156,6 +156,7 @@ class Pagina0236:
                                  anchor="e", justify="right")
         self.barra = ui.BarraFina(progresso)
         self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(6), 0))
+        self.barra.grid_remove()  # aparece com a planilha (`_arrumar_andamento`)
 
         def quebrar(_evento=None):
             livre = progresso.winfo_width() - (self.previsao.winfo_reqwidth() + px(16)
@@ -176,7 +177,7 @@ class Pagina0236:
                 tuple(px(v) for v in (56, 120, 100, 80, 80, 100, 170)), ("center", "w", "w", "w", "e", "e", "w")):
             self.tabela.heading(coluna, text=titulo, anchor=ancora)
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
-        rolagem = ttk.Scrollbar(self.cartao, orient="vertical", command=self.tabela.yview)
+        rolagem = self.app._rolagem(self.cartao, self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
         rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
         self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
@@ -241,8 +242,16 @@ class Pagina0236:
             self.tabela.set(iid, "status", self._texto_estado(linha))
             self.tabela.item(iid, tags=self._tags(linha, self._zebra(linha)))
 
+    def _arrumar_andamento(self):
+        """Barra so com planilha carregada ou com atualizacao baixando (como na SNAC0234)."""
+        com_andamento = bool(self.caminho or self.app.baixando)
+        self.barra.grid() if com_andamento else self.barra.grid_remove()
+        self.status.grid() if com_andamento or self.status_atual[0] else self.status.grid_remove()
+        self.progresso.pack_configure(pady=(12, 0) if com_andamento or self.status_atual[0] else 0)
+
     def _arrumar_vazia(self):
         """Sem planilha: so a area de arrastar (grande), sem a tabela vazia. Com planilha: cartao compacto e tabela."""
+        self._arrumar_andamento()
         if not self.caminho:
             self.cartao.pack_forget()
             self.zona.pack_configure(fill="both", expand=True)
@@ -880,6 +889,7 @@ class Pagina0236:
     def _status(self, texto, cor="suave"):
         self.status_atual = (texto, cor)
         self.status.configure(text=com_acentos(texto), fg=self.ui.COR[cor])
+        self._arrumar_andamento()
 
     def _mostrar_pausa(self):
         """Faixa amarela entre a planilha e a tabela enquanto o robo estiver pausado. O texto vem da mensagem com
