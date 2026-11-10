@@ -57,7 +57,7 @@ PALETAS = {
         "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730", "ok_serie_fundo": "#2c5a3b",
     },
 }
-TEMAS = {"auto": "Automático (igual ao Windows)", "claro": "Claro", "escuro": "Escuro"}
+TEMAS = {"auto": "Automático", "claro": "Claro", "escuro": "Escuro"}  # nomes no seletor das Opcoes
 FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
 # ritmo da SNAC0234 para o tempo previsto antes de iniciar (v1.8.0: media de ~2,3 s por linha, 194 linhas dos logs de 30/10)
@@ -129,6 +129,24 @@ def tema_do_windows():
             return "claro" if winreg.QueryValueEx(chave, "AppsUseLightTheme")[0] else "escuro"
     except OSError:
         return "claro"
+
+
+def barra_titulo(janela):
+    """Barra de titulo do Windows no tema do app (escura no escuro). Atributo 20 do DWM (Windows 10 20H1+ e 11; 19
+    nas builds antigas); sem ele, a barra fica como esta. O SetWindowPos com FRAMECHANGED redesenha a moldura na
+    hora (sem isso a cor so muda quando a janela perde e ganha o foco)."""
+    try:
+        janela.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(janela.winfo_id())
+        if not hwnd:
+            return
+        valor = ctypes.c_int(int(COR["fundo"] == PALETAS["escuro"]["fundo"]))
+        for atributo in (20, 19):
+            if not ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, atributo, ctypes.byref(valor), ctypes.sizeof(valor)):
+                break
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x27)  # FRAMECHANGED|NOZORDER|NOSIZE|NOMOVE
+    except (AttributeError, OSError, tk.TclError):
+        pass
 
 
 def tipo_mensagem(texto):
@@ -273,6 +291,41 @@ class Cartao(ctk.CTkFrame):
         return tk.BaseWidget.dnd_bind(self, sequencia, funcao, add)
 
 
+class Console(ctk.CTkTextbox):
+    """Detalhes (log da execucao): texto so leitura com barra de rolagem fina que so aparece quando o texto passa das
+    `linhas` visiveis (v1.13.4). O CTkTextbox confere a barra num laco a cada 200 ms; aqui so confere depois de
+    escrever/apagar e quando o tamanho muda (nada rodando em segundo plano). Cores por tipo: tags erro/aviso/srp."""
+
+    def __init__(self, pai, linhas=6):
+        letra = fonte(9, mono=True)
+        altura = linhas * int(pai.tk.call("font", "metrics", letra, "-linespace")) + 2 * px(6) + 2 * px(3) + px(4)
+        super().__init__(pai, height=altura, corner_radius=0, border_width=0, border_spacing=px(3), wrap="word",
+                         state="disabled", fg_color=COR["console"], text_color=COR["console_texto"], font=letra,
+                         scrollbar_button_color=COR["borda_forte"], scrollbar_button_hover_color=COR["suave"],
+                         padx=px(8), pady=px(6))
+        self._conferindo = None
+        self._textbox.bind("<Configure>", lambda _e: self._conferir_logo(), add="+")
+        for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
+            self.tag_config(tipo, foreground=COR[cor])
+
+    def _check_if_scrollbars_needed(self, event=None, continue_loop=False):
+        self._conferindo = None
+        if self.winfo_exists():
+            super()._check_if_scrollbars_needed(event, False)
+
+    def _conferir_logo(self):
+        if self._conferindo is None:
+            self._conferindo = self.after(50, self._check_if_scrollbars_needed)
+
+    def insert(self, index, text, tags=None):
+        self._conferir_logo()
+        return super().insert(index, text, tags)
+
+    def delete(self, index1, index2=None):
+        self._conferir_logo()
+        return super().delete(index1, index2)
+
+
 def icone_planilha(lado, cor, fundo):
     """Icone de planilha desenhado (v1.13.3; o caractere da fonte saia serrilhado): folha de cantos redondos na `cor`,
     com a linha do cabecalho e a grade vazadas na cor do `fundo`; desenhado 4x e reduzido para suavizar."""
@@ -360,6 +413,7 @@ class App(RaizTk):
         self.baixando = None  # versao sendo baixada (o andamento aparece na aba aberta e no link da versao)
         self.p0236 = Pagina0236(self, sys.modules[__name__])
         self._construir()
+        self.after_idle(barra_titulo, self)  # a moldura do Windows so existe depois que a janela aparece
         self.bind("<Configure>", self._talvez_mudou_monitor)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
@@ -652,13 +706,6 @@ class App(RaizTk):
         campo.bind("<FocusOut>", lambda _e: campo.configure(border_color=COR["borda_forte"]), add="+")
         return campo
 
-    def _opcao(self, pai, texto, valor, variavel, comando):
-        """Botao de opcao redondo (CTkRadioButton; v1.13.3) no lugar do ttk.Radiobutton do clam."""
-        return ctk.CTkRadioButton(pai, text=texto, value=valor, variable=variavel, command=comando, font=fonte(9),
-                                  text_color=COR["texto"], fg_color=COR["destaque"], hover_color=COR["destaque_hover"],
-                                  border_color=COR["borda_forte"], radiobutton_width=px(16), radiobutton_height=px(16),
-                                  border_width_unchecked=px(2), border_width_checked=px(5))
-
     def _rolagem(self, pai, comando):
         """Barra de rolagem fina, de pontas redondas e sem setas (a ttk do clam destoava dos cartoes; v1.13.2)."""
         return ctk.CTkScrollbar(pai, orientation="vertical", command=comando, width=px(12), corner_radius=px(6),
@@ -786,12 +833,8 @@ class App(RaizTk):
         self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(px(14), 0))
         self._link_versao(rodape).pack(side="right")
         self.caixa_saida = self._cartao(corpo, bg=COR["console"])
-        self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"], fg=COR["console_texto"],
-                             font=fonte(9, mono=True), relief="flat", borderwidth=0, padx=px(10), pady=px(6),
-                             insertbackground=COR["texto"], highlightthickness=0)
-        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o Text quadrado cobriria os cantos
-        for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
-            self.saida.tag_configure(tipo, foreground=COR[cor])
+        self.saida = Console(self.caixa_saida)  # rolagem propria (v1.13.4)
+        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o texto quadrado cobriria os cantos
 
         self.botoes = tk.Frame(corpo, bg=COR["fundo"])
         self.botoes.pack(side="bottom", fill="x", pady=(12, 10))
@@ -1132,15 +1175,25 @@ class App(RaizTk):
             tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="left", padx=(px(8), 0))
         tk.Label(corpo, text="Tema", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
                  anchor="w").pack(fill="x", pady=(px(16), 0))
-        escolha = tk.StringVar(value=self.tema_escolhido)
+        # seletor de 3 partes (v1.13.4): trilho cinza e a parte escolhida em "cartao", como um interruptor
 
-        def mudar_tema():
+        def mudar_tema(titulo):
+            chave = next(c for c, t in TEMAS.items() if t == titulo)
+            if chave == self.tema_escolhido:
+                return
             janela.destroy()  # a janela principal e refeita no tema novo
-            self.escolher_tema(escolha.get())
-        for chave, titulo in TEMAS.items():
-            self._opcao(corpo, titulo, chave, escolha, mudar_tema).pack(anchor="w", pady=(px(6), 0))
+            self.escolher_tema(chave)
+        seletor = ctk.CTkSegmentedButton(corpo, values=list(TEMAS.values()), command=mudar_tema, height=px(30),
+                                         corner_radius=px(7), border_width=px(3), font=fonte(9), fg_color=COR["botao"],
+                                         unselected_color=COR["botao"], unselected_hover_color=COR["botao_hover"],
+                                         selected_color=COR["cartao"], selected_hover_color=COR["cartao"],
+                                         text_color=COR["texto"], dynamic_resizing=False, width=px(300))
+        seletor.set(TEMAS[self.tema_escolhido])
+        seletor.pack(anchor="w", pady=(px(6), 0))
+        tk.Label(corpo, text="Automático segue o modo de cor do Windows.", bg=COR["fundo"], fg=COR["suave"], font=fonte(8),
+                 anchor="w").pack(fill="x", pady=(px(4), 0))
         Botao(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
-        janela.update_idletasks()
+        barra_titulo(janela)  # ja faz o update_idletasks
         janela.geometry(f"+{self.b_opcoes.winfo_rootx() + self.b_opcoes.winfo_width() - janela.winfo_width()}"
                         f"+{self.b_opcoes.winfo_rooty() + self.b_opcoes.winfo_height() + px(6)}")
         janela.grab_set()
@@ -1254,7 +1307,7 @@ class App(RaizTk):
         Botao(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, px(8)))
         Botao(botoes, text="Abrir log", style="Secundario.TButton", command=self.abrir_ultimo_log).pack(side="right",
                                                                                                        padx=(0, px(8)))
-        janela.update_idletasks()
+        barra_titulo(janela)  # ja faz o update_idletasks
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
                         f"+{self.winfo_rooty() + px(120)}")
         janela.lift()
@@ -1276,6 +1329,7 @@ class App(RaizTk):
         COR.update(PALETAS[tema])
         self.iids = {}
         self._construir()
+        barra_titulo(self)
 
     def _atualizar_previsao(self):
         """Antes de iniciar: linhas que o Iniciar (ou o Continuar) vai preencher, tempo e horario de termino, pelo ritmo
@@ -1627,7 +1681,7 @@ class App(RaizTk):
         Botao(botoes, text="Usar as marcadas", style="Primario.TButton", command=usar).pack(side="right")
         Botao(botoes, text="Manter a planilha", style="Secundario.TButton", command=janela.destroy).pack(side="right",
                                                                                                          padx=(0, px(8)))
-        janela.update_idletasks()
+        barra_titulo(janela)  # ja faz o update_idletasks
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
                         f"+{self.winfo_rooty() + px(80)}")
         janela.grab_set()

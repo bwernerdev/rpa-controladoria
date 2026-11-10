@@ -87,12 +87,8 @@ class Pagina0236:
         self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(px(14), 0))
         self.app._link_versao(rodape).pack(side="right")
         self.caixa_saida = self.app._cartao(pai, bg=COR["console"])
-        self.saida = tk.Text(self.caixa_saida, height=6, state="disabled", wrap="word", bg=COR["console"],
-                             fg=COR["console_texto"], font=fonte(9, mono=True), relief="flat", borderwidth=0,
-                             padx=px(10), pady=px(6), highlightthickness=0)
-        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o Text quadrado cobriria os cantos
-        for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
-            self.saida.tag_configure(tipo, foreground=COR[cor])
+        self.saida = self.ui.Console(self.caixa_saida)  # rolagem propria (v1.13.4)
+        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o texto quadrado cobriria os cantos
 
         # barra de baixo responsiva (usuario, 06/11/2026): botoes a esquerda, Parar a direita e as opcoes (Passo a
         # passo, NFs a lancar) no meio; se nao couberem na largura (janela estreita), descem para uma linha propria.
