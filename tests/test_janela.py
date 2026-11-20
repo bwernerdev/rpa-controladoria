@@ -15,6 +15,7 @@ TEM_TELA = all(importlib.util.find_spec(m) for m in ("customtkinter", "tkinterdn
 if TEM_TELA:
     import gui
     import gui_snac0236
+    import pagina
 
 
 @unittest.skipUnless(TEM_TELA, "sem customtkinter/tkinterdnd2")
@@ -31,7 +32,7 @@ class Janela(unittest.TestCase):
             (gui, "contas_suspeitas"): lambda *a, **k: [],
             (gui, "citrix_aberto"): lambda: False,
             (gui, "registrar_falha_tela"): lambda contexto: self.falhas.append(contexto),
-            (gui_snac0236, "registrar_falha_tela"): lambda contexto: self.falhas.append(contexto),
+            (pagina, "registrar_falha_tela"): lambda contexto: self.falhas.append(contexto),
             (gui.App, "avisar"): lambda _app, *a, **k: self.dialogos.append(("avisar",) + a),
             (gui.App, "perguntar"): lambda _app, *a, **k: (self.dialogos.append(("perguntar",) + a),
                                                             self.respostas.pop(0) if self.respostas else True)[1],
@@ -84,7 +85,7 @@ class Janela(unittest.TestCase):
         self.assertFalse(any(g.get("console_aberto") for g in self.gravados))  # abrir sozinho nao muda a preferencia
 
     def test_fila_sobrevive_a_mensagem_com_erro(self):
-        self.app.fila.put(("linha_sem_estado",))  # _estado_linha com argumento faltando: TypeError
+        self.app.fila.put(("estado", 1))  # sem o nome do estado: TypeError
         self.app.fila.put("depois do erro")
         self.rodar()
         self.assertTrue(self.falhas)
@@ -95,7 +96,7 @@ class Janela(unittest.TestCase):
 
     def test_fila_da_0236_sobrevive_a_mensagem_com_erro(self):
         p = self.app.p0236
-        p.fila.put(("linha_sem_estado",))
+        p.fila.put(("evento_que_nao_existe",))  # AttributeError
         p.fila.put("depois do erro")
         self.rodar()
         self.assertTrue(self.falhas)
@@ -192,6 +193,82 @@ class Janela(unittest.TestCase):
         self.app.ocupado = True
         self.app._atalho("escolher")  # durante um preenchimento, nada
         self.assertEqual(chamados, ["0234", "0236"])
+
+    def test_detalhes_e_dica_das_duas_abas(self):
+        """Pagina (base das abas): cada aba grava a propria preferencia dos Detalhes, copia o historico e mostra dica."""
+        for pagina_, chave in ((self.app, "console_aberto"), (self.app.p0236, "console_0236")):
+            pagina_.alternar_console()
+            self.assertTrue(pagina_.console_aberto)
+            self.assertIs(self.gravados[-1][chave], True)
+            pagina_.escrever("linha de teste")
+            pagina_.copiar()
+            self.assertIn("linha de teste", self.app.clipboard_get())
+            pagina_.alternar_console()
+            self.assertIs(self.gravados[-1][chave], False)
+            evento = type("Evento", (), {"x_root": 10, "y_root": 10})()
+            pagina_._mostrar_dica(evento, "dica")
+            self.assertTrue(pagina_.dica.winfo_exists())
+            pagina_._esconder_dica()
+            self.assertIsNone(pagina_.dica)
+
+    def test_cores_das_linhas_concluidas(self):
+        """Concluida = verde comum; Serie com '.' = fundo mais escuro com o texto verde escuro (contraste 5:1)."""
+        for tema in ("claro", "escuro"):
+            self.app.escolher_tema(tema)
+            self.rodar(0.2)
+            tabela = self.app.p0236.tabela
+            self.assertEqual(str(tabela.tag_configure("ok", "foreground")), gui.COR["ok"])
+            self.assertEqual(str(tabela.tag_configure("ok_serie", "foreground")), gui.COR["ok_serie_texto"])
+            self.assertEqual(str(self.app.tabela.tag_configure("ok", "foreground")), gui.COR["ok"])
+            self.assertEqual([str(tabela.column(c, "stretch")) for c in ("linha", "status")], ["1", "1"])
+            self.assertEqual([str(self.app.tabela.column(c, "stretch")) for c in ("linha", "status")], ["0", "1"])
+
+    def _trocar(self, alvo, nome, valor):
+        original = getattr(alvo, nome)
+        setattr(alvo, nome, valor)
+        self.addCleanup(setattr, alvo, nome, original)
+
+    def test_iniciar_0234_com_robo_falso(self):
+        """Iniciar -> thread -> eventos 'estado'/'fim' na fila -> tabela e botoes; executar recebe argumentos nomeados."""
+        chamadas = []
+
+        def executar(registros, **opcoes):
+            chamadas.append(opcoes)
+            for r in registros:
+                opcoes["estado"](r["linha"], "executando")
+                opcoes["aviso"](f"Linha {r['linha']}: ok")
+                opcoes["estado"](r["linha"], "ok")
+            return 0
+        self._trocar(gui, "executar", executar)
+        self._trocar(gui, "citrix_aberto", lambda: True)
+        self._trocar(gui, "atalhos_globais", lambda _teclas: (lambda: None, []))
+        self.app.carregar(self.planilha())
+        self.app.iniciar()
+        self.assertTrue(self.app.ocupado)
+        self.rodar(1.0)  # o robo falso nao espera a contagem de 5 s (ela corre no executar de verdade)
+        self.assertFalse(self.app.ocupado)
+        self.assertEqual(set(self.app.estados.values()), {"ok"})
+        self.assertEqual(len(chamadas), 1)
+        self.assertEqual((chamadas[0]["janela_trecho"], chamadas[0]["render"], chamadas[0]["espera"]),
+                         ("Desktop Viewer", 4.0, 5))
+        self.assertIn("Linha 2: ok", self.app.historico)
+
+    def test_rodar_0236_manda_argumentos_nomeados_e_fim(self):
+        chamadas = []
+        self._trocar(gui_snac0236.snac0236, "executar", lambda notas, **opcoes: chamadas.append(opcoes))
+        p = self.app.p0236
+        p.ocupado = self.app.ocupado = True
+        p.execucao = {"inicio": time.time(), "notas": [], "feitas": 0, "gasto": 0.0, "tempo_pausado": 0.0,
+                      "pausado_desde": None}
+        p._rodar([], 0.5)
+        self.rodar()
+        self.assertFalse(p.ocupado or self.app.ocupado)
+        self.assertEqual(chamadas[0]["intervalo"], 0.5)
+        self.assertEqual(chamadas[0]["pausa"], gui_snac0236.PAUSA_TECLAS)
+        chamadas[0]["serie_ponto"]([7])
+        chamadas[0]["estado"](7, "ok")
+        self.assertEqual(p.fila.get_nowait(), ("serie_ponto", (7,)))
+        self.assertEqual(p.fila.get_nowait(), ("estado", 7, "ok"))
 
     def test_trocar_tema_refaz_a_janela(self):
         self.app.carregar(self.planilha())

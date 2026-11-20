@@ -16,6 +16,7 @@ jobs:
           python-version: "3.14"
           cache: pip
       - name: Dependencias
-        run: python -m pip install pywinauto openpyxl pillow
+        # customtkinter e tkinterdnd2: os testes da janela (test_janela.py) pulam sem eles
+        run: python -m pip install pywinauto openpyxl pillow tkinterdnd2 customtkinter==6.0.0
       - name: Testes
         run: python -m unittest discover -s tests -v

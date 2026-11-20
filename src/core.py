@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -58,7 +59,7 @@ def ler_planilha(caminho):
             indices[chave] = posicao
     faltando = [nome for nome, chave in COLUNAS.items() if chave not in indices]
     if faltando:
-        raise ValueError(f"Colunas ausentes no cabecalho: {', '.join(faltando)}")
+        raise ValueError(f"Colunas ausentes no cabeçalho: {', '.join(faltando)}")
     registros = []
     for numero, linha in enumerate(linhas, start=2):
         registro = {chave: texto(linha[pos]) if pos < len(linha) else "" for chave, pos in indices.items()}
@@ -86,7 +87,7 @@ def validar(registros):
             if r[campo] and not re.fullmatch(r"[0-9A-Za-z.\-]+", r[campo]):
                 erros.append(f"linha {r['linha']}: {campo} com caracteres invalidos: {r[campo]!r}")
         if r["quantidade"] and not re.fullmatch(r"\d+(?:[.,]\d+)?", r["quantidade"]):
-            erros.append(f"linha {r['linha']}: quantidade invalida: {r['quantidade']!r}")
+            erros.append(f"linha {r['linha']}: quantidade inválida: {r['quantidade']!r}")
     return erros
 
 
@@ -217,7 +218,7 @@ def problema_tela(retangulo, imagem):
     if maior - menor < 40:
         return "a tela do Citrix esta vazia (sessao bloqueada, desconectada ou carregando). Desbloqueie o Citrix e abra o SRP"
     if icone_aviso(imagem):
-        return "ja ha um aviso aberto no SRP. Feche o aviso (OK) e deixe o cursor no campo Item"
+        return "já há um aviso aberto no SRP. Feche o aviso (OK) e deixe o cursor no campo Item"
     return None
 
 
@@ -388,7 +389,7 @@ def aprender_conta(item, custo, conta):
     dados = ler_aprendizado()
     dados.setdefault("contas", {})[f"{item}|{custo}"] = {"conta": conta, "em": datetime.now().strftime("%Y-%m-%d %H:%M")}
     try:
-        arquivo_aprendizado().write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        gravar_json(arquivo_aprendizado(), dados, indent=2)
     except OSError:
         pass
 
@@ -503,7 +504,7 @@ def janela_citrix(trecho):
                 return Desktop(backend=backend).window(handle=alvo).wrapper_object()
             except Exception:
                 continue
-    raise LookupError(f"Janela com '{trecho}' no titulo nao encontrada.")
+    raise LookupError(f"Janela com '{trecho}' no título não encontrada.")
 
 
 def pasta_base():
@@ -540,6 +541,15 @@ def pasta_logs():
     pasta = pasta_base() / "logs"
     pasta.mkdir(exist_ok=True)
     return pasta
+
+
+def gravar_json(arquivo, dados, **opcoes):
+    """Grava JSON por um arquivo temporario ao lado, trocado de uma vez (os.replace): o app fechado ou a energia caindo
+    no meio da gravacao nao deixa o arquivo pela metade (progresso, aprendizado, posicoes e config). OSError sobe."""
+    arquivo = Path(arquivo)
+    temporario = arquivo.with_name(arquivo.name + ".tmp")
+    temporario.write_text(json.dumps(dados, ensure_ascii=False, **opcoes), encoding="utf-8")
+    os.replace(temporario, arquivo)
 
 
 def arquivo_progresso():
@@ -648,7 +658,6 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
 def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, coluna_chave=1):
     """Pinta pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o arquivo nem salva."""
     import pythoncom
-    import win32com.client
     from openpyxl.utils import get_column_letter
 
     r, g, b = (int(cor[i:i + 2], 16) for i in (0, 2, 4))
@@ -727,7 +736,7 @@ def gravar_progresso(registros, linhas_ok):
         if linhas_ok:
             dados = {"assinatura": assinatura_planilha(registros), "ok": sorted(linhas_ok),
                      "em": datetime.now().strftime("%d/%m/%Y %H:%M")}
-            arquivo_progresso().write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+            gravar_json(arquivo_progresso(), dados, indent=2)
         else:
             arquivo_progresso().unlink(missing_ok=True)
     except OSError:
@@ -746,44 +755,11 @@ def ler_progresso(registros):
     return {l for l in dados.get("ok", []) if l in validas}, dados.get("em")
 
 
-# palavras sem acento das mensagens do robo (core/snac0236 escrevem sem acento: logs e console) -> como aparecem na
-# barra de status e na faixa de pausa (`com_acentos`; usuario, 10/11/2026). Ambiguas ("e", "esta") so em frases certas.
-_ACENTOS = {
-    "nao": "não", "mao": "mão", "maos": "mãos", "sao": "são", "entao": "então", "ja": "já", "ate": "até", "so": "só",
-    "ha": "há", "voce": "você", "apos": "após", "tambem": "também", "robo": "robô", "serie": "série",
-    "proxima": "próxima", "proximo": "próximo", "proximas": "próximas", "proximos": "próximos",
-    "ultima": "última", "ultimo": "último", "ultimas": "últimas", "ultimos": "últimos",
-    "possivel": "possível", "disponivel": "disponível", "numero": "número", "numeros": "números",
-    "aliquota": "alíquota", "contabil": "contábil", "emissao": "emissão", "fisica": "física",
-    "calculo": "cálculo", "descricao": "descrição", "operacao": "operação", "cabecalho": "cabeçalho",
-    "digitacao": "digitação", "integracao": "integração", "conferencia": "conferência", "referencia": "referência",
-    "padrao": "padrão", "rotulo": "rótulo", "rotulos": "rótulos", "acao": "ação", "acoes": "ações", "area": "área",
-    "inicio": "início", "concluida": "concluída", "concluidas": "concluídas", "concluido": "concluído",
-    "concluidos": "concluídos", "invalida": "inválida", "invalido": "inválido", "obrigatorio": "obrigatório",
-    "obrigatoria": "obrigatória", "lancamento": "lançamento", "lancar": "lançar", "lancada": "lançada",
-    "lancadas": "lançadas", "lancado": "lançado", "comecar": "começar", "comeca": "começa", "faca": "faça",
-    "atencao": "atenção", "posicao": "posição", "posicoes": "posições", "selecao": "seleção", "versao": "versão",
-    "atualizacao": "atualização", "atualizacoes": "atualizações", "dialogo": "diálogo", "botao": "botão",
-    "titulo": "título", "minimo": "mínimo", "maximo": "máximo", "tera": "terá", "sera": "será", "estao": "estão",
-    "nao esta": "não está", "cursor esta": "cursor está", "onde esta": "onde está", "ja esta": "já está",
-    "a correta e": "a correta é", "nao e": "não é", "unitario": "unitário", "rapido": "rápido",
-    "previsao": "previsão", "duvida": "dúvida", "codigo": "código", "valido": "válido",
-    "valida": "válida", "necessario": "necessário", "periodo": "período", "mes": "mês", "pagina": "página",
-}
-_RE_ACENTOS = re.compile(r"(?<![\w\\/.])(" + "|".join(sorted(map(re.escape, _ACENTOS), key=len, reverse=True))
-                         + r")(?!\w|\.\w)", re.IGNORECASE)
-
-
-def com_acentos(texto):
-    """Poe os acentos nas palavras conhecidas das mensagens do robo (so para mostrar na tela; logs ficam como estao).
-    Mantem maiusculas ('NAO' -> 'NÃO', 'Nao' -> 'Não'); nao mexe em nomes de arquivo ('proxima.xlsx')."""
-    def troca(achado):
-        palavra = achado.group(0)
-        novo = _ACENTOS[palavra.lower()]
-        if len(palavra) > 1 and palavra.isupper():
-            return novo.upper()
-        return novo[:1].upper() + novo[1:] if palavra[:1].isupper() else novo
-    return _RE_ACENTOS.sub(troca, texto)
+def sem_acentos(texto):
+    """Texto sem acentos ('Não iniciei' -> 'Nao iniciei'). As mensagens do robo tem acento desde a v1.14.0 (antes eram
+    escritas sem e o `com_acentos` os punha so na tela); quem le mensagens ou logs compara pelo texto sem acento, que
+    vale para os logs antigos e os novos."""
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if not unicodedata.combining(c))
 
 
 def qtd(n, um, varios):
@@ -850,22 +826,22 @@ def verificar_atualizacao(atual, tempo_limite=5):
         try:
             dados = _consulta_powershell(url)
         except Exception as erro_proxy:
-            return None, (f"Nao consegui consultar atualizacoes (direto: {_erro_curto(erro_direto)}; "
+            return None, (f"Não consegui consultar atualizações (direto: {_erro_curto(erro_direto)}; "
                           f"pelo proxy do Windows: {_erro_curto(erro_proxy)})")
     try:
         versao = str(dados.get("tag_name", "")).lstrip("vV")
         if versao_tupla(versao) <= versao_tupla(atual):
-            return None, f"Atualizacoes: a v{atual} é a mais nova (ultima publicada: v{versao}; consulta {caminho})"
+            return None, f"Atualizações: a v{atual} é a mais nova (última publicada: v{versao}; consulta {caminho})"
         zips = [a for a in dados.get("assets", []) if str(a.get("name", "")).lower().endswith(".zip")]
         if not zips:
-            return None, f"Atualizacoes: v{versao} publicada sem o zip; nada a fazer (consulta {caminho})"
+            return None, f"Atualizações: v{versao} publicada sem o zip; nada a fazer (consulta {caminho})"
         digest = str(zips[0].get("digest") or "")
         info = {"versao": versao, "url": zips[0]["browser_download_url"], "tamanho": zips[0].get("size"),
                 "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else None,
                 "notas": dados.get("body") or "", "proxy": caminho != "direta"}
     except Exception as erro:
         return None, f"Resposta do GitHub inesperada: {_erro_curto(erro)} (consulta {caminho})"
-    return info, f"Atualizacoes: v{versao} disponivel (voce tem a v{atual}; consulta {caminho})"
+    return info, f"Atualizações: v{versao} disponível (você tem a v{atual}; consulta {caminho})"
 
 
 def buscar_atualizacao(atual, tempo_limite=5):
@@ -950,12 +926,12 @@ def baixar_atualizacao(info, progresso=None):
         _baixar_powershell(info["url"], arquivo, info.get("tamanho") or 0, progresso)
         soma = hashlib.sha256(arquivo.read_bytes())
     if info.get("sha256") and soma.hexdigest() != info["sha256"].lower():
-        raise ValueError("o arquivo baixado nao confere com o publicado (SHA-256 diferente); atualizacao cancelada")
+        raise ValueError("o arquivo baixado não confere com o publicado (SHA-256 diferente); atualização cancelada")
     destino = pasta / "pacote"
     with zipfile.ZipFile(arquivo) as zip_:
         zip_.extractall(destino)  # extractall descarta caminhos absolutos e ".."
     if not (destino / "instalar.ps1").exists() or not (destino / "RPA-SRP.exe").exists():
-        raise ValueError("o pacote baixado nao tem instalar.ps1 e RPA-SRP.exe")
+        raise ValueError("o pacote baixado não tem instalar.ps1 e RPA-SRP.exe")
     return destino
 
 
@@ -1143,14 +1119,14 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         linha, lidas, esperada = falha
         if retomar is None:
             registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
-                      "A linha ja foi confirmada no SRP: corrija-a (as seguintes, ate aqui, tambem podem estar afetadas). "
+                      "A linha já foi confirmada no SRP: corrija-a (as seguintes, até aqui, também podem estar afetadas). "
                       "Imagem lida em logs/ocr.")
             if estado:
                 estado(linha, "erro")
             return False
         registrar(f"Linha {linha}: a quantidade lida na tela {lidas} difere da planilha ({esperada}). PAUSADO. "
                   f"Confira a linha {linha} no SRP (imagem lida em logs/ocr). Se estiver certa, clique em Continuar. "
-                  "Se nao, corrija-a" + ("." if no_fim else ", volte o cursor para o Item da proxima linha livre") +
+                  "Se não, corrija-a" + ("." if no_fim else ", volte o cursor para o Item da próxima linha livre") +
                   " e clique em Continuar.")
         if estado:
             estado(linha, "pausado")
@@ -1167,10 +1143,10 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             caixa = caixa_foco(janela)
             if caixa and (not colunas or qual_coluna(caixa, colunas) == "item"):
                 break
-            registrar("Ainda pausado: deixe o cursor no Item da proxima linha livre e clique em Continuar.")
+            registrar("Ainda pausado: deixe o cursor no Item da próxima linha livre e clique em Continuar.")
             if estado:
                 estado(linha, "pausado")
-        registrar(f"  linha {linha}: quantidade conferida pelo usuario apos a pausa", mostrar=False)
+        registrar(f"  linha {linha}: quantidade conferida pelo usuário após a pausa", mostrar=False)
         if estado:
             estado(linha, "ok")
         return True
@@ -1216,11 +1192,11 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
                     aprender_conta(r["item"], r["custo"], info["conta_correta"])
                     registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item "
-                              f"{r['item']} (C/Custo {r['custo']}); guardada para avisar nas proximas planilhas.")
+                              f"{r['item']} (C/Custo {r['custo']}); guardada para avisar nas próximas planilhas.")
             threading.Thread(target=ler_em_segundo_plano, daemon=True).start()
-        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
+        registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
                   f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
-                  "e clique em Continuar. Se completou a linha a mao, deixe o cursor no Item da linha seguinte.")
+                  "e clique em Continuar. Se completou a linha a mão, deixe o cursor no Item da linha seguinte.")
         if estado:
             estado(r["linha"], "pausado")
         while True:
@@ -1234,7 +1210,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             caixa = caixa_foco(janela)
             onde = qual_coluna(caixa, colunas) if caixa else None
             if onde == "item":
-                registrar(f"  linha {r['linha']}: retomada com o cursor no Item (linha completada a mao)", mostrar=False)
+                registrar(f"  linha {r['linha']}: retomada com o cursor no Item (linha completada a mão)", mostrar=False)
                 if estado:
                     estado(r["linha"], "executando")
                 return caixa, "fim"
@@ -1243,14 +1219,14 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 if estado:
                     estado(r["linha"], "executando")
                 return caixa, onde
-            registrar(f"Ainda pausado: o cursor esta em '{NOME_CAMPO.get(onde, 'campo nao identificado')}'. "
+            registrar(f"Ainda pausado: o cursor está em '{NOME_CAMPO.get(onde, 'campo não identificado')}'. "
                       f"Deixe-o no campo depois do {NOME_CAMPO[campo_erro]} (ou no Item da linha seguinte) e clique em Continuar.")
             if estado:
                 estado(r["linha"], "pausado")
 
     try:
         if conferir and not tesseract:
-            aviso("ATENCAO: pasta 'tesseract' nao encontrada ao lado do programa. Conferencia da quantidade DESATIVADA nesta execucao.")
+            aviso("ATENÇÃO: pasta 'tesseract' não encontrada ao lado do programa. Conferência da quantidade DESATIVADA nesta execução.")
         janela = janela_citrix(janela_trecho)
         janela.set_focus()
         aviso(f"Clique no campo Item da primeira linha. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
@@ -1261,7 +1237,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         ret = janela.rectangle()
         problema = problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela_inicial)
         if problema:
-            registrar(f"Nao iniciei: {problema}. Nada foi digitado.")
+            registrar(f"Não iniciei: {problema}. Nada foi digitado.")
             return 1
         try:  # vermelhos que ja estao na tela (faixa do cabecalho do SRP): nao sao aviso
             fixos = caixas_cor(tela_inicial, "vermelho")
@@ -1272,12 +1248,12 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             try:
                 colunas = localizar_colunas(tela_inicial, exe_tesseract)
             except Exception as erro:  # sem cabecalho, segue no modo antigo
-                registrar(f"  leitura do cabecalho falhou: {erro}", mostrar=False)
+                registrar(f"  leitura do cabeçalho falhou: {erro}", mostrar=False)
         if colunas:
-            registrar(f"  colunas pelo cabecalho: {colunas}", mostrar=False)
+            registrar(f"  colunas pelo cabeçalho: {colunas}", mostrar=False)
         else:
-            aviso("ATENCAO: nao localizei o cabecalho da grade (C/Custo, Conta, Quantidade). "
-                  "Sem ele o robo nao detecta C/Custo travado: o C/Custo sera sempre digitado.")
+            aviso("ATENÇÃO: não localizei o cabeçalho da grade (C/Custo, Conta, Quantidade). "
+                  "Sem ele o robô não detecta C/Custo travado: o C/Custo será sempre digitado.")
         while time.time() - inicio_contagem < espera:
             if parar.is_set():
                 registrar("Interrompido antes de iniciar.")
@@ -1286,13 +1262,13 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
         # fim da contagem: o cursor tem que estar no Item, senao nada e digitado
         proximo = caixa_foco(janela)  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
         if not proximo:
-            registrar("Nao iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Item da primeira linha livre "
+            registrar("Não iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Item da primeira linha livre "
                       "e inicie de novo. Nada foi digitado.")
             return 1
         if colunas and "item" in colunas and qual_coluna(proximo, colunas) != "item":
             onde = qual_coluna(proximo, colunas)
-            registrar(f"Nao iniciei: o cursor esta {f'na coluna {NOME_CAMPO[onde]}' if onde else 'fora da grade'}, "
-                      "nao no Item. Clique no campo Item da primeira linha livre e inicie de novo. Nada foi digitado.")
+            registrar(f"Não iniciei: o cursor está {f'na coluna {NOME_CAMPO[onde]}' if onde else 'fora da grade'}, "
+                      "não no Item. Clique no campo Item da primeira linha livre e inicie de novo. Nada foi digitado.")
             return 1
         passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
         coluna_qtd = None  # (esq, dir, altura) da coluna Quantidade, aprendida uma vez
@@ -1311,13 +1287,13 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
             t0 = time.time()
             inicial = proximo or caixa_foco(janela)
             if not inicial:
-                registrar(f"Linha {r['linha']}: campo em foco (ciano) nao detectado. Interrompido.")
+                registrar(f"Linha {r['linha']}: campo em foco (ciano) não detectado. Interrompido.")
                 return 1
             foco, campo = inicial, "item"
             digitados, manual, proximo = [], False, None
             while campo != "fim":
                 if campo == "conta" and not r["conta"]:
-                    registrar(f"Linha {r['linha']}: Conta editavel mas em branco na planilha. Interrompido.")
+                    registrar(f"Linha {r['linha']}: Conta editável mas em branco na planilha. Interrompido.")
                     return 1
                 if campo == "quantidade" and coluna_qtd is None:
                     coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
@@ -1333,7 +1309,7 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                     break
                 if seguinte is None:
                     if retomar is None or not colunas:
-                        registrar(f"Linha {r['linha']}: o SRP nao avancou depois do {NOME_CAMPO[campo]} "
+                        registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo]} "
                                   "(aviso na tela?). Interrompido.")
                         return 1
                     novo, seguinte = esperar_correcao(r, campo)
@@ -1352,21 +1328,21 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
                 recorte = recortar_celula(janela, celula)
                 pendentes.append((r["linha"], esperada, pool.submit(conferir_recorte, recorte, tesseract, esperada), recorte))
             elif tesseract and manual:
-                registrar(f"  linha {r['linha']}: conferencia da quantidade pulada (linha ajustada a mao)", mostrar=False)
+                registrar(f"  linha {r['linha']}: conferência da quantidade pulada (linha ajustada a mão)", mostrar=False)
             conta = "digitada " + r["conta"] if "conta" in digitados else "travada"
             custo = r["custo"] if "custo" in digitados else "travado"
             registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}"
-                      + (" (ajustada a mao)" if manual else ""))
+                      + (" (ajustada a mão)" if manual else ""))
             marcar(r, "ok")
         falha = revisar(aguardar=True)
         while falha:
             if not tratar_divergencia(falha, no_fim=True):
                 return 1
             falha = revisar(aguardar=True)
-        registrar("Concluido.")
+        registrar("Concluído.")
         return 0
     except KeyboardInterrupt:
-        registrar("Interrompido pelo usuario.")
+        registrar("Interrompido pelo usuário.")
         return 1
     except Exception as erro:
         registrar(f"Erro: {erro}")

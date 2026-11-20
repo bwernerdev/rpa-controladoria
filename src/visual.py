@@ -12,6 +12,8 @@ import types
 
 from PIL import ImageTk
 
+from core import sem_acentos
+
 # customtkinter (v1.13.0; usuario, 10/11/2026: visual limitado): botoes arredondados (`Botao`) e a barra (`BarraFina`).
 # O app cuida sozinho do tema (PALETAS) e da escala (px/fonte), entao: sem o darkdetect (o platform.release() dele
 # custava ~0,1 s na abertura), escala do customtkinter fixa em 1 e sem os lacos dele rodando junto com o robo
@@ -163,7 +165,8 @@ def piscar_barra(janela):
 
 
 def tipo_mensagem(texto):
-    """Cor da mensagem no console: 'erro', 'aviso', 'srp' ou None."""
+    """Cor da mensagem no console: 'erro', 'aviso', 'srp' ou None (compara sem acento: 'Não iniciei' e 'Nao iniciei')."""
+    texto = sem_acentos(texto)
     if re.search(r"Interrompido|Nao iniciei|^Erro|falhou|nao encontrad", texto):
         return "erro"
     if ": SRP: " in texto:

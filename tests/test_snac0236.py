@@ -367,7 +367,7 @@ def item(codigo, oper="5101", qtd="2", unit="10.5", icms="1.89", icms_t="0", ali
     return {"item": codigo, "oper": oper, "qtd": qtd, "unit": unit, "icms": icms, "icms_terceiro": icms_t, "aliquota_icms": aliq}
 
 
-def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0, serie_ponto=None):
+def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0, serie_ponto=None, pausar=None):
     avisos, estados = [], []
     retomar = threading.Event() if com_continuar else None
 
@@ -382,8 +382,8 @@ def rodar(srp, notas, com_continuar=True, ao_pausar=None, intervalo=0, serie_pon
 
     with mock.patch.object(snac0236.time, "sleep", lambda s: None if s >= 0.1 else threading.Event().wait(s)):
         codigo = snac0236.executar(notas, "Desktop Viewer", 0, 0.3, 0, threading.Event(), avisos.append, estado, retomar,
-                                   intervalo, serie_ponto=serie_ponto)
-    return codigo, avisos, estados
+                                   intervalo, serie_ponto=serie_ponto, pausar=pausar)
+    return codigo, [core.sem_acentos(a) for a in avisos], estados  # as mensagens tem acento desde a v1.14.0
 
 
 class Planilha(unittest.TestCase):
@@ -490,7 +490,7 @@ class Planilha(unittest.TestCase):
             [None, "30 47", None, None, None, 900266, 5101, 1, 1, 0, 0, 0],
         ])
         _, _, erros = snac0236.carregar(caminho)
-        self.assertTrue(any("linha 3: CHAVE NF em branco com o cabecalho preenchido" in e for e in erros), erros)
+        self.assertTrue(any("linha 3: CHAVE NF em branco com o cabeçalho preenchido" in e for e in erros), erros)
 
     def test_erros(self):
         caminho = self.gravar([
@@ -503,7 +503,7 @@ class Planilha(unittest.TestCase):
             [CHAVE_A, "30 46", "01/11/2026", 10, "CIF", "900135", "5101", 1, 1, 0, 1500, 120],
         ])
         _, _, erros = snac0236.carregar(caminho)
-        texto = "\n".join(erros)
+        texto = core.sem_acentos("\n".join(erros))  # as mensagens tem acento desde a v1.14.0
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
                        "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
                        "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco",
@@ -563,6 +563,18 @@ class Logs(unittest.TestCase):
         self.assertEqual((logs["000004"]["sem_confirmacao"], logs["000004"]["sucesso"]), (True, False))
         self.assertEqual(logs["000001"]["quando"], "09/11 10:00")
 
+    def test_notas_nos_logs_com_acento(self):
+        """Logs da v1.14.0 em diante tem acento ('terminada a mão', 'já existe'): o Conferir le igual aos antigos."""
+        log = (self.LOG.replace("terminada a mao", "terminada a mão").replace("ja existe", "já existe")
+               .replace("Serie", "Série"))
+        self.assertNotEqual(log, self.LOG)
+        with tempfile.TemporaryDirectory() as pasta:
+            pasta = pathlib.Path(pasta)
+            (pasta / "20261120-100000-snac0236.log").write_text(log, encoding="utf-8")
+            logs = snac0236.notas_nos_logs(pasta)
+        self.assertTrue(logs["000002"]["sucesso"] and logs["000002"]["serie_ponto"])
+        self.assertEqual((logs["000003"]["a_mao"], logs["000003"]["sucesso"]), (True, False))
+
     def test_notas_nos_logs_compactados(self):
         """Logs com mais de 2 dias ficam no zip do mes: o Conferir le dentro dele."""
         import zipfile
@@ -593,7 +605,7 @@ class Logs(unittest.TestCase):
         with ambiente(srp) as pasta:
             rodar(srp, [nota(CHAVE_A, [item("900135")])])
             snac0236.registrar_no_log("  pintura: Planilha: linha(s) 2 pintada(s) de verde (arquivo gravado)")
-            texto = next(pasta.glob("*-snac0236.log")).read_text(encoding="utf-8")
+            texto = core.sem_acentos(next(pasta.glob("*-snac0236.log")).read_text(encoding="utf-8"))
         self.assertTrue(texto.rstrip().endswith("pintura: Planilha: linha(s) 2 pintada(s) de verde (arquivo gravado)"))
 
 
@@ -796,6 +808,25 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(estados[-1], (4, "ok"))
         self.assertTrue(any("PAUSADO: confira a integracao" in a for a in avisos))
 
+    def test_f9_pausa_entre_as_notas(self):
+        """F9 (pausar) durante a 1a nota: ela termina, o robo pausa com o cursor ja na Chave da 2a e, no Continuar,
+        segue com a 2a nota. A pausa atende o pedido (o evento volta a ficar limpo)."""
+        srp = SRP0236()
+        srp.com_aviso_frete = True  # caminho com "Integrado com Sucesso": sem F9, segue direto para a 2a nota
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900135")])]
+        notas[1]["itens"][0]["linha"] = 3
+        pausar = threading.Event()
+        pausar.set()
+        with ambiente(srp):
+            codigo, avisos, estados = rodar(srp, notas, pausar=pausar)
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual([n["chave"] for n in srp.integradas], [CHAVE_A, CHAVE_B])
+        f9 = [i for i, a in enumerate(avisos) if "F9: PAUSADO entre as notas" in a]
+        self.assertEqual(len(f9), 1, avisos)
+        self.assertIn((3, "pausado"), estados)
+        self.assertLess(estados.index((2, "ok")), estados.index((3, "pausado")))
+        self.assertFalse(pausar.is_set())
+
     def test_enter_a_mais_ate_o_campo_certo(self):
         srp = SRP0236(extras_filial=2)  # o SRP pede 2 Enter a mais antes da Data
         with ambiente(srp):
@@ -839,7 +870,7 @@ class Fluxo(unittest.TestCase):
         srp.lento = {"icms": 0.45}  # mais que o render (0,3 s nos testes), menos que 2 vezes
         with ambiente(srp) as pasta:
             codigo, avisos, estados = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertNotIn((2, "pausado"), estados[:-2])
         self.assertIn("Enter 1 depois do Valor do ICMS: o SRP demorou", log)
@@ -867,7 +898,7 @@ class Fluxo(unittest.TestCase):
         srp = SRP0236()
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         # do Frete ao Item so Enter (o clique pulava a janela da NF de referencia, 05/11/2026)
         self.assertEqual((srp.cliques_item, srp.cliques_ident), (0, 2))
@@ -882,7 +913,7 @@ class Fluxo(unittest.TestCase):
         srp.ref_no_caminho = 4  # abre no 4o Enter depois do Frete
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.ok_referencia, srp.enters_referencia), (1, 0))  # OK clicado, nenhum Enter na grade dela
         self.assertIn("NF de referencia: cliquei em OK", log)
@@ -902,7 +933,7 @@ class Fluxo(unittest.TestCase):
         srp.com_aviso_frete = True  # janelas so depois do 2o Integrar: 7 Enter sem janela antes
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.reintegrou, 1)
         self.assertEqual(log.count("tela inteira, janelas=[]"), 1)  # so a 1a leitura depois do 1o clique
@@ -924,7 +955,7 @@ class Fluxo(unittest.TestCase):
         srp.com_aviso_frete = True
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos), (1, 1, 1))
         # frete, resumo, ltcc (texto + botao binarizado) e sucesso no recorte, nao na tela inteira
@@ -937,7 +968,7 @@ class Fluxo(unittest.TestCase):
         srp.com_aviso_frete, srp.sem_barra = True, True
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.enter_no_ltcc), (1, 1, 1, 0))
         self.assertEqual(srp.recortes, 0)
@@ -957,7 +988,7 @@ class Fluxo(unittest.TestCase):
         srp.com_acessoria = ("1234.50", "1234.51", ".01")
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual((srp.ajustou, srp.cancelou, srp.reintegrou), (1, 0, 0))
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos), (1, 1, 1))  # segue o resto da integracao
@@ -1083,7 +1114,7 @@ class Fluxo(unittest.TestCase):
         notas[1]["itens"][0]["linha"] = 3
         with ambiente(srp) as pasta:
             codigo, avisos, _ = rodar(srp, notas)
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(log.count("Rateio lido no Enter"), 1)  # tela inteira so na 1a nota
         self.assertIn("Rateio: posicoes da nota anterior", log)
@@ -1096,7 +1127,7 @@ class Fluxo(unittest.TestCase):
             for log in pasta.glob("*snac0236.log"):
                 log.unlink()
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_B, [item("900266")])])  # outra execucao (outro planilha)
-            log = next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8")
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertNotIn("Rateio lido no Enter", log)  # a 1a nota ja usou as posicoes salvas
         self.assertIn("posicoes do Rateio da execucao anterior", log)

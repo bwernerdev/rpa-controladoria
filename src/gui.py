@@ -13,12 +13,13 @@ from tkinter import filedialog, ttk
 from PIL import ImageTk
 
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
-                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, com_acentos,
-                  registrar_falha_tela)
+                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, sem_acentos,
+                  registrar_falha_tela, gravar_json)
 from gui_snac0236 import Pagina0236
 from snac0236 import texto_duracao
 from icone import desenhar
 from versao import NOME, VERSAO
+from pagina import ESPERA, JANELA_SRP, RENDER, Pagina
 import visual
 from visual import (COR, DND_FILES, ESTADOS, PALETAS, TEMAS, BarraFina, Botao, Cartao, Console, RaizTk,
                     area_util, ativar_dpi, barra_titulo, ctk, dialogo, dpi_da_janela, duracao, esp, fonte,
@@ -47,17 +48,23 @@ def ler_config():
 
 
 def gravar_config(dados):
-    """Grava o config.json por um arquivo temporario trocado de uma vez (os.replace): o app fechado no meio da
-    gravacao (queda de energia, Citrix desconectado) nao deixa o arquivo pela metade e as preferencias perdidas."""
-    temporario = ARQUIVO_CONFIG.with_name(ARQUIVO_CONFIG.name + ".tmp")
+    """Grava o config.json de uma vez (core.gravar_json: temporario + os.replace, nada pela metade)."""
     try:
-        temporario.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporario, ARQUIVO_CONFIG)
+        gravar_json(ARQUIVO_CONFIG, dados, indent=2)
     except OSError:
         pass
 
 
-class App(RaizTk):
+class App(RaizTk, Pagina):
+    """Janela do app e, ao mesmo tempo, a aba SNAC0234 (as duas abas herdam de pagina.Pagina)."""
+    TELA = "SNAC0234"
+    CHAVE_CONSOLE = "console_aberto"
+    UNIDADE = "linha"
+
+    @property
+    def raiz(self):
+        return self
+
     def __init__(self):
         ativar_dpi()
         super().__init__()
@@ -124,6 +131,7 @@ class App(RaizTk):
         for numero, (chave, *_) in enumerate(TELAS, start=1):
             self.bind(f"<Control-Key-{numero}>", lambda _e, c=chave: self.trocar_aba(c))
         self.fechando = None  # hora em que o usuario pediu para fechar com o robo rodando (espera ele parar)
+        self.fechou = threading.Event()  # para a vigia do Citrix quando a janela fecha
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
         self.after(1000, self._tique)
@@ -188,6 +196,7 @@ class App(RaizTk):
     def destroy(self):
         """Cancela os after pendentes (fila, relogio, contagem) antes de fechar: sem isso o Tcl reclamava de
         'invalid command name ..._drenar' ao fechar."""
+        self.fechou.set()
         try:
             for pendente in self.tk.splitlist(self.tk.call("after", "info")):
                 self.tk.call("after", "cancel", pendente)  # so desarma: cada widget apaga os proprios comandos
@@ -265,8 +274,8 @@ class App(RaizTk):
             if manual or info["versao"] != self.atualizacao_recusada:  # recusada: so de novo se pedir no link
                 self._oferecer_atualizacao(info, manual)
         elif manual:
-            falhou = texto.startswith("Nao consegui")
-            self.avisar("Não consegui verificar" if falhou else "Atualizações", com_acentos(texto.replace("Atualizacoes: ", "")),
+            falhou = sem_acentos(texto).startswith("Nao consegui")
+            self.avisar("Não consegui verificar" if falhou else "Atualizações", texto.replace("Atualizações: ", ""),
                         tipo="aviso" if falhou else "info")
 
     def _oferecer_atualizacao(self, info, manual=False):
@@ -289,8 +298,8 @@ class App(RaizTk):
                 f"Você tem a {VERSAO}. O app fecha e abre de novo sozinho em alguns segundos; configurações, contas "
                 f"aprendidas, andamento e logs são mantidos.\n\n{notas}", sim="Atualizar agora", nao="Depois"):
             self.atualizacao_recusada = info["versao"]
-            self.escrever(f"Atualizacao {info['versao']} adiada; o app pergunta de novo na proxima abertura "
-                          "(ou clique na versao no rodape).")
+            self.escrever(f"Atualização {info['versao']} adiada; o app pergunta de novo na próxima abertura "
+                          "(ou clique na versão no rodapé).")
             return
         self.ocupado = True
         self.baixando = info["versao"]
@@ -298,7 +307,7 @@ class App(RaizTk):
         self.p0236._botoes()
         self._pintar_links_versao()
         self._andamento_atualizacao(f"Baixando a versão {info['versao']}...", 0)
-        self.escrever(f"Baixando a versao {info['versao']} do GitHub...")
+        self.escrever(f"Baixando a versão {info['versao']} do GitHub...")
 
         def baixar():
             try:
@@ -315,7 +324,7 @@ class App(RaizTk):
             fracao = min(item[1] / item[2], 1)
             self._andamento_atualizacao(f"Baixando a versão {self.baixando}... {int(fracao * 100)}%", fracao)
         elif item[0] == "baixado":
-            self.escrever("Atualizacao baixada e conferida. O app vai fechar e abrir de novo na versao nova.")
+            self.escrever("Atualização baixada e conferida. O app vai fechar e abrir de novo na versão nova.")
             self._andamento_atualizacao("Instalando a atualização: o app fecha e abre de novo sozinho...", 1)
             self.update()
             aplicar_atualizacao(item[1], pasta_base())
@@ -329,7 +338,7 @@ class App(RaizTk):
             self._restaurar_barras()
             self._andamento_atualizacao("Atualização falhou: o app continua na versão atual", None, "erro")
             registrar_atualizacao(f"Download/instalacao falhou: {item[1]}")
-            self.escrever(f"A atualizacao falhou: {item[1]}. O app continua na versao {VERSAO}.")
+            self.escrever(f"A atualização falhou: {item[1]}. O app continua na versão {VERSAO}.")
             self.avisar("A atualização falhou", f"{item[1]}\n\nO app continua na versão {VERSAO}. O erro fica em "
                         "logs\\atualizacao.log.", tipo="erro")
 
@@ -584,14 +593,14 @@ class App(RaizTk):
         rodape.pack(side="bottom", fill="x", pady=(esp(2), 0))
         self.b_console = self._link(rodape, "", self.alternar_console)
         self.b_console.pack(side="left")
-        self.b_copiar = self._link(rodape, "Copiar", self.copiar_console)
+        self.b_copiar = self._link(rodape, "Copiar", self.copiar)
         self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(esp(4), 0))
         self._link_versao(rodape).pack(side="right")
         self.caixa_saida = self._cartao(corpo, bg=COR["console"])
         self.saida = Console(self.caixa_saida)  # rolagem propria (v1.13.4)
         self.saida.pack(fill="x", padx=esp(1), pady=esp(1))  # margem: o texto quadrado cobriria os cantos
 
-        self.botoes = tk.Frame(corpo, bg=COR["fundo"])
+        self.botoes = self.antes_do_console = tk.Frame(corpo, bg=COR["fundo"])
         self.botoes.pack(side="bottom", fill="x", pady=(esp(3), esp(3)))
         # so os botoes que servem agora (usuario, 09/11/2026; `_atualizar_botoes`): parado = Iniciar (+ Continuar da
         # linha N) + Simular; executando = Parar (o Continuar da pausa fica na faixa amarela)
@@ -614,17 +623,11 @@ class App(RaizTk):
 
         cartao = self.cartao = self._cartao(corpo)
         cartao.pack(fill="both", expand=True)
-        colunas = ("linha", "item", "custo", "conta", "quantidade", "status")
-        self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=3)
-        for coluna, titulo, largura, ancora in zip(colunas, ("Linha", "Item", "C/Custo", "Conta", "Quantidade", "Status"),
-                                                   tuple(px(v) for v in (64, 130, 110, 110, 100, 180)), ("center", "w", "w", "w", "center", "w")):
-            # so o Status estica (v1.13.3; usuario, 10/11/2026: com todas esticando, as colunas ficavam espalhadas)
-            self.tabela.heading(coluna, text=titulo, anchor=ancora)
-            self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=coluna == "status")
-        rolagem = self._rolagem(cartao, self.tabela.yview)
-        self.tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y", padx=(0, esp(1)), pady=esp(2))
-        self.tabela.pack(side="left", fill="both", expand=True, padx=(esp(1), 0), pady=esp(1))  # margem: cantos redondos
+        # so o Status estica (v1.13.3; usuario, 10/11/2026: com todas esticando, as colunas ficavam espalhadas)
+        self.tabela = self._montar_tabela(cartao, (
+            ("linha", "Linha", 64, "center"), ("item", "Item", 130, "w"), ("custo", "C/Custo", 110, "w"),
+            ("conta", "Conta", 110, "w"), ("quantidade", "Quantidade", 100, "center"), ("status", "Status", 180, "w")),
+            estica="status")
         # ordem importa: tags configuradas depois tem prioridade (o fundo do estado vence o da zebra)
         self.tabela.tag_configure("par", background=COR["zebra"])
         self.tabela.tag_configure("impar", background=COR["cartao"])
@@ -861,54 +864,20 @@ class App(RaizTk):
 
     def _dica_conta(self, evento):
         """Ao passar o mouse na Conta trocada, mostra a conta que estava na planilha."""
-        iid = self.tabela.identify_row(evento.y)
-        linha = next((l for l, i in self.iids.items() if i == iid), None) if iid else None
+        linha = self._linha_sob_o_mouse(evento)
         if not linha or linha not in self.trocas or self.tabela.identify_column(evento.x) != "#4":
             self._esconder_dica()
             return
         texto = f"Na planilha: {self.trocas[linha]}. Trocada pela conta que o SRP informou como correta."
-        if self.dica and self.dica.texto == texto:
-            self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
-            return
-        self._esconder_dica()
-        self.dica = tk.Toplevel(self)
-        self.dica.texto = texto
-        self.dica.overrideredirect(True)
-        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=fonte("pequeno"), padx=esp(2), pady=esp(1)).pack()
-        self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
+        self._mostrar_dica(evento, texto)
 
-    def _esconder_dica(self):
-        if self.dica:
-            self.dica.destroy()
-            self.dica = None
-
-    # ---------- console ----------
-    def abrir_console(self):
-        """Abre os Detalhes sem mudar a preferencia salva (o Simular e os erros abrem sozinhos)."""
-        if not self.console_aberto:
-            self.console_aberto = True
-            self._mostrar_console()
-
-    def alternar_console(self):
-        self.console_aberto = not self.console_aberto
-        self.config_usuario["console_aberto"] = self.console_aberto
-        self.salvar_config()
-        self._mostrar_console()
-
+    # ---------- console (o resto vem da Pagina) ----------
     def _mostrar_console(self):
-        if self.console_aberto:
-            self.caixa_saida.pack(side="bottom", fill="x", before=self.botoes)
+        super()._mostrar_console()
+        if self.console_aberto:  # na SNAC0234 o "Copiar" do rodape so aparece com os Detalhes abertos
             self.b_copiar.pack(side="left", padx=(esp(4), 0), after=self.b_console)
-            self.saida.see("end")
         else:
-            self.caixa_saida.pack_forget()
             self.b_copiar.pack_forget()
-        self.b_console.configure(text=("Detalhes ▾" if self.console_aberto else "Detalhes ▸"))
-
-    def copiar_console(self):
-        self.clipboard_clear()
-        self.clipboard_append("\n".join(self.historico))
-        self._status("Detalhes copiados", "ok")
 
     # ---------- opcoes ----------
     def abrir_opcoes(self):
@@ -960,13 +929,20 @@ class App(RaizTk):
         ttk.Checkbutton(corpo, text="Conferir a quantidade na tela (OCR)", variable=self.conferir).pack(anchor="w", pady=(esp(2), 0))
         so_inteiro = (janela.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
         so_decimal = (janela.register(lambda novo: re.fullmatch(r"\d{0,1}([.,]\d{0,2})?", novo) is not None), "%P")
-        for rotulo, variavel, ajuda, valida in (("Limite de linhas", self.limite, "0 = todas", so_inteiro),
-                                                ("Pausa entre teclas (s)", self.pausa, "0,05 a 5; padrão 0,25", so_decimal)):
-            linha = tk.Frame(corpo, bg=COR["fundo"])
-            linha.pack(fill="x", pady=(esp(2), 0))
-            tk.Label(linha, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno"), anchor="w").pack(side="left")
-            tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte("legenda")).pack(side="right")
-            self._campo(linha, variavel, validate="key", validatecommand=valida).pack(side="right", padx=(0, esp(2)))
+        # grade: rotulo | campo | ajuda, para os campos ficarem alinhados (com pack a direita, a ajuda de largura
+        # diferente empurrava cada campo para um lugar)
+        grade = tk.Frame(corpo, bg=COR["fundo"])
+        grade.pack(fill="x")
+        grade.columnconfigure(0, weight=1)
+        for indice, (rotulo, variavel, ajuda, valida) in enumerate((
+                ("Limite de linhas", self.limite, "0 = todas", so_inteiro),
+                ("Pausa entre teclas (s)", self.pausa, "0,05 a 5; padrão 0,25", so_decimal))):
+            tk.Label(grade, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno"), anchor="w").grid(
+                row=indice, column=0, sticky="w", pady=(esp(2), 0))
+            self._campo(grade, variavel, validate="key", validatecommand=valida).grid(
+                row=indice, column=1, padx=(esp(4), esp(2)), pady=(esp(2), 0))
+            tk.Label(grade, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte("legenda"), anchor="w").grid(
+                row=indice, column=2, sticky="w", pady=(esp(2), 0))
 
         titulo("SNAC0236  ·  Documento Recebimento")
         ttk.Checkbutton(corpo, text="Passo a passo (0,5 s entre ações)", variable=self.p0236.passo_a_passo).pack(
@@ -1178,12 +1154,7 @@ class App(RaizTk):
 
     # ---------- comportamento ----------
     def escrever(self, texto):
-        self.historico.append(texto)
-        tipo = tipo_mensagem(texto)
-        self.saida.configure(state="normal")
-        self.saida.insert("end", texto + "\n", tipo or ())
-        self.saida.see("end")
-        self.saida.configure(state="disabled")
+        tipo = self._escrever_console(texto)
         if texto.startswith("Continuando"):
             return
         self.ultima_mensagem = texto
@@ -1196,59 +1167,49 @@ class App(RaizTk):
             if not self.console_aberto:  # com o console fechado, o motivo aparece no status
                 self._status(texto if len(texto) <= 140 else texto[:137] + "...", "erro")
 
-    def _status(self, texto, cor="suave"):
-        self.status_atual = (texto, cor)
-        self.status.configure(text=com_acentos(texto), fg=COR[cor])
-        self._arrumar_andamento()
-
     def _vigiar_citrix(self):
-        while True:
+        """Confere a cada 3 s se o Citrix esta aberto (fora da execucao) ate a janela fechar. Espera pelo Event, nao
+        pelo time.sleep: a thread termina no destroy (antes ficava viva para sempre; nos testes, com o sleep trocado
+        por um falso, as vigias dos Apps ja fechados giravam sem parar e deixavam a suite lenta)."""
+        while not self.fechou.is_set():
             if not self.ocupado:
                 self.fila.put(("citrix", citrix_aberto()))
-            time.sleep(3)
+            self.fechou.wait(3)
 
-    def _drenar(self):
-        """Trata as mensagens da thread do robo. Cada mensagem tem o seu try e o reagendamento fica no finally (ate a
-        v1.13.4 uma excecao qualquer aqui parava o laco de vez e a tela deixava de acompanhar o robo)."""
-        try:
-            while True:
-                try:
-                    item = self.fila.get_nowait()
-                except queue.Empty:
-                    break
-                try:
-                    self._tratar(item)
-                except Exception:
-                    registrar_falha_tela(f"mensagem da SNAC0234: {item!r}"[:300])
-        finally:
-            self.after(100, self._drenar)
+    # ---------- eventos da fila (Pagina._tratar) ----------
+    def _ao_fim(self):
+        if self.soltar_atalhos:
+            self.soltar_atalhos()
+            self.soltar_atalhos = None
+        self.ocupado = False
+        self.pausado = False
+        self.pausar.clear()
+        self._atualizar_botoes()
+        self._fim_da_execucao()
+        piscar_barra(self)
+        self._resumo_final()
+        if self.atualizacao_pendente:
+            self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
 
-    def _tratar(self, item):
-        if item is None:
-            if self.soltar_atalhos:
-                self.soltar_atalhos()
-                self.soltar_atalhos = None
-            self.ocupado = False
-            self.pausado = False
-            self.pausar.clear()
-            self._atualizar_botoes()
-            self._fim_da_execucao()
-            piscar_barra(self)
-            self._resumo_final()
-            if self.atualizacao_pendente:
-                self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
-        elif isinstance(item, tuple) and item[0] in ("atualizacao", "baixando", "baixado", "falha_atualizacao"):
-            self._evento_atualizacao(item)
-        elif isinstance(item, tuple) and item[0] == "tecla":
-            self._tecla(item[1])
-        elif isinstance(item, tuple) and item[0] == "citrix":
-            if item[1] != self.citrix:
-                self.citrix = item[1]
-                self._pintar_citrix()
-        elif isinstance(item, tuple):
-            self._estado_linha(*item)
-        else:
-            self.escrever(item)
+    def _ao_citrix(self, aberto):
+        if aberto != self.citrix:
+            self.citrix = aberto
+            self._pintar_citrix()
+
+    def _ao_atualizacao(self, *dados):
+        self._evento_atualizacao(("atualizacao", *dados))
+
+    def _ao_baixando(self, *dados):
+        self._evento_atualizacao(("baixando", *dados))
+
+    def _ao_baixado(self, *dados):
+        self._evento_atualizacao(("baixado", *dados))
+
+    def _ao_falha_atualizacao(self, *dados):
+        self._evento_atualizacao(("falha_atualizacao", *dados))
+
+    def _estado(self, linha, nome):
+        self._estado_linha(linha, nome)
 
     def _estado_linha(self, linha, nome):
         anterior = self.estados.get(linha)
@@ -1330,26 +1291,12 @@ class App(RaizTk):
     def continuar(self):
         """Durante uma pausa, libera o robo; depois de uma interrupcao, retoma pelas linhas nao concluidas."""
         if self.ocupado and self.pausado:
-            self.escrever("Continuando: o robo volta ao Citrix e retoma do campo onde o cursor estiver.")
+            self.escrever("Continuando: o robô volta ao Citrix e retoma do campo onde o cursor estiver.")
             self.pausado = False
             self._atualizar_botoes()
             self.retomar.set()
         elif not self.ocupado:
             self.iniciar(True)
-
-    def _tecla(self, nome):
-        """Atalhos globais durante a execucao: F9 pausa (ao fim da linha) ou continua; F8 para."""
-        if not self.ocupado:
-            return
-        if nome == "parar":
-            self.escrever("F8: parando.")
-            self.parar.set()
-        elif self.pausado:
-            self.continuar()
-        elif not self.pausar.is_set():
-            self.pausar.set()
-            self.escrever("F9: o robo pausa ao terminar a linha atual.")
-            self._status("Pausando ao fim da linha...", "aviso")
 
     def contagem(self, pagina, texto, segundos=5):
         """Os segundos que o usuario tem para clicar no SRP depois do Iniciar, no status da `pagina` (v1.14.0; antes
@@ -1419,7 +1366,7 @@ class App(RaizTk):
         self.escrever(f"{len(registros)} linha(s) lidas de {caminho}")
         if erros:
             self._status("Corrija a planilha e clique em Recarregar", "erro")
-            self.escrever("Planilha invalida, corrija no Excel, salve e clique em Recarregar:\n  " + "\n  ".join(erros))
+            self.escrever("Planilha inválida, corrija no Excel, salve e clique em Recarregar:\n  " + "\n  ".join(erros))
             self.avisar("Planilha inválida", "Corrija no Excel, salve e clique em Recarregar.", tipo="erro", lista=erros)
         elif not registros:
             self._status("Planilha vazia", "aviso")
@@ -1433,17 +1380,17 @@ class App(RaizTk):
                 for linha in sorted(feitas):
                     self._estado_linha(linha, "ok")
                 if len(feitas) < len(registros):
-                    self.escrever(f"Andamento salvo em {quando}: {len(feitas)} de {len(registros)} linha(s) ja concluidas nesta "
-                                  f"planilha. Use 'Continuar da linha {self._proxima_linha()}' ou 'Iniciar' para comecar do zero.")
+                    self.escrever(f"Andamento salvo em {quando}: {len(feitas)} de {len(registros)} linha(s) já concluídas nesta "
+                                  f"planilha. Use 'Continuar da linha {self._proxima_linha()}' ou 'Iniciar' para começar do zero.")
                     self._status(f"Andamento anterior: continuar da linha {self._proxima_linha()}", "aviso")
                 else:
-                    self.escrever(f"Esta planilha ja foi preenchida inteira em {quando}. 'Iniciar' preenche tudo de novo.")
-                    self._status("Planilha ja concluida antes", "aviso")
+                    self.escrever(f"Esta planilha já foi preenchida inteira em {quando}. 'Iniciar' preenche tudo de novo.")
+                    self._status("Planilha já concluída antes", "aviso")
             repetidos = itens_repetidos(registros)
             if repetidos:
                 lista = "; ".join(f"{item} (linhas {', '.join(map(str, linhas))})" for item, linhas in list(repetidos.items())[:5])
                 self.escrever(f"AVISO: {len(repetidos)} item(ns) repetido(s): {lista}{' ...' if len(repetidos) > 5 else ''}. "
-                              "O SRP soma as quantidades de itens iguais na mesma linha, entao a conferencia da quantidade "
+                              "O SRP soma as quantidades de itens iguais na mesma linha, então a conferência da quantidade "
                               "vai interromper. Para esta planilha, desmarque 'Conferir a quantidade' em Opcoes.")
                 self._status("Itens repetidos: veja o aviso", "aviso")
             suspeitas = contas_suspeitas(registros)
@@ -1453,11 +1400,11 @@ class App(RaizTk):
                     self.trocas[linha] = antes
                     self.tabela.set(self.iids[linha], "conta", depois + MARCA_TROCADA)
                     self.escrever(f"Linha {linha}: Conta {antes} trocada por {depois} (sugestao do SRP aceita; a planilha no "
-                                  "Excel nao muda).")
+                                  "Excel não muda).")
                 recusadas = [s for s in suspeitas if s[0] not in aceitas]
                 for linha, item, conta, correta in recusadas:
-                    self.escrever(f"AVISO: linha {linha}: item {item} com Conta {conta}, mas o SRP ja informou que a correta e {correta}. "
-                                  "O robo vai pausar nela para voce corrigir no SRP.")
+                    self.escrever(f"AVISO: linha {linha}: item {item} com Conta {conta}, mas o SRP já informou que a correta é {correta}. "
+                                  "O robô vai pausar nela para você corrigir no SRP.")
                 if recusadas:
                     self._status(f"{qtd(len(recusadas), 'conta que o SRP já recusou', 'contas que o SRP já recusou')}: veja o aviso", "aviso")
                 else:
@@ -1541,7 +1488,7 @@ class App(RaizTk):
         if escolha:
             for r in escolha[0]:
                 self.escrever(f"linha {r['linha']}: {descrever(r)}")
-            self.escrever("Simulacao: nada foi enviado. A Conta so e digitada se estiver editavel na tela.")
+            self.escrever("Simulação: nada foi enviado. A Conta só é digitada se estiver editável na tela.")
             self.abrir_console()
             self._status(f"Simulação de {qtd(len(escolha[0]), 'linha', 'linhas')} nos Detalhes (nada foi digitado)")
 
@@ -1598,10 +1545,10 @@ class App(RaizTk):
         self.pausar.clear()
         self._atualizar_botoes()
         self._mostrar_avisos()
-        self.soltar_atalhos, falhas = atalhos_globais({VK_F9: lambda: self.fila.put(("tecla", "pausa")),
-                                                       VK_F8: lambda: self.fila.put(("tecla", "parar"))})
+        self.soltar_atalhos, falhas = atalhos_globais({VK_F9: lambda: self.fila.put(("pausa",)),
+                                                       VK_F8: lambda: self.fila.put(("parar",))})
         if falhas:
-            self.escrever("Aviso: F8/F9 ja estao em uso por outro programa; use os botoes ou o mouse no canto.")
+            self.escrever("Aviso: F8/F9 já estão em uso por outro programa; use os botoes ou o mouse no canto.")
         else:
             self.escrever("Atalhos: F9 pausa ao fim da linha (e continua), F8 para.")
         self.thread = threading.Thread(target=self._rodar, args=(registros, pausa, self.conferir.get()), daemon=True)
@@ -1609,10 +1556,11 @@ class App(RaizTk):
 
     def _rodar(self, registros, pausa, conferir):
         try:
-            executar(registros, "Desktop Viewer", pausa, 4.0, 5, self.parar, self.fila.put,
-                     lambda linha, nome: self.fila.put((linha, nome)), conferir, self.retomar, self.pausar)
+            executar(registros, janela_trecho=JANELA_SRP, pausa=pausa, render=RENDER, espera=ESPERA, parar=self.parar,
+                     aviso=self.fila.put, estado=self._avisar_estado, conferir=conferir, retomar=self.retomar,
+                     pausar=self.pausar)
         finally:
-            self.fila.put(None)
+            self.fila.put(("fim",))
 
 
 def fechar_abertura():

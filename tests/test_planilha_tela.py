@@ -34,7 +34,7 @@ class Planilha(unittest.TestCase):
     def test_validacao(self):
         erros = core.validar(core.ler_planilha(self.criar([(1, "", 3, 4), (5, 6, 7, "x")])))
         self.assertTrue(any("custo em branco" in e for e in erros))
-        self.assertTrue(any("quantidade invalida" in e for e in erros))
+        self.assertTrue(any("quantidade inválida" in e for e in erros))
 
     def test_itens_repetidos(self):
         regs = core.ler_planilha(self.criar([(10, 1, 1, 1), (20, 1, 1, 1), (10, 1, 1, 1)]))
@@ -225,6 +225,21 @@ class Progresso(unittest.TestCase):
             self.assertEqual(core.ler_progresso(outra), (set(), None))
             core.gravar_progresso(regs, set())
             self.assertFalse(arquivo.exists())
+
+    def test_gravar_json_troca_o_arquivo_de_uma_vez(self):
+        """Grava pelo temporario + os.replace: o arquivo antigo so some quando o novo esta inteiro, sem sobra .tmp."""
+        import json
+        from unittest import mock
+        pasta = pathlib.Path(tempfile.mkdtemp())
+        arquivo = pasta / "config.json"
+        core.gravar_json(arquivo, {"tema": "claro"})
+        core.gravar_json(arquivo, {"tema": "escuro", "aba": "snac0236"}, indent=2)
+        self.assertEqual(json.loads(arquivo.read_text(encoding="utf-8")), {"tema": "escuro", "aba": "snac0236"})
+        with mock.patch.object(core.os, "replace", side_effect=OSError("disco cheio")):  # falha no meio
+            with self.assertRaises(OSError):
+                core.gravar_json(arquivo, {"tema": "auto"})
+        self.assertEqual(json.loads(arquivo.read_text(encoding="utf-8"))["tema"], "escuro")  # o antigo ficou inteiro
+        self.assertEqual(sorted(p.name for p in pasta.iterdir() if p.suffix != ".tmp"), ["config.json"])
 
 
 class Logs(unittest.TestCase):

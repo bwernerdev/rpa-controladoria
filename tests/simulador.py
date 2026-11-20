@@ -94,4 +94,4 @@ def executar(srp, regs, retomar=None, ao_pausar=None, conferir=False, render=0.3
 
     codigo = core.executar(regs, "Desktop Viewer", 0, render, 0, threading.Event(), avisos.append, estado, conferir, retomar,
                            pausar)
-    return codigo, avisos, estados
+    return codigo, [core.sem_acentos(a) for a in avisos], estados  # as mensagens tem acento desde a v1.14.0
