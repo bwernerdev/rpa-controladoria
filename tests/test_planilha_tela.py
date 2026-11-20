@@ -296,5 +296,25 @@ class Logs(unittest.TestCase):
                 self.assertEqual(len(zipado.namelist()), 3)
 
 
+class LinhaDeComando(unittest.TestCase):
+    """preencher.py: planilha que nao abre = mensagem curta e saida 1, sem o rastro do Python."""
+
+    def rodar(self, planilha):
+        from unittest import mock
+
+        import preencher
+        with mock.patch("sys.argv", ["preencher.py", str(planilha), "--dry-run"]), self.assertRaises(SystemExit) as saida:
+            preencher.main()
+        return str(saida.exception.code)
+
+    def test_planilha_que_nao_existe(self):
+        self.assertEqual(self.rodar("nao_existe.xlsx"), "Planilha não encontrada: nao_existe.xlsx")
+
+    def test_arquivo_que_nao_e_planilha(self):
+        falsa = pathlib.Path(tempfile.mkdtemp()) / "falsa.xlsx"
+        falsa.write_text("nao e planilha", encoding="utf-8")
+        self.assertTrue(self.rodar(falsa).startswith(f"Não consegui ler a planilha {falsa}: "))
+
+
 if __name__ == "__main__":
     unittest.main()

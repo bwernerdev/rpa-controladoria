@@ -19,8 +19,14 @@ def main():
     args = ap.parse_args()
     try:
         registros = [r for r in ler_planilha(args.planilha) if r["linha"] >= args.inicio]
-    except ValueError as erro:
+    except ValueError as erro:  # cabecalho ou valores errados: a mensagem ja diz o que falta
         raise SystemExit(str(erro)) from None
+    except FileNotFoundError:
+        raise SystemExit(f"Planilha não encontrada: {args.planilha}") from None
+    except OSError as erro:  # sem permissão, caminho é uma pasta etc.
+        raise SystemExit(f"Não consegui abrir a planilha {args.planilha}: {erro.strerror or erro}") from None
+    except Exception as erro:  # não é um .xlsx válido (outro formato, arquivo corrompido)
+        raise SystemExit(f"Não consegui ler a planilha {args.planilha}: {erro}") from None
     if args.limite:
         registros = registros[: args.limite]
     if not registros:
