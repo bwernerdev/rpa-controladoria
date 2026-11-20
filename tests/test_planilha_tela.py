@@ -50,7 +50,7 @@ class Tela(unittest.TestCase):
         d.rectangle((100, 20, 104, 480), fill=(0, 255, 255))  # traco fino e longo
         d.rectangle((500, 300, 560, 315), fill=(0, 255, 255))
         d.rectangle((600, 200, 710, 216), fill=(0, 255, 255))  # campo em foco (maior)
-        esq, topo, dir_, base = core.maior_caixa_ciano(imagem)
+        esq, topo, dir_, _base = core.maior_caixa_ciano(imagem)
         self.assertTrue(600 <= esq <= 604 and 706 <= dir_ <= 711 and 200 <= topo <= 204)
         self.assertIsNone(core.maior_caixa_ciano(Image.new("RGB", (50, 50), (255, 255, 255))))
 
@@ -61,7 +61,7 @@ class Tela(unittest.TestCase):
         d.rectangle((700, 20, 703, 300), fill=(255, 0, 0))   # traco vermelho fino
         self.assertIsNone(core.icone_aviso(imagem))
         d.ellipse((300, 100, 322, 122), fill=(255, 0, 0))    # icone ~22 px
-        esq, topo, dir_, base = core.icone_aviso(imagem)
+        esq, topo, dir_, _base = core.icone_aviso(imagem)
         self.assertTrue(298 <= esq <= 306 and 98 <= topo <= 106 and 316 <= dir_ <= 324)
         self.assertLessEqual(core.maior_caixa_cor(imagem, "vermelho")[0], 24)  # o maior vermelho continua sendo a faixa
 
@@ -126,8 +126,8 @@ class PintarLinhas(unittest.TestCase):
             self.assertEqual(core.pintar_linhas(caminho, [3, 2, 3]), "arquivo")
             ws = load_workbook(caminho).active
             verde = lambda c: (c.fill.fgColor.rgb or "")[-6:] == core.VERDE_CONCLUIDA  # noqa: E731
-            self.assertTrue(all(verde(ws.cell(row=l, column=c)) for l in (2, 3) for c in (1, 2, 3)))
-            self.assertFalse(any(verde(ws.cell(row=l, column=c)) for l in (1, 4, 5) for c in (1, 2, 3)))
+            self.assertTrue(all(verde(ws.cell(row=n, column=c)) for n in (2, 3) for c in (1, 2, 3)))
+            self.assertFalse(any(verde(ws.cell(row=n, column=c)) for n in (1, 4, 5) for c in (1, 2, 3)))
             self.assertFalse(verde(ws.cell(row=2, column=4)))  # fora do cabecalho
             self.assertEqual((ws.title, ws.cell(row=3, column=3).value), ("Notas", 101))  # valores e aba ativa ficam
             self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])  # sem temporario
@@ -235,9 +235,8 @@ class Progresso(unittest.TestCase):
         core.gravar_json(arquivo, {"tema": "claro"})
         core.gravar_json(arquivo, {"tema": "escuro", "aba": "snac0236"}, indent=2)
         self.assertEqual(json.loads(arquivo.read_text(encoding="utf-8")), {"tema": "escuro", "aba": "snac0236"})
-        with mock.patch.object(core.os, "replace", side_effect=OSError("disco cheio")):  # falha no meio
-            with self.assertRaises(OSError):
-                core.gravar_json(arquivo, {"tema": "auto"})
+        with mock.patch.object(core.os, "replace", side_effect=OSError("disco cheio")), self.assertRaises(OSError):
+            core.gravar_json(arquivo, {"tema": "auto"})  # falha no meio
         self.assertEqual(json.loads(arquivo.read_text(encoding="utf-8"))["tema"], "escuro")  # o antigo ficou inteiro
         self.assertEqual(sorted(p.name for p in pasta.iterdir() if p.suffix != ".tmp"), ["config.json"])
 

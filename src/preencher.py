@@ -20,7 +20,7 @@ def main():
     try:
         registros = [r for r in ler_planilha(args.planilha) if r["linha"] >= args.inicio]
     except ValueError as erro:
-        raise SystemExit(str(erro))
+        raise SystemExit(str(erro)) from None
     if args.limite:
         registros = registros[: args.limite]
     if not registros:

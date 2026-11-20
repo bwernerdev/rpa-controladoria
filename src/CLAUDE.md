@@ -20,7 +20,7 @@
   - `core.Execucao0234` e `snac0236.Execucao0236` — o antigo corpo do `executar` (funcao longa com funcoes internas) virou classe: parametros e estado dividido em `self`, cada etapa um metodo, `rodar` e o laco. O `executar(...)` de cada modulo manteve a assinatura e so faz `return ExecucaoXXXX(...).rodar()`; a tela chama sempre com argumentos nomeados.
   - `core.gravar_json(arquivo, dados)` grava num `.tmp` e troca com `os.replace` (config, progresso, aprendizado, posicoes da 0236): queda no meio nao deixa JSON pela metade.
   - Comportamento da tela: Simular abre os Detalhes; contagem regressiva antes de digitar (`App.contagem`); X durante a execucao pergunta (`dialogo`), aciona o Parar das duas abas e fecha quando a thread termina (`fechar`); atalhos na janela principal, fora de execucao (`_atalho`): Ctrl+O escolhe planilha, F5 recarrega, Ctrl+1/Ctrl+2 trocam de aba; Opcoes valida Limite/Pausa e grava na hora; F9 na SNAC0236 pausa ao fim da nota.
-  - Checagem estatica: pyflakes limpo em `src`, `tests` e `scripts`.
+  - Checagem estatica: ruff (`ruff.toml` na raiz do RPA; usuario, 20/11/2026: no lugar do pyflakes). Regras F, E, W, B, I, UP, C4, PIE, SIM e RUF, linhas de ate 150 colunas; ignoradas de proposito: SIM105 e SIM108 (legibilidade), RUF001-003 (·, – e × dos textos), RUF005. Rodar `.\.venv\Scripts\python.exe -m ruff check .` antes de commitar (o CI roda o mesmo e falha com aviso). `noqa` so com o motivo ao lado (ex.: o import do PIL depois do `sys.coinit_flags` no `core.py`; os logs abertos a execucao inteira). Imports em ordem pelo ruff (`--fix`).
 
 ## Regras
 - Logica nova vai em `core.py`; `gui.py` e `preencher.py` so chamam.

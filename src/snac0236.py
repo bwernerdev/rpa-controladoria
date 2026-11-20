@@ -58,7 +58,7 @@ def chave_coluna(titulo):
     nome = normalizar(titulo)
     # base de calculo da linha ICMS TERCEIROS do Rateio: "BASE CALC. ICMS" desde 05/11/2026 (antes
     # "ICMS TERCEIROS (BASE DE CALCULO NF)"; o nome antigo continua aceito)
-    if nome.startswith("icms terceiro") or nome.startswith("base calc"):
+    if nome.startswith(("icms terceiro", "base calc")):
         return "icms_terceiro"
     if nome.startswith("aliquota"):  # "ALIQUOTA" (da linha ICMS TERCEIROS do Rateio; era BASE CALC. ICMS ate 05/11/2026)
         return "aliquota_icms"
@@ -420,7 +420,8 @@ def foco_unido(imagem):
     faixa = imagem.crop((0, faixa_topo, imagem.width, min(base + 6, imagem.height)))
     caixas = caixas + [(c[0], c[1] + faixa_topo, c[2], c[3] + faixa_topo) for c in core.caixas_cor(faixa, "selecao")
                        if c[3] - c[1] >= 4 and c[2] - c[0] >= 8]
-    folga = max(300 * imagem.width // 3840, 8 * (base - topo))  # proporcional a tela (1366x768: ~107 px)  # a selecao do texto da Data deixava ~170 px sem ciano (4K)
+    # proporcional a tela (1366x768: ~107 px); a selecao do texto da Data deixava ~170 px sem ciano (4K)
+    folga = max(300 * imagem.width // 3840, 8 * (base - topo))
     mesma_linha = sorted(c for c in caixas if abs(c[1] - topo) <= 4 and abs(c[3] - base) <= 4)
     for c in mesma_linha:  # da esquerda para a direita, colando os pedacos vizinhos a direita
         if c[0] > dir_ and c[0] - dir_ <= folga:
@@ -854,7 +855,7 @@ def _escrever_log(texto):
         if not _LOG["caminho"]:
             return
         try:
-            arquivo = open(_LOG["caminho"], "a", encoding="utf-8")
+            arquivo = open(_LOG["caminho"], "a", encoding="utf-8")  # noqa: SIM115 (fechado no fim da funcao; nem sempre e aberto aqui)
         except OSError:
             return
     agora = time.time()
@@ -953,7 +954,7 @@ class Execucao0236:
         for linha in linhas:
             if self.estado:
                 self.estado(linha, nome)
-        self.atual[:] = list(linhas) if nome == "executando" else [l for l in self.atual if l not in linhas]
+        self.atual[:] = list(linhas) if nome == "executando" else [n for n in self.atual if n not in linhas]
 
     def checar_parada(self):
         if self.parar.is_set() or core.mouse_no_canto():
@@ -1321,8 +1322,8 @@ class Execucao0236:
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
                     self.registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
-                    faltam = [NOME_RATEIO[c] for c in COLUNAS_RATEIO if c not in rateio and c in valores_rateio(r) or
-                              c == "ident" and c not in rateio]
+                    faltam = [NOME_RATEIO[c] for c in COLUNAS_RATEIO if (c not in rateio and c in valores_rateio(r)) or
+                              (c == "ident" and c not in rateio)]
                     if faltam:
                         raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
                     self.rateio_salvo = rateio
@@ -1628,7 +1629,7 @@ class Execucao0236:
     def rodar(self):
         core.limpar_logs()
         caminho_log = core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log"
-        self.log = open(caminho_log, "w", encoding="utf-8")
+        self.log = open(caminho_log, "w", encoding="utf-8")  # noqa: SIM115 (aberto a execucao inteira; fechado no fim)
         with _TRAVA_LOG:
             _LOG.update(caminho=caminho_log, arquivo=self.log, ultimo=time.time())
         self.rateio_salvo = None  # posicoes do Rateio da nota anterior (ou da execucao anterior)
@@ -1822,7 +1823,8 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
              serie_ponto=None, pausar=None):
     """Preenche as notas no SRP. `serie_ponto(linhas)`: chamado antes de marcar 'ok' a nota em que o robo pos "." na
     Serie (janela "ja existe"). `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
-    acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
+    acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por
+    linha da planilha; `retomar` (Event, botao Continuar) liga
     as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. `pausar` (Event,
     F9; v1.14.0): pausa entre uma nota integrada e a proxima, com o cursor na Chave. Devolve 0 se concluiu."""
     return Execucao0236(notas=notas, janela_trecho=janela_trecho, pausa=pausa, render=render, espera=espera,

@@ -12,18 +12,65 @@ from tkinter import filedialog, ttk
 
 from PIL import ImageTk
 
-from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
-                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, sem_acentos,
-                  registrar_falha_tela, gravar_json)
-from gui_snac0236 import Pagina0236
-from snac0236 import texto_duracao
-from icone import desenhar
-from versao import NOME, VERSAO
-from pagina import ESPERA, JANELA_SRP, RENDER, Pagina
 import visual
-from visual import (COR, DND_FILES, ESTADOS, PALETAS, TEMAS, BarraFina, Botao, Cartao, Console, RaizTk,
-                    area_util, ativar_dpi, barra_titulo, ctk, dialogo, dpi_da_janela, duracao, esp, fonte,
-                    icone_planilha, piscar_barra, px, retangulo_redondo, tema_do_windows, tipo_mensagem)
+from core import (
+    VK_F8,
+    VK_F9,
+    aplicar_atualizacao,
+    aplicar_sugestoes,
+    atalhos_globais,
+    baixar_atualizacao,
+    caminho_tesseract,
+    citrix_aberto,
+    contas_suspeitas,
+    descrever,
+    executar,
+    gravar_json,
+    gravar_progresso,
+    itens_repetidos,
+    ler_planilha,
+    ler_progresso,
+    pasta_base,
+    pasta_logs,
+    qtd,
+    registrar_atualizacao,
+    registrar_falha_tela,
+    sem_acentos,
+    validar,
+    verificar_atualizacao,
+)
+from gui_snac0236 import Pagina0236
+from icone import desenhar
+from pagina import ESPERA, JANELA_SRP, RENDER, Pagina
+from snac0236 import texto_duracao
+from versao import NOME, VERSAO
+from visual import (
+    COR,
+    DND_FILES,
+    ESTADOS,
+    PALETAS,
+    TEMAS,
+    BarraFina,
+    Botao,
+    Cartao,
+    Console,
+    RaizTk,
+    area_util,
+    ativar_dpi,
+    barra_titulo,
+    ctk,
+    dialogo,
+    dpi_da_janela,
+    duracao,
+    esp,
+    fonte,
+    icone_planilha,
+    piscar_barra,
+    px,
+    retangulo_redondo,
+    tema_do_windows,
+    tipo_mensagem,
+)
 
 FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
@@ -791,7 +838,7 @@ class App(RaizTk, Pagina):
         except OSError:
             pass
         if self.resumo:
-            linhas, com_conta, erros = self.resumo
+            linhas, com_conta, _erros = self.resumo
             partes[:0] = [f"{linhas} linhas", f"{com_conta} com conta"]
         tk.Label(linha, text="  ·  ".join(partes), bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"), anchor="w").pack(side="left")
         if self.resumo and self.resumo[2]:
@@ -839,7 +886,7 @@ class App(RaizTk, Pagina):
     # ---------- tabela: filtro e dica da conta trocada ----------
     def filtrar(self, chave):
         self.filtro = chave
-        alvo = dict((c, estados) for c, _, estados in FILTROS)[chave]
+        alvo = {c: estados for c, _, estados in FILTROS}[chave]
         posicao = 0
         for r in self.registros:
             iid = self.iids.get(r["linha"])
@@ -1250,7 +1297,7 @@ class App(RaizTk, Pagina):
         elif nome == "erro":
             self._status(f"Interrompido na linha {linha}", "erro")
         if (anterior == "ok") != (nome == "ok") and self.registros:  # guarda o andamento para o app reabrir dali
-            gravar_progresso(self.originais, {l for l, e in self.estados.items() if e == "ok"})
+            gravar_progresso(self.originais, {n for n, e in self.estados.items() if e == "ok"})
 
     def _proxima_linha(self):
         for r in self.registros:
@@ -1435,7 +1482,7 @@ class App(RaizTk, Pagina):
         colunas = ("usar", "linha", "item", "conta", "sugerida")
         tabela = ttk.Treeview(cartao, columns=colunas, show="headings", height=min(len(suspeitas), 10), selectmode="none")
         for coluna, titulo, largura in zip(colunas, ("Usar", "Linha", "Item", "Conta na planilha", "Conta sugerida"),
-                                           (50, 60, 120, 130, 130)):
+                                           (50, 60, 120, 130, 130), strict=True):
             tabela.heading(coluna, text=titulo, anchor="center")
             tabela.column(coluna, width=px(largura), anchor="center")
         for linha, item, conta, correta in suspeitas:
@@ -1517,7 +1564,7 @@ class App(RaizTk, Pagina):
         suspeitas = contas_suspeitas(registros)
         if suspeitas:
             atencao.append(f"{qtd(len(suspeitas), 'linha', 'linhas')} com Conta que o SRP já recusou (linhas "
-                           + ", ".join(str(l) for l, *_ in suspeitas[:8]) + "): o robô vai pausar nelas.")
+                           + ", ".join(str(n) for n, *_ in suspeitas[:8]) + "): o robô vai pausar nelas.")
         if self.conferir.get() and itens_repetidos(self.registros):
             atencao.append("A planilha tem itens repetidos e a conferência da quantidade está ligada: como o SRP soma "
                            "itens iguais, a conferência vai interromper nesses itens.")

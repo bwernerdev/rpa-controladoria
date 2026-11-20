@@ -181,7 +181,7 @@ class PausaPorQuantidade(unittest.TestCase):
         self.assertTrue(any("difere da planilha" in a and "PAUSADO" in a for a in avisos))
 
     def test_sem_continuar_interrompe(self):
-        codigo, avisos, estados = self.rodar(None, retomar=False)
+        codigo, _avisos, estados = self.rodar(None, retomar=False)
         self.assertEqual(codigo, 1)
         self.assertIn((3, "erro"), estados)
 

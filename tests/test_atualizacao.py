@@ -43,7 +43,10 @@ class Buscar(unittest.TestCase):
         self.assertIsNone(self.buscar({**RELEASE, "assets": []}))
 
     def test_sem_internet_nao_levanta_erro(self):
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("sem rede")),                 mock.patch.object(core, "_consulta_powershell", side_effect=OSError("proxy fora")):
+        with (
+            mock.patch("urllib.request.urlopen", side_effect=OSError("sem rede")),
+            mock.patch.object(core, "_consulta_powershell", side_effect=OSError("proxy fora")),
+        ):
             info, texto = core.verificar_atualizacao("1.0.0")
         self.assertIsNone(info)
         self.assertIn("sem rede", texto)
@@ -51,7 +54,10 @@ class Buscar(unittest.TestCase):
 
     def test_direto_barrado_vai_pelo_proxy_do_windows(self):
         """Rede com PAC: o urllib nao ve o proxy e e barrado; o PowerShell usa o proxy do Windows."""
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")),                 mock.patch.object(core, "_consulta_powershell", return_value=RELEASE) as ps:
+        with (
+            mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")),
+            mock.patch.object(core, "_consulta_powershell", return_value=RELEASE) as ps,
+        ):
             info, texto = core.verificar_atualizacao("1.9.0")
         ps.assert_called_once()
         self.assertEqual((info["versao"], info["proxy"]), ("1.10.0", True))
@@ -94,7 +100,10 @@ class Baixar(unittest.TestCase):
 
         def falso(url, arquivo, total, progresso):
             arquivo.write_bytes(origem.read_bytes())
-        with mock.patch.object(core, "_baixar_powershell", side_effect=falso) as ps,                 mock.patch("urllib.request.urlopen", side_effect=AssertionError("nao devia ir direto")):
+        with (
+            mock.patch.object(core, "_baixar_powershell", side_effect=falso) as ps,
+            mock.patch("urllib.request.urlopen", side_effect=AssertionError("nao devia ir direto")),
+        ):
             destino = core.baixar_atualizacao({"url": "https://exemplo/x.zip", "sha256": soma, "tamanho": None,
                                                "proxy": True})
         ps.assert_called_once()
@@ -102,8 +111,11 @@ class Baixar(unittest.TestCase):
 
     def test_download_direto_barrado_tenta_o_proxy(self):
         origem, _ = self.pacote()
-        with mock.patch.object(core, "_baixar_powershell",
-                               side_effect=lambda url, arquivo, *_: arquivo.write_bytes(origem.read_bytes())) as ps,                 mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")):
+        with (
+            mock.patch.object(core, "_baixar_powershell",
+                              side_effect=lambda url, arquivo, *_: arquivo.write_bytes(origem.read_bytes())) as ps,
+            mock.patch("urllib.request.urlopen", side_effect=OSError("barrado")),
+        ):
             core.baixar_atualizacao({"url": "https://exemplo/x.zip", "sha256": None, "tamanho": None})
         ps.assert_called_once()
 

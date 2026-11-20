@@ -16,10 +16,11 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "src"))
 
-import gui  # noqa: E402
-import snac0236  # noqa: E402
 from openpyxl import Workbook  # noqa: E402
 from PIL import Image  # noqa: E402
+
+import gui  # noqa: E402
+import snac0236  # noqa: E402
 
 ORDEM_0236 = ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "qtd", "unit", "icms", "icms_terceiro",
               "aliquota_icms")

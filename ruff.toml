@@ -1,0 +1,31 @@
+# Checagem estatica (v1.14.0; usuario, 20/11/2026: ruff no lugar do pyflakes). Rodar na pasta RPA:
+#   .\.venv\Scripts\python.exe -m ruff check .
+# O CI roda o mesmo comando antes dos testes.
+target-version = "py314"
+line-length = 150  # o codigo usa linhas de ate ~130; 150 so pega os exageros
+extend-exclude = ["vendor", "ferramentas", "build", "release"]
+
+[lint]
+select = [
+    "F",    # pyflakes: nomes indefinidos, imports e variaveis sem uso
+    "E",    # pycodestyle: erros de estilo
+    "W",    # pycodestyle: avisos (espacos no fim, linha em branco com espaco)
+    "B",    # bugbear: armadilhas comuns (zip sem strict, raise sem from, defaults mutaveis)
+    "I",    # imports em ordem
+    "UP",   # sintaxe moderna para o Python 3.14
+    "C4",   # comprehensions
+    "PIE",  # miudezas desnecessarias
+    "SIM",  # simplificacoes
+    "RUF",  # regras do proprio ruff
+]
+ignore = [
+    "SIM105",  # try/except/pass explicito e mais claro aqui que contextlib.suppress
+    "RUF001",  # caracteres "ambiguos" (·, –, ×) sao de proposito nos textos da tela
+    "RUF002",
+    "RUF003",
+    "RUF005",  # [a] + lista: questao de gosto
+    "SIM108",  # ternario aninhado fica menos legivel que o if/else
+]
+
+[lint.isort]
+known-first-party = ["core", "snac0236", "gui", "gui_snac0236", "visual", "pagina", "atualizacao", "versao", "preencher", "sondar", "icone", "simulador"]

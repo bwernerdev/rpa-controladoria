@@ -8,20 +8,20 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter
 import subprocess
 import sys
 import tempfile
 import threading
-import unicodedata
 import time
+import unicodedata
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 sys.coinit_flags = 2  # COM em modo STA, necessario para arrastar e soltar (tkdnd/OLE) e pywinauto coexistirem
 
-from PIL import Image, ImageChops, ImageFilter, ImageGrab, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageGrab, ImageOps  # noqa: E402 (depois do coinit_flags)
 
 
 def send_keys(*args, **kwargs):
@@ -352,7 +352,7 @@ def ler_aviso(imagem, tesseract, fixos=()):
         linhas = {}
         for texto, x, y, _, _ in palavras_tela(img, tesseract, escala):
             linhas.setdefault(round(y / 6), []).append((x, texto))
-        return " ".join(" ".join(t for _, t in sorted(l)) for _, l in sorted(linhas.items()))
+        return " ".join(" ".join(t for _, t in sorted(palavras)) for _, palavras in sorted(linhas.items()))
 
     variantes = ((recorte, 2), (recorte, 4), (recorte, 5), (escuro, 4), (escuro, 5))
     with ThreadPoolExecutor(max_workers=len(variantes)) as paralelo:  # cada leitura e um processo do Tesseract
@@ -752,7 +752,7 @@ def ler_progresso(registros):
     if dados.get("assinatura") != assinatura_planilha(registros):
         return set(), None
     validas = {r["linha"] for r in registros}
-    return {l for l in dados.get("ok", []) if l in validas}, dados.get("em")
+    return {n for n in dados.get("ok", []) if n in validas}, dados.get("em")
 
 
 def sem_acentos(texto):
@@ -1226,7 +1226,8 @@ class Execucao0234:
     def rodar(self):
         tesseract = caminho_tesseract() if self.conferir else None
         limpar_logs()
-        self.log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
+        # aberto a execucao inteira (varios metodos escrevem); fechado no fim do `rodar`
+        self.log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")  # noqa: SIM115
         self.atual = None
 
         self.trava_log = threading.Lock()
@@ -1308,7 +1309,8 @@ class Execucao0234:
                     if campo == "quantidade" and coluna_qtd is None:
                         coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
                     valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
-                    self.teclar("digitar", valor); self.teclar("tab", None, esperar=False)
+                    self.teclar("digitar", valor)
+                    self.teclar("tab", None, esperar=False)
                     digitados.append(campo)
                     novo = aguardar_mudanca(self.janela, foco, self.render, ver_aviso=bool(self.colunas), fixos=self.fixos)
                     if novo == "aviso":

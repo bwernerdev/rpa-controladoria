@@ -4,17 +4,28 @@ import queue
 import re
 import threading
 import time
+import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, ttk
-import tkinter as tk
 
 import snac0236
 import visual
+from core import (
+    VERDE_CONCLUIDA,
+    VERDE_SERIE_PONTO,
+    VK_F8,
+    VK_F9,
+    atalhos_globais,
+    citrix_aberto,
+    fechar_no_excel,
+    pasta_logs,
+    pintar_linhas,
+    qtd,
+    sem_acentos,
+)
 from pagina import ESPERA, JANELA_SRP, RENDER, Pagina
 from visual import COR, esp, fonte, px
-from core import (VERDE_CONCLUIDA, VERDE_SERIE_PONTO, VK_F8, VK_F9, atalhos_globais, citrix_aberto, fechar_no_excel,
-                  sem_acentos, pasta_logs, pintar_linhas, qtd)
 
 PAUSA_TECLAS = 0.25  # s entre teclas na SNAC0236 (fixo; o passo a passo soma o `intervalo` antes de cada acao)
 
@@ -665,7 +676,7 @@ class Pagina0236(Pagina):
         if not nota or not self.caminho:
             return
         linhas = [r["linha"] for r in nota["itens"]]
-        if all(self.estados.get(l) == "ok" for l in linhas) and not set(linhas) <= self.pintadas:
+        if all(self.estados.get(n) == "ok" for n in linhas) and not set(linhas) <= self.pintadas:
             self.pintadas.update(linhas)
             self.fila_pintar.put(self._pedido_pintura(nota))
 
@@ -706,7 +717,7 @@ class Pagina0236(Pagina):
             grupo[0].extend(linhas)
             grupo[1].update(comentarios)
         for (caminho, cor), (linhas, comentarios) in juntos.items():
-            lista = ", ".join(str(l) for l in sorted(linhas))
+            lista = ", ".join(str(n) for n in sorted(linhas))
             serie = " (verde mais escuro e comentário na CHAVE NF: '.' na Série)" if cor == VERDE_SERIE_PONTO else ""
             try:
                 como = pintar_linhas(caminho, linhas, cor, comentarios)
@@ -773,7 +784,7 @@ class Pagina0236(Pagina):
         lido = self._ler_conferencia()
         if not lido:
             return
-        notas, achado, logs = lido
+        _notas, achado, logs = lido
         nome = Path(self.caminho).name
         self.escrever(f"Conferência de {nome} com os logs ({len(logs)} nota(s) nos logs dos últimos 30 dias; os logs "
                       "guardam só os 6 últimos dígitos da chave):")
@@ -824,7 +835,8 @@ class Pagina0236(Pagina):
         if not ja:
             return True
         resposta = visual.dialogo(
-            self.app, "Notas já integradas", f"Segundo os logs, {qtd(len(ja), 'nota deste lote já foi integrada', 'notas deste lote já foram integradas')} "
+            self.app, "Notas já integradas",
+            f"Segundo os logs, {qtd(len(ja), 'nota deste lote já foi integrada', 'notas deste lote já foram integradas')} "
             "pelo robô (o SRP disse 'Integrado com Sucesso'), mas não estão verdes na planilha. Lançar de novo faria o "
             "SRP dizer que o documento já existe e o robô poria '.' na Série (documento duplicado).",
             [("Cancelar", None, "Secundario.TButton"), ("Lançar assim mesmo", False, "Perigo.TButton"),

@@ -21,7 +21,8 @@ for arquivo in sorted(src.glob("*.py")):
 print(f"src: {len(list(src.glob('*.py')))} modulos importados sem {', '.join(BLOQUEADOS)}")
 for nome in SO_NOS_TESTES + ("PIL.ImageFont",):  # o ImageFont guardou a fonte como faltando
     sys.modules.pop(nome, None)
-import PIL
+import PIL  # noqa: E402 (so depois de liberar os modulos bloqueados)
+
 if hasattr(PIL, "ImageFont"):
     del PIL.ImageFont
 resultado = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.discover(str(pasta)))

@@ -10,8 +10,8 @@ from unittest import mock
 
 from PIL import Image
 
-import simulador  # noqa: F401  (poe src no sys.path)
 import core
+import simulador
 import snac0236
 
 CHAVE_A = "1" * 40 + "0001"  # chaves ficticias
@@ -38,23 +38,24 @@ PALAVRAS = [
 ]
 TRIBUTOS_OK = (700, 800, 780, 812)
 AVISO = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate(
-    "Este documento possui frete com ICMS PAGO no LTCC, por isso foi alterado o Frete para CIF.".split())]
-RESUMO = [(p, 300 + 60 * i, 480, 55, 12) for i, p in enumerate("ae dos Tributos Documento Confirmar Cancelar".split())]
-LTCC = [(p, 300 + 60 * i, 450, 55, 12) for i, p in enumerate("Informe o Centro de Custo e Conta Contabil para Frete LTCC".split())] + [
+    ["Este", "documento", "possui", "frete", "com", "ICMS", "PAGO", "no", "LTCC,", "por", "isso", "foi", "alterado", "o", "Frete", "para", "CIF."])]
+RESUMO = [(p, 300 + 60 * i, 480, 55, 12) for i, p in enumerate(["ae", "dos", "Tributos", "Documento", "Confirmar", "Cancelar"])]
+LTCC = [(p, 300 + 60 * i, 450, 55, 12)
+        for i, p in enumerate(["Informe", "o", "Centro", "de", "Custo", "e", "Conta", "Contabil", "para", "Frete", "LTCC"])] + [
     ("Frete", 1000, 470, 50, 12), ("LTCC", 1055, 470, 45, 12),  # cabecalho da grade (nao e o botao)
     ("Voltar", 430, 700, 90, 12), ("Frete", 1000, 700, 50, 12), ("LTC", 1055, 700, 45, 12)]
 BOTAO_LTCC = (1000, 700, 1100, 712)
 REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
-    "Nota Fiscal de Referência emitida pelo Faturamento".split())] + [
+    ["Nota", "Fiscal", "de", "Referência", "emitida", "pelo", "Faturamento"])] + [
     ("Escolha", 300, 480, 60, 12), ("a", 365, 480, 10, 12), ("Nota", 380, 480, 35, 12), ("Fiscal", 420, 480, 45, 12),
     ("Faturamento", 470, 480, 90, 12),
     ("030", 400, 520, 30, 12), ("00765", 450, 520, 50, 12), ("0000087445", 520, 520, 90, 12), ("1", 630, 520, 10, 12),
     ("99999", 660, 520, 50, 12), ("1", 730, 520, 10, 12), ("OK", 700, 760, 20, 12)]
 BOTAO_OK_REF = (700, 760, 720, 772)
-SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate("Documento Integrado com Sucesso.".split())]
+SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate(["Documento", "Integrado", "com", "Sucesso."])]
 BOTAO_AJUSTAR = (800, 700, 860, 712)
 JA_EXISTE = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
-    "Documento Recebimento 184598 já existe, foi integrado no sistema em 15/10/2010".split())] + [("OK", 700, 700, 20, 12)]
+    ["Documento", "Recebimento", "184598", "já", "existe,", "foi", "integrado", "no", "sistema", "em", "15/10/2010"])] + [("OK", 700, 700, 20, 12)]
 
 
 def acessoria(geral, documento, diferenca):
@@ -171,11 +172,14 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return self.janela_extra or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo or self.ltcc or self.sucesso
+        return (self.janela_extra or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo
+                or self.ltcc or self.sucesso)
 
     def palavras_janelas(self):
-        return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else []) + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
-                + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else []) + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
+        return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else [])
+                + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
+                + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else [])
+                + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
                 + (SUCESSO if self.sucesso else []))
 
     def barras(self, imagem):
@@ -405,7 +409,7 @@ class Planilha(unittest.TestCase):
             [CHAVE_A, None, None, None, None, "900266", 5101, 1.25, "3,75", None, None],
             [CHAVE_B, "30 47", "02/11/2026", "1200", "FOB", 900135, 5102, 1, 1200, 0, 0],
         ])
-        registros, notas, erros = snac0236.carregar(caminho)
+        _registros, notas, erros = snac0236.carregar(caminho)
         self.assertEqual(erros, [])
         self.assertEqual([len(n["itens"]) for n in notas], [2, 1])
         a = notas[0]
@@ -478,7 +482,8 @@ class Planilha(unittest.TestCase):
         tema = core.cores_do_tema(None) or ["FFFFFF", "000000", "E7E6E6", "44546A", "4472C4", "ED7D31", "A5A5A5", "FFC000",
                                              "5B9BD5", "70AD47"]
         for cor, esperado in (("C6EFCE", True), ("00B050", True), ("92D050", True), ("FFFF00", False), ("00FFFF", False),
-                              ("FFFFFF", False), ("FFC7CE", False), ("E2EFDA", True), ("D9D9D9", False), ("FFEB9C", False), (Color(theme=9), True), (Color(theme=9, tint=0.8), True),
+                              ("FFFFFF", False), ("FFC7CE", False), ("E2EFDA", True), ("D9D9D9", False), ("FFEB9C", False),
+                              (Color(theme=9), True), (Color(theme=9, tint=0.8), True),
                               (Color(theme=4), False), (Color(theme=9, tint=-0.5), True)):
             self.assertEqual(core.fundo_verde(PatternFill("solid", fgColor=cor), tema), esperado, cor)
         self.assertFalse(core.fundo_verde(PatternFill(fgColor="C6EFCE")))  # sem preenchimento solido
@@ -505,7 +510,8 @@ class Planilha(unittest.TestCase):
         _, _, erros = snac0236.carregar(caminho)
         texto = core.sem_acentos("\n".join(erros))  # as mensagens tem acento desde a v1.14.0
         for trecho in ("linha 2: a CHAVE NF esta como numero", "linha 2: FILIAL FISCAL precisa de 2 partes", "linha 2: data invalida",
-                       "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150", "linha 3: FRETE em branco",
+                       "linha 2: VALOR TOTAL DOCUMENTO: valor invalido", "linha 4: FILIAL FISCAL diferente", "linha 2: FRETE invalido: 150",
+                       "linha 3: FRETE em branco",
                        "linha 6: a CHAVE NF ...110001 ja apareceu antes", "OPER SPM em branco",
                        "linha 3: BASE CALC. ICMS e ALIQUOTA precisam ser os dois 0",
                        "linha 7: ALIQUOTA 0.12 parece porcentagem do Excel", "linha 8: ALIQUOTA invalida: 120"):
@@ -622,7 +628,9 @@ class PassoAPasso(unittest.TestCase):
         self.assertGreater(len(passos), 15 + enters + 2)
         self.assertIn("Passo a passo: clicar em Tributos OK", passos)
         self.assertIn("Passo a passo: digitar '30' em Filial Fisica (1a parte)", passos)
-        self.assertEqual(passos[-9:], ["Passo a passo: clicar em Integrar"] + [f"Passo a passo: Enter {i} de 7 depois do Integrar" for i in range(1, 8)] + ["Passo a passo: clicar em Integrar de novo"])
+        self.assertEqual(passos[-9:], ["Passo a passo: clicar em Integrar"]
+                         + [f"Passo a passo: Enter {i} de 7 depois do Integrar" for i in range(1, 8)]
+                         + ["Passo a passo: clicar em Integrar de novo"])
         self.assertGreater(__import__("time").time() - inicio, 0.01 * len(passos) * 0.9)
 
 
@@ -776,7 +784,7 @@ class BarraDialogo(unittest.TestCase):
         imagem.paste((45, 132, 197), (100, 600, 400, 603))  # borda fina: fica de fora
         barras = snac0236.barras_dialogo(imagem)
         self.assertEqual(len(barras), 1, barras)
-        self.assertLessEqual(max(abs(a - b) for a, b in zip(barras[0], (300, 300, 900, 330))), 2, barras)
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(barras[0], (300, 300, 900, 330), strict=True)), 2, barras)
         area = snac0236.area_dialogo(imagem, barras)
         self.assertLessEqual(area[0], 300)
         self.assertGreaterEqual(area[2], 898)
@@ -878,7 +886,7 @@ class Fluxo(unittest.TestCase):
 
     def test_cursor_parado_le_a_janela_e_guarda_print(self):
         srp = SRP0236()
-        srp.janela_no_enter = {"icms": [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate("Valor do ICMS invalido".split())]}
+        srp.janela_no_enter = {"icms": [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(["Valor", "do", "ICMS", "invalido"])]}
 
         def usuario(srp):  # termina a nota a mao e volta o cursor para a Chave
             srp.janela_extra, srp.atual, srp.indice = None, {}, 0
@@ -1016,7 +1024,7 @@ class Fluxo(unittest.TestCase):
         notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
         notas[1]["itens"][0]["linha"] = 3
         with ambiente(srp) as pasta:
-            codigo, avisos, estados = rodar(srp, notas, serie_ponto=marcadas.append)
+            codigo, avisos, _estados = rodar(srp, notas, serie_ponto=marcadas.append)
             logs = snac0236.notas_nos_logs(pasta)
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(marcadas, [[2]])  # so a nota da janela

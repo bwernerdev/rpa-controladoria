@@ -20,7 +20,7 @@ from core import sem_acentos
 # (tema a cada 30 ms e DPI a cada 100 ms; a troca de monitor e o _talvez_mudou_monitor).
 if sys.modules.get("darkdetect") is None:  # o exe sai sem ele (build.ps1)
     sys.modules["darkdetect"] = types.SimpleNamespace(theme=lambda: "Light")
-import customtkinter as ctk  # noqa: E402
+import customtkinter as ctk
 
 ctk.deactivate_automatic_dpi_awareness()
 ctk.set_appearance_mode("light")
@@ -39,7 +39,8 @@ PALETAS = {
         "fundo": "#f6f7f9", "cartao": "#ffffff", "borda": "#e2e5ea", "borda_forte": "#c9ced6", "texto": "#1f2328",
         "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
         "ok": "#177233", "ok_fundo": "#d9f2e1", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
-        "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
+        "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7",
+        "console": "#fbfbfc", "console_texto": "#4b5260",
         "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb", "ok_serie_fundo": "#b4e0c1",
         "ok_serie_texto": "#0f5c27", "desativado": "#858b94", "tracejado": "#878e98",
     },
@@ -47,7 +48,8 @@ PALETAS = {
         "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
         "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
         "ok": "#57c27a", "ok_fundo": "#1f3d2a", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
-        "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
+        "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46",
+        "console": "#1b1e24", "console_texto": "#b8bec7",
         "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730", "ok_serie_fundo": "#2c5a3b",
         "ok_serie_texto": "#8fe0a8", "desativado": "#737a87", "tracejado": "#646c7a",
     },
@@ -232,11 +234,11 @@ class Botao(ctk.CTkButton):
         primario = tipo == "Primario"
         letra = fonte("corpo", forte=primario)
         largura = max(px(72), int(self._tk_pai.call("font", "measure", letra, self._texto)) + px(32))
-        opcoes = dict(text=self._texto, font=letra, width=largura, state=self._estado,
-                      fg_color=COR["destaque"] if primario else COR["botao"],
-                      hover_color=COR["destaque_hover"] if primario else COR["botao_hover"],
-                      text_color=COR["no_destaque"] if primario else COR["erro"] if tipo == "Perigo" else COR["texto"],
-                      text_color_disabled=COR["suave"] if primario else COR["desativado"])
+        opcoes = {"text": self._texto, "font": letra, "width": largura, "state": self._estado,
+                  "fg_color": COR["destaque"] if primario else COR["botao"],
+                  "hover_color": COR["destaque_hover"] if primario else COR["botao_hover"],
+                  "text_color": COR["no_destaque"] if primario else COR["erro"] if tipo == "Perigo" else COR["texto"],
+                  "text_color_disabled": COR["suave"] if primario else COR["desativado"]}
         if self._estado == "disabled":
             opcoes["fg_color"] = COR["cinza_fundo"]
         return opcoes

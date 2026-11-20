@@ -10,7 +10,6 @@ import visual
 from core import registrar_falha_tela
 from visual import COR, esp, fonte, px
 
-
 # o robo procura a janela do Citrix por este trecho do titulo; render = espera maxima (s) pela tela do SRP depois de
 # uma tecla; espera = contagem (s) antes de digitar, para o usuario clicar no campo
 JANELA_SRP = "Desktop Viewer"
