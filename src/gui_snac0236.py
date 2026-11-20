@@ -1,22 +1,24 @@
 """Aba SNAC0236 (Digitacao Documento Recebimento) da janela. O estado fica neste objeto (sobrevive quando a janela e
-redesenhada por tema ou monitor); `montar(pai)` refaz so os widgets. `ui` e o modulo gui (COR, fonte, px, ESTADOS)."""
+redesenhada por tema ou monitor); `montar(pai)` refaz so os widgets. O visual comum (COR, fonte, px, esp, widgets) vem de `visual`."""
 import queue
 import re
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 import tkinter as tk
 
 import snac0236
-from core import (VERDE_CONCLUIDA, VERDE_SERIE_PONTO, VK_F8, atalhos_globais, citrix_aberto, fechar_no_excel,
-                  com_acentos, pasta_logs, pintar_linhas, qtd)
+import visual
+from visual import COR, esp, fonte, px
+from core import (VERDE_CONCLUIDA, VERDE_SERIE_PONTO, VK_F8, VK_F9, atalhos_globais, citrix_aberto, fechar_no_excel,
+                  com_acentos, pasta_logs, pintar_linhas, qtd, registrar_falha_tela)
 
 
 class Pagina0236:
-    def __init__(self, app, ui):
-        self.app, self.ui = app, ui
+    def __init__(self, app):
+        self.app = app
         self.caminho, self.registros, self.notas, self.erros = None, [], [], []
         self.estados, self.historico = {}, []
         self.status_atual = ("", "suave")  # sem planilha o status fica vazio (a zona ja diz o que fazer)
@@ -24,7 +26,9 @@ class Pagina0236:
         self.msg_pausa = ""  # ultima mensagem com PAUSADO (texto da faixa de pausa)
         self.fila = queue.Queue()
         self.parar, self.retomar = threading.Event(), threading.Event()
+        self.pausar = threading.Event()  # F9 (v1.14.0): pausa entre uma nota integrada e a proxima
         self.soltar_atalhos = None
+        self.thread = None  # thread do robo (o fechar da janela espera ela parar)
         self.iids = {}
         # passo a passo: 0,5 s entre as acoes, narradas no console (para acompanhar os testes no SRP real)
         self.passo_a_passo = tk.BooleanVar(app, value=bool(app.config_usuario.get("passo_a_passo_0236", True)))
@@ -45,63 +49,62 @@ class Pagina0236:
 
     def _gravar_passo(self):
         self.app.config_usuario["passo_a_passo_0236"] = self.passo_a_passo.get()
-        self.ui.gravar_config(self.app.config_usuario)
+        self.app.salvar_config()
 
     # ---------- montagem ----------
     def montar(self, pai):
-        ui, COR, px, fonte = self.ui, self.ui.COR, self.ui.px, self.ui.fonte
-        self.zona = ui.Cartao(pai, borda=COR["borda_forte"])
+        self.zona = visual.Cartao(pai, borda=COR["borda_forte"])
         self.zona.pack(fill="x")
-        if ui.DND_FILES:
-            self.zona.drop_target_register(ui.DND_FILES)
+        if visual.DND_FILES:
+            self.zona.drop_target_register(visual.DND_FILES)
             self.zona.dnd_bind("<<Drop>>", self.app._soltou)
 
         # faixa de pausa (usuario, 10/11/2026: igual a da SNAC0234; antes a pausa era so o texto amarelo do status,
         # facil de passar batido): nota, motivo, o que fazer e o Continuar. Aparece so na pausa (`_mostrar_pausa`)
-        self.faixa_pausa = ui.Cartao(pai, bg=COR["aviso_fundo"], borda=COR["aviso_borda"])
+        self.faixa_pausa = visual.Cartao(pai, bg=COR["aviso_fundo"], borda=COR["aviso_borda"])
         textos = tk.Frame(self.faixa_pausa, bg=COR["aviso_fundo"])
-        textos.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(10))
+        textos.pack(side="left", fill="both", expand=True, padx=esp(4), pady=esp(3))
         self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"],
-                                     font=fonte(11, forte=True), anchor="w")
+                                     font=fonte("subtitulo", forte=True), anchor="w")
         self.pausa_titulo.pack(fill="x")
-        self.pausa_motivo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["texto"], font=fonte(10),
+        self.pausa_motivo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["texto"], font=fonte("corpo"),
                                      anchor="w", justify="left")
-        self.pausa_motivo.pack(fill="x", pady=(px(4), 0))
-        self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte(9),
+        self.pausa_motivo.pack(fill="x", pady=(esp(1), 0))
+        self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte("pequeno"),
                                         anchor="w", justify="left")
-        self.pausa_instrucao.pack(fill="x", pady=(px(2), 0))
-        ui.Botao(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar).pack(
-            side="right", padx=px(14))
+        self.pausa_instrucao.pack(fill="x", pady=(esp(0.5), 0))
+        visual.Botao(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar).pack(
+            side="right", padx=esp(4))
         textos.bind("<Configure>", lambda e: [r.configure(wraplength=max(e.width, px(200)))
                                               for r in (self.pausa_motivo, self.pausa_instrucao)])
 
         # console recolhivel ("Detalhes"; usuario, 09/11/2026: aberto, tirava espaco da tabela). Abre sozinho com erro
         # ou aviso (`escrever`)
         rodape = tk.Frame(pai, bg=COR["fundo"])
-        rodape.pack(side="bottom", fill="x", pady=(6, 0))
+        rodape.pack(side="bottom", fill="x", pady=(esp(2), 0))
         self.b_console = self.app._link(rodape, "", self.alternar_console)
         self.b_console.pack(side="left")
-        self.app._link(rodape, "Copiar detalhes", self.copiar).pack(side="left", padx=(px(14), 0))
+        self.app._link(rodape, "Copiar detalhes", self.copiar).pack(side="left", padx=(esp(4), 0))
         self.app._link(rodape, "Abrir pasta de logs", lambda: __import__("os").startfile(pasta_logs())).pack(
-            side="left", padx=(px(14), 0))
-        self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(px(14), 0))
+            side="left", padx=(esp(4), 0))
+        self.app._link(rodape, "Conferir com os logs", self.conferir).pack(side="left", padx=(esp(4), 0))
         self.app._link_versao(rodape).pack(side="right")
         self.caixa_saida = self.app._cartao(pai, bg=COR["console"])
-        self.saida = self.ui.Console(self.caixa_saida)  # rolagem propria (v1.13.4)
-        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o texto quadrado cobriria os cantos
+        self.saida = visual.Console(self.caixa_saida)  # rolagem propria (v1.13.4)
+        self.saida.pack(fill="x", padx=esp(1), pady=esp(1))  # margem: o texto quadrado cobriria os cantos
 
         # barra de baixo responsiva (usuario, 06/11/2026): botoes a esquerda, Parar a direita e as opcoes (Passo a
         # passo, NFs a lancar) no meio; se nao couberem na largura (janela estreita), descem para uma linha propria.
         # So aparecem os botoes que servem agora (usuario, 09/11/2026): parado = Iniciar/Continuar da linha N e
         # Simular; executando = Continuar (so na pausa) e Parar (`_botoes`)
         barra = self.barra_baixo = tk.Frame(pai, bg=COR["fundo"])
-        barra.pack(side="bottom", fill="x", pady=(12, 10))
+        barra.pack(side="bottom", fill="x", pady=(esp(3), esp(3)))
         barra.columnconfigure(2, weight=1)
         botoes = tk.Frame(barra, bg=COR["fundo"])
         botoes.grid(row=0, column=0, sticky="w")
-        self.b_iniciar = ui.Botao(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
-        self.b_simular = ui.Botao(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
-        self.b_continuar = ui.Botao(botoes, text="Continuar", style="Primario.TButton",
+        self.b_iniciar = visual.Botao(botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
+        self.b_simular = visual.Botao(botoes, text="Simular", style="Secundario.TButton", command=self.simular)
+        self.b_continuar = visual.Botao(botoes, text="Continuar", style="Primario.TButton",
                                       command=self.continuar)
         self.botoes_visiveis = None
         opcoes = tk.Frame(barra, bg=COR["fundo"])
@@ -109,16 +112,16 @@ class Pagina0236:
         self.c_passo.pack(side="left")
         # quantidade de NFs a lancar: so digitos (ate 4); vazio = todas (escrito em cinza dentro do campo). A linha do
         # tempo previsto mostra "N de M nota(s)"
-        tk.Label(opcoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte(9)).pack(
-            side="left", padx=(px(14), px(6)))
+        tk.Label(opcoes, text="NFs a lançar:", bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno")).pack(
+            side="left", padx=(esp(4), esp(2)))
         so_numeros = (pai.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
         self.e_qtd = self.app._campo(opcoes, self.qtd_nfs, largura=64, validate="key", validatecommand=so_numeros)
         self.e_qtd.pack(side="left")
-        self.dica_qtd = tk.Label(opcoes, text="todas", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), cursor="xterm")
+        self.dica_qtd = tk.Label(opcoes, text="todas", bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"), cursor="xterm")
         self.dica_qtd.bind("<Button-1>", lambda _e: self.e_qtd.focus_set())
         for evento in ("<FocusIn>", "<FocusOut>"):
             self.e_qtd.bind(evento, lambda _e: self._dica_qtd(), add="+")
-        self.b_parar = ui.Botao(barra, text="Parar", style="Perigo.TButton", command=self.parar.set)
+        self.b_parar = visual.Botao(barra, text="Parar", style="Perigo.TButton", command=self.parar.set)
         embaixo = [None]
 
         def arrumar(_evento=None):
@@ -132,25 +135,25 @@ class Pagina0236:
                 return
             embaixo[0] = descer
             if descer:
-                opcoes.grid(row=1, column=0, columnspan=4, sticky="w", pady=(px(10), 0))
+                opcoes.grid(row=1, column=0, columnspan=4, sticky="w", pady=(esp(3), 0))
             else:
-                opcoes.grid(row=0, column=1, sticky="w", padx=(px(14), 0), pady=0)
-        opcoes.grid(row=0, column=1, sticky="w", padx=(px(14), 0))
+                opcoes.grid(row=0, column=1, sticky="w", padx=(esp(4), 0), pady=0)
+        opcoes.grid(row=0, column=1, sticky="w", padx=(esp(4), 0))
         barra.bind("<Configure>", arrumar)
         botoes.bind("<Configure>", arrumar)  # o Iniciar muda de texto ("Continuar da linha N") e de largura
 
         # andamento num bloco so (usuario, 09/11/2026): status a esquerda, tempo previsto a direita, barra embaixo
         progresso = self.progresso = tk.Frame(pai, bg=COR["fundo"])
-        progresso.pack(side="bottom", fill="x", pady=(12, 0))
+        progresso.pack(side="bottom", fill="x", pady=(esp(3), 0))
         progresso.columnconfigure(0, weight=1)
-        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w",
+        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte("pequeno"), anchor="w",
                                justify="left", wraplength=px(500))
         self.status.grid(row=0, column=0, sticky="w")
         # tempo previsto (antes de iniciar e durante a execucao; `_atualizar_previsao`, a cada segundo)
-        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte(9, forte=True),
+        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno", forte=True),
                                  anchor="e", justify="right")
-        self.barra = ui.BarraFina(progresso)
-        self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(6), 0))
+        self.barra = visual.BarraFina(progresso)
+        self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(esp(2), 0))
         self.barra.grid_remove()  # aparece com a planilha (`_arrumar_andamento`)
 
         def quebrar(_evento=None):
@@ -174,12 +177,12 @@ class Pagina0236:
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=True)
         rolagem = self.app._rolagem(self.cartao, self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
-        self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
+        rolagem.pack(side="right", fill="y", padx=(0, esp(1)), pady=esp(2))
+        self.tabela.pack(side="left", fill="both", expand=True, padx=(esp(1), 0), pady=esp(1))  # margem: cantos redondos
         self.tabela.tag_configure("nota_par", background=COR["zebra"])
         self.tabela.tag_configure("nota_impar", background=COR["cartao"])
-        self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok"])
-        self.tabela.tag_configure("ok_serie", background=COR["ok_serie_fundo"], foreground=COR["ok"])
+        self.tabela.tag_configure("ok", background=COR["ok_fundo"], foreground=COR["ok_serie_texto"])
+        self.tabela.tag_configure("ok_serie", background=COR["ok_serie_fundo"], foreground=COR["ok_serie_texto"])
         self.tabela.tag_configure("erro", background=COR["erro_fundo"], foreground=COR["erro"])
         self.tabela.tag_configure("executando", background=COR["azul_fundo"], foreground=COR["texto"])
         self.tabela.tag_configure("pausado", background=COR["aviso_fundo"], foreground=COR["aviso"])
@@ -203,7 +206,7 @@ class Pagina0236:
         self.saida.configure(state="normal")
         self.saida.delete("1.0", "end")
         for texto in self.historico[-200:]:
-            self.saida.insert("end", texto + "\n", self.ui.tipo_mensagem(texto) or ())
+            self.saida.insert("end", texto + "\n", visual.tipo_mensagem(texto) or ())
         self.saida.see("end")
         self.saida.configure(state="disabled")
         self._botoes()
@@ -216,8 +219,8 @@ class Pagina0236:
     def _texto_estado(self, linha):
         nome = self.estados.get(linha, "pendente")
         if nome == "ok" and linha in self.serie_ponto:
-            return self.ui.ESTADOS["ok"] + "  ·  Série com '.'"
-        return self.ui.ESTADOS[nome]
+            return visual.ESTADOS["ok"] + "  ·  Série com '.'"
+        return visual.ESTADOS[nome]
 
     def _tags(self, linha, zebra):
         nome = self.estados.get(linha, "pendente")
@@ -242,7 +245,7 @@ class Pagina0236:
         com_andamento = bool(self.caminho or self.app.baixando)
         self.barra.grid() if com_andamento else self.barra.grid_remove()
         self.status.grid() if com_andamento or self.status_atual[0] else self.status.grid_remove()
-        self.progresso.pack_configure(pady=(12, 0) if com_andamento or self.status_atual[0] else 0)
+        self.progresso.pack_configure(pady=(esp(3), 0) if com_andamento or self.status_atual[0] else 0)
 
     def _arrumar_vazia(self):
         """Sem planilha: so a area de arrastar (grande), sem a tabela vazia. Com planilha: cartao compacto e tabela."""
@@ -252,7 +255,7 @@ class Pagina0236:
             self.zona.pack_configure(fill="both", expand=True)
         else:
             self.zona.pack_configure(fill="x", expand=False)
-            self.cartao.pack(fill="both", expand=True, pady=(self.ui.px(12), 0))
+            self.cartao.pack(fill="both", expand=True, pady=(esp(3), 0))
 
     def _resumo(self):
         """Texto do cartao da planilha: notas, itens e, sem erros, concluidas e pendentes (contadas por nota)."""
@@ -282,10 +285,9 @@ class Pagina0236:
         if self.dica:
             self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
             return
-        COR, px = self.ui.COR, self.ui.px
         self.dica = tk.Toplevel(self.app)
         self.dica.overrideredirect(True)
-        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=self.ui.fonte(9), padx=px(8), pady=px(4),
+        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=fonte("pequeno"), padx=esp(2), pady=esp(1),
                  justify="left").pack()
         self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
 
@@ -295,10 +297,16 @@ class Pagina0236:
             self.dica = None
 
     # ---------- console recolhivel ----------
+    def abrir_console(self):
+        """Abre os Detalhes sem mudar a preferencia salva (o Simular e os erros abrem sozinhos)."""
+        if not self.console_aberto:
+            self.console_aberto = True
+            self._mostrar_console()
+
     def alternar_console(self):
         self.console_aberto = not self.console_aberto
         self.app.config_usuario["console_0236"] = self.console_aberto
-        self.ui.gravar_config(self.app.config_usuario)
+        self.app.salvar_config()
         self._mostrar_console()
 
     def _mostrar_console(self):
@@ -323,7 +331,6 @@ class Pagina0236:
             pass
 
     def _pintar_zona(self):
-        COR, px, fonte = self.ui.COR, self.ui.px, self.ui.fonte
         for filho in self.zona.winfo_children():
             filho.destroy()
         if not self.caminho:
@@ -333,19 +340,19 @@ class Pagina0236:
         for evento in ("<Button-1>", "<Enter>", "<Leave>"):
             self.zona.unbind(evento)
         acoes = tk.Frame(self.zona, bg=COR["cartao"])
-        acoes.pack(side="right", padx=px(14))
+        acoes.pack(side="right", padx=esp(4))
         self.app._link(acoes, "Recarregar", self.recarregar, bg=COR["cartao"]).pack(side="right")
-        self.app._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, px(14)))
-        imagem = self.ui.icone_planilha(px(30), COR["erro"] if self.erros else COR["ok"], COR["cartao"])
+        self.app._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, esp(4)))
+        imagem = visual.icone_planilha(px(30), COR["erro"] if self.erros else COR["ok"], COR["cartao"])
         icone = tk.Label(self.zona, image=imagem, bg=COR["cartao"])
         icone.image = imagem
-        icone.pack(side="left", padx=(px(16), px(10)))
+        icone.pack(side="left", padx=(esp(4), esp(3)))
         textos = tk.Frame(self.zona, bg=COR["cartao"])
-        textos.pack(side="left", fill="x", expand=True, pady=px(8))
-        tk.Label(textos, text=Path(self.caminho).name, bg=COR["cartao"], fg=COR["texto"], font=fonte(10, forte=True),
+        textos.pack(side="left", fill="x", expand=True, pady=esp(2))
+        tk.Label(textos, text=Path(self.caminho).name, bg=COR["cartao"], fg=COR["texto"], font=fonte("corpo", forte=True),
                  anchor="w").pack(fill="x")
         self.rotulo_resumo = tk.Label(textos, text=self._resumo(), bg=COR["cartao"],
-                                      fg=COR["erro"] if self.erros else COR["suave"], font=fonte(9), anchor="w")
+                                      fg=COR["erro"] if self.erros else COR["suave"], font=fonte("pequeno"), anchor="w")
         self.rotulo_resumo.pack(fill="x")
 
     def _pintar_zona_vazia(self):
@@ -370,7 +377,7 @@ class Pagina0236:
         try:
             registros, notas, erros = snac0236.carregar(caminho)
         except Exception as erro:
-            messagebox.showerror("Planilha", f"Não consegui ler a planilha:\n{erro}")
+            self.app.avisar("Não consegui ler a planilha", str(erro), tipo="erro")
             return
         self.caminho, self.registros, self.notas, self.erros, self.estados = caminho, registros, notas, erros, {}
         self.app._lembrar_planilha("ultima_0236", caminho)  # atalho "Abrir a ultima" na tela sem planilha
@@ -459,9 +466,9 @@ class Pagina0236:
             for botao in (self.b_iniciar, self.b_simular, self.b_continuar):
                 botao.pack_forget()
             for indice, botao in enumerate(visiveis):
-                botao.pack(side="left", padx=(8 if indice else 0, 0))
+                botao.pack(side="left", padx=(esp(2) if indice else 0, 0))
         if self.ocupado and not self.b_parar.winfo_manager():
-            self.b_parar.grid(row=0, column=3, sticky="e", padx=(self.ui.px(14), 0))
+            self.b_parar.grid(row=0, column=3, sticky="e", padx=(esp(4), 0))
         elif not self.ocupado and self.b_parar.winfo_manager():
             self.b_parar.grid_remove()
         self._dica_qtd()
@@ -470,7 +477,8 @@ class Pagina0236:
     def simular(self):
         for nota in self.notas:
             self.escrever(f"Nota …{nota['chave'][-6:]}: {snac0236.descrever(nota)}")
-        self._status("Simulação no console (nada foi digitado)", "suave")
+        self.abrir_console()
+        self._status(f"Simulação de {qtd(len(self.notas), 'nota', 'notas')} nos Detalhes (nada foi digitado)", "suave")
 
     def iniciar(self):
         if not self._lote() or not self._pular_ja_integradas():
@@ -480,19 +488,22 @@ class Pagina0236:
             return
         faltam = len(self._pendentes())
         if not citrix_aberto():
-            messagebox.showwarning("Citrix não encontrado", "Não achei a janela do Citrix (Desktop Viewer).\nAbra a SNAC0236 e tente de novo.")
+            self.app.avisar("Citrix não encontrado", "Não achei a janela do Citrix (Desktop Viewer). Abra a SNAC0236 e "
+                            "tente de novo.", tipo="aviso")
             return
         itens = sum(len(n["itens"]) for n in notas)
-        if not messagebox.askokcancel(
-                "Iniciar", f"Preencher {qtd(len(notas), 'nota', 'notas')} ({qtd(itens, 'item', 'itens')}) na SNAC0236, a partir da linha "
-                           f"{notas[0]['itens'][0]['linha']}?"
-                           + (f" Das {faltam} pendentes, ficam {faltam - len(notas)} para depois (NFs a lançar: "
-                              f"{len(notas)})." if len(notas) < faltam else "") + "\n\nTempo previsto: "
-                           f"{snac0236.texto_duracao(snac0236.custo_previsto(notas))} (sem contar as pausas; "
-                           "a previsão se ajusta depois da 1ª nota).\n\nDepois do OK você terá 5 segundos para clicar no campo "
-                           "Chave Acesso NF-e (vazio).\n\nO robô clica em Integrar no fim de cada nota e pausa para você "
-                           "conferir; para a próxima, deixe o cursor na Chave e clique em Continuar.\n\nSe a planilha "
-                           f"{Path(self.caminho).name} estiver aberta no Excel, ela será salva e fechada (só ela)."):
+        resto = (f" Das {faltam} pendentes, ficam {faltam - len(notas)} para depois (NFs a lançar: {len(notas)})."
+                 if len(notas) < faltam else "")
+        if not self.app.perguntar(
+                f"Preencher {qtd(len(notas), 'nota', 'notas')} ({qtd(itens, 'item', 'itens')}) na SNAC0236?",
+                f"A partir da linha {notas[0]['itens'][0]['linha']}.{resto} Tempo previsto: "
+                f"{snac0236.texto_duracao(snac0236.custo_previsto(notas))}, sem contar as pausas (a previsão se ajusta "
+                "depois da 1ª nota).", sim="Iniciar",
+                lista=["Depois de Iniciar você terá 5 segundos para clicar no campo Chave Acesso NF-e (vazio).",
+                       "O robô clica em Integrar no fim de cada nota e segue para a próxima; se algo não conferir, "
+                       "ele pausa para você conferir.",
+                       f"Se a planilha {Path(self.caminho).name} estiver aberta no Excel, ela será salva e fechada "
+                       "(só ela)."]):
             return
         if not self._fechar_planilha_no_excel():
             return
@@ -508,14 +519,18 @@ class Pagina0236:
         self.app._atualizar_botoes()
         self._botoes()
         self._status("Iniciando...", "destaque")
+        self.app.contagem(self, "Clique no campo Chave Acesso NF-e no SRP")
         self._atualizar_previsao()
-        self.soltar_atalhos, falhas = atalhos_globais({VK_F8: lambda: self.fila.put(("parar",))})
-        self.escrever("Aviso: F8 ja esta em uso por outro programa; use o botao Parar ou o mouse no canto." if falhas
-                      else "Atalho: F8 para.")
+        self.pausar.clear()
+        self.soltar_atalhos, falhas = atalhos_globais({VK_F8: lambda: self.fila.put(("parar",)),
+                                                       VK_F9: lambda: self.fila.put(("pausa",))})
+        self.escrever("Aviso: F8/F9 ja estao em uso por outro programa; use os botoes ou o mouse no canto." if falhas
+                      else "Atalhos: F9 pausa ao fim da nota (e continua), F8 para.")
         intervalo = 0.5 if self.passo_a_passo.get() else 0
         if intervalo:
             self.escrever("Passo a passo ligado: 0,5 s antes de cada acao; a proxima acao aparece aqui e na linha de status.")
-        threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True).start()
+        self.thread = threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True)
+        self.thread.start()
 
     def _fechar_planilha_no_excel(self):
         """Salva e fecha no Excel SO a planilha carregada no robo (usuario, 06/11/2026): assim as notas concluidas sao
@@ -538,15 +553,15 @@ class Pagina0236:
             return True
         self.carregar(self.caminho)
         # registros com a cor: linha pintada de verde no Excel antes do Iniciar tambem conta como alteracao
-        messagebox.showwarning("Planilha alterada", "A planilha tinha alterações no Excel, que foram salvas. Recarreguei "
-                                                    "a planilha: confira as linhas e clique em Iniciar de novo.")
+        self.app.avisar("Planilha alterada", "A planilha tinha alterações no Excel, que foram salvas. Recarreguei a "
+                        "planilha: confira as linhas e clique em Iniciar de novo.", tipo="aviso")
         return False
 
     def _rodar(self, notas, intervalo):
         try:
             snac0236.executar(notas, "Desktop Viewer", 0.25, 4.0, 5, self.parar, self.fila.put,
                               lambda linha, nome: self.fila.put((linha, nome)), self.retomar, intervalo,
-                              serie_ponto=lambda linhas: self.fila.put(("serie_ponto", tuple(linhas))))
+                              serie_ponto=lambda linhas: self.fila.put(("serie_ponto", tuple(linhas))), pausar=self.pausar)
         finally:
             self.fila.put(None)
 
@@ -559,33 +574,51 @@ class Pagina0236:
             self.retomar.set()
 
     def _drenar(self):
+        """Trata as mensagens da thread do robo. Cada mensagem tem o seu try e o reagendamento fica no finally (ate a
+        v1.13.4 um TclError no meio descartava a mensagem que falhou; se fosse a do fim, a aba ficava ocupada)."""
         try:
             while True:
-                item = self.fila.get_nowait()
-                if item is None:
-                    if self.soltar_atalhos:
-                        self.soltar_atalhos()
-                        self.soltar_atalhos = None
-                    self.ocupado = self.pausado = False
-                    self.app.ocupado = False
-                    self.app._atualizar_botoes()
-                    self._fim()
-                elif item == ("parar",):
-                    self.escrever("F8: parando.")
-                    self.parar.set()
-                elif isinstance(item, tuple) and item[0] == "serie_ponto":
-                    self.serie_ponto.update(item[1])
-                    for linha in item[1]:
-                        self._atualizar_linha(linha)
-                elif isinstance(item, tuple):
-                    self._estado(*item)
-                else:
-                    self.escrever(item)
-        except queue.Empty:
-            pass
-        except tk.TclError:
-            pass  # widgets sendo refeitos (tema/monitor): o resto sai na proxima volta
-        self.app.after(100, self._drenar)
+                try:
+                    item = self.fila.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self._tratar(item)
+                except Exception:
+                    registrar_falha_tela(f"mensagem da SNAC0236: {item!r}"[:300])
+        finally:
+            self.app.after(100, self._drenar)
+
+    def _tratar(self, item):
+        if item is None:
+            if self.soltar_atalhos:
+                self.soltar_atalhos()
+                self.soltar_atalhos = None
+            self.ocupado = self.pausado = False
+            self.app.ocupado = False
+            self.app._atualizar_botoes()
+            self._fim()
+            visual.piscar_barra(self.app)
+        elif item == ("parar",):
+            self.escrever("F8: parando.")
+            self.parar.set()
+        elif item == ("pausa",):
+            if not self.ocupado:
+                return
+            if self.pausado:
+                self.continuar()
+            elif not self.pausar.is_set():
+                self.pausar.set()
+                self.escrever("F9: o robo pausa ao terminar a nota atual.")
+                self._status("Pausando ao fim da nota...", "aviso")
+        elif isinstance(item, tuple) and item[0] == "serie_ponto":
+            self.serie_ponto.update(item[1])
+            for linha in item[1]:
+                self._atualizar_linha(linha)
+        elif isinstance(item, tuple):
+            self._estado(*item)
+        else:
+            self.escrever(item)
 
     # ---------- tempo previsto ----------
     def _tique(self):
@@ -636,7 +669,7 @@ class Pagina0236:
             return
         notas, feitas = e["notas"], e["feitas"]
         util = self._tempo_util()
-        texto = f"Nota {min(feitas + 1, len(notas))} de {len(notas)}  ·  {self.ui.duracao(time.time() - e['inicio'])}"
+        texto = f"Nota {min(feitas + 1, len(notas))} de {len(notas)}  ·  {visual.duracao(time.time() - e['inicio'])}"
         if feitas >= len(notas):
             texto += "  ·  terminando…"
         else:
@@ -654,12 +687,12 @@ class Pagina0236:
 
     def _mostrar_previsao(self):
         if not self.previsao.winfo_manager():
-            self.previsao.grid(row=0, column=1, sticky="ne", padx=(self.ui.px(16), 0))
+            self.previsao.grid(row=0, column=1, sticky="ne", padx=(esp(4), 0))
 
     def _fim(self):
         if self.execucao:
             e, self.execucao = self.execucao, None
-            self.escrever(f"Tempo total: {self.ui.duracao(time.time() - e['inicio'])} ({e['feitas']} de "
+            self.escrever(f"Tempo total: {visual.duracao(time.time() - e['inicio'])} ({e['feitas']} de "
                           f"{len(e['notas'])} nota(s) concluída(s)).")
         self._atualizar_previsao()
         feitas, total = self._feitas(), len(self.registros)
@@ -670,9 +703,13 @@ class Pagina0236:
         self._botoes()
 
     def _estado(self, linha, nome):
+        anterior = self.estados.get(linha)
         self.estados[linha] = nome
         if nome == "pausado":
             self.pausado = True
+            if anterior != "pausado":  # o usuario costuma estar no Citrix: som e o botao piscando na barra de tarefas
+                self.app.bell()
+                visual.piscar_barra(self.app)
         elif nome == "executando":
             self.pausado = False
         self._contar_execucao(nome)
@@ -716,7 +753,11 @@ class Pagina0236:
                     pedidos.append(self.fila_pintar.get_nowait())
                 except queue.Empty:
                     break
-            self._pintar(pedidos)
+            try:
+                self._pintar(pedidos)
+            finally:
+                for _ in pedidos:  # o fechar da janela espera a fila zerar (unfinished_tasks)
+                    self.fila_pintar.task_done()
 
     def _pintar(self, pedidos):
         """Grava os pedidos (planilha, linhas, cor, comentarios), juntando os da mesma planilha e cor."""
@@ -762,7 +803,7 @@ class Pagina0236:
             _, notas, _ = snac0236.carregar(self.caminho)
             logs = snac0236.notas_nos_logs(pasta_logs())
         except Exception as erro:
-            messagebox.showerror("Conferir com os logs", f"Não consegui ler a planilha ou os logs:\n{erro}")
+            self.app.avisar("Não consegui ler a planilha ou os logs", str(erro), tipo="erro")
             return None
         return notas, snac0236.conferir_com_logs(notas, logs), logs
 
@@ -790,7 +831,7 @@ class Pagina0236:
         e nao pintadas (oferece pintar), verdes sem o 'Integrado com Sucesso' nos logs, verdes fora dos logs e as
         lancadas com '.' na Serie."""
         if not self.caminho:
-            messagebox.showinfo("Conferir com os logs", "Carregue a planilha da SNAC0236 primeiro.")
+            self.app.avisar("Conferir com os logs", "Carregue a planilha da SNAC0236 primeiro.")
             return
         if self.ocupado:
             return
@@ -827,11 +868,11 @@ class Pagina0236:
             self._status(f"Conferência: a planilha bate com os logs ({nome})", "ok")
             return
         self._status(f"Conferência: {len(nao)} sem verde, {len(sem)} sem confirmação (veja os detalhes)", "aviso")
-        if nao and messagebox.askyesno(
-                "Conferir com os logs", f"{qtd(len(nao), 'nota foi integrada', 'notas foram integradas')} pelo robô (o SRP disse 'Integrado com "
-                                        f"Sucesso') e {'não está verde' if len(nao) == 1 else 'não estão verdes'} na planilha:\n\n"
-                                        + "\n".join(f"linha {self._linhas(n)}  (…{n['chave'][-6:]})" for n in nao[:15])
-                                        + ("\n..." if len(nao) > 15 else "") + "\n\nPintar de verde agora?"):
+        if nao and self.app.perguntar(
+                "Pintar de verde agora?", f"{qtd(len(nao), 'nota foi integrada', 'notas foram integradas')} pelo robô (o "
+                f"SRP disse 'Integrado com Sucesso') e {'não está verde' if len(nao) == 1 else 'não estão verdes'} na "
+                "planilha:", sim="Pintar de verde", nao="Agora não",
+                lista=[f"linha {self._linhas(n)}  (…{n['chave'][-6:]})" for n in nao], titulo_janela="Conferir com os logs"):
             self._pintar_lancadas([n for n in self.notas if n["chave"] in {x["chave"] for x in nao}], logs)
             self._status(f"{qtd(len(nao), 'nota pintada', 'notas pintadas')} de verde (veja os detalhes)", "ok")
 
@@ -847,15 +888,13 @@ class Pagina0236:
         ja = [n for n in lote if logs.get(n["chave"][-6:], {}).get("sucesso")]
         if not ja:
             return True
-        resposta = messagebox.askyesnocancel(
-            "Notas já integradas", f"Segundo os logs, {qtd(len(ja), 'nota deste lote já foi integrada', 'notas deste lote já foram integradas')} pelo robô (o "
-                                   "SRP disse 'Integrado com Sucesso'), mas não estão verdes na planilha:\n\n"
-                                   + "\n".join(f"linha {self._linhas(n)}  (…{n['chave'][-6:]}, "
-                                                f"{logs[n['chave'][-6:]]['quando']})" for n in ja[:15])
-                                   + ("\n..." if len(ja) > 15 else "")
-                                   + "\n\nLançar de novo faria o SRP dizer que o documento já existe e o robô poria "
-                                     "'.' na Série (documento duplicado).\n\nSim: pintar de verde e pular essas.\n"
-                                     "Não: lançar assim mesmo.\nCancelar: não iniciar.")
+        resposta = visual.dialogo(
+            self.app, "Notas já integradas", f"Segundo os logs, {qtd(len(ja), 'nota deste lote já foi integrada', 'notas deste lote já foram integradas')} "
+            "pelo robô (o SRP disse 'Integrado com Sucesso'), mas não estão verdes na planilha. Lançar de novo faria o "
+            "SRP dizer que o documento já existe e o robô poria '.' na Série (documento duplicado).",
+            [("Cancelar", None, "Secundario.TButton"), ("Lançar assim mesmo", False, "Perigo.TButton"),
+             ("Pintar de verde e pular", True, "Primario.TButton")], tipo="aviso", padrao=2, cancelar=None,
+            lista=[f"linha {self._linhas(n)}  (…{n['chave'][-6:]}, {logs[n['chave'][-6:]]['quando']})" for n in ja])
         if resposta is None:
             return False
         if resposta:
@@ -867,7 +906,7 @@ class Pagina0236:
     # ---------- mensagens ----------
     def escrever(self, texto):
         self.historico.append(texto)
-        tipo = self.ui.tipo_mensagem(texto)
+        tipo = visual.tipo_mensagem(texto)
         self.saida.configure(state="normal")
         self.saida.insert("end", texto + "\n", tipo or ())
         self.saida.see("end")
@@ -885,7 +924,7 @@ class Pagina0236:
 
     def _status(self, texto, cor="suave"):
         self.status_atual = (texto, cor)
-        self.status.configure(text=com_acentos(texto), fg=self.ui.COR[cor])
+        self.status.configure(text=com_acentos(texto), fg=COR[cor])
         self._arrumar_andamento()
 
     def _mostrar_pausa(self):
@@ -904,11 +943,11 @@ class Pagina0236:
             self.pausa_motivo.configure(text=com_acentos(motivo[:1].upper() + motivo[1:]))
             self.pausa_instrucao.configure(text=com_acentos(instrucao[:1].upper() + instrucao[1:]))
             if motivo:
-                self.pausa_motivo.pack(fill="x", pady=(self.ui.px(4), 0), before=self.pausa_instrucao)
+                self.pausa_motivo.pack(fill="x", pady=(esp(1), 0), before=self.pausa_instrucao)
             else:
                 self.pausa_motivo.pack_forget()
             if not self.faixa_pausa.winfo_manager():
-                self.faixa_pausa.pack(fill="x", pady=(self.ui.px(12), 0), after=self.zona)
+                self.faixa_pausa.pack(fill="x", pady=(esp(3), 0), after=self.zona)
         except (tk.TclError, AttributeError):
             pass  # aba ainda nao montada
 

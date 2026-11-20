@@ -1,7 +1,5 @@
 """Janela do robo do SRP: arrastar a planilha, simular, preencher, retomar e recarregar."""
-import ctypes
 import json
-import math
 import os
 import queue
 import re
@@ -9,160 +7,36 @@ import sys
 import threading
 import time
 import tkinter as tk
-import types
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from PIL import ImageTk
 
-# customtkinter (v1.13.0; usuario, 10/11/2026: visual limitado): botoes arredondados (`Botao`) e a barra (`BarraFina`).
-# O app cuida sozinho do tema (PALETAS) e da escala (px/fonte), entao: sem o darkdetect (o platform.release() dele
-# custava ~0,1 s na abertura), escala do customtkinter fixa em 1 e sem os lacos dele rodando junto com o robo
-# (tema a cada 30 ms e DPI a cada 100 ms; a troca de monitor e o _talvez_mudou_monitor).
-if sys.modules.get("darkdetect") is None:  # o exe sai sem ele (build.ps1)
-    sys.modules["darkdetect"] = types.SimpleNamespace(theme=lambda: "Light")
-import customtkinter as ctk  # noqa: E402
-
-ctk.deactivate_automatic_dpi_awareness()
-ctk.set_appearance_mode("light")
-ctk.AppearanceModeTracker.update = classmethod(lambda cls: None)
-ctk.ScalingTracker.check_dpi_scaling = classmethod(lambda cls: None)
-
 from core import (VK_F8, VK_F9, aplicar_atualizacao, aplicar_sugestoes, atalhos_globais, baixar_atualizacao, registrar_atualizacao, verificar_atualizacao, caminho_tesseract, citrix_aberto, contas_suspeitas, descrever, executar,
-                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, com_acentos)
+                  gravar_progresso, itens_repetidos, ler_planilha, ler_progresso, pasta_base, pasta_logs, qtd, validar, com_acentos,
+                  registrar_falha_tela)
 from gui_snac0236 import Pagina0236
 from snac0236 import texto_duracao
 from icone import desenhar
 from versao import NOME, VERSAO
+import visual
+from visual import (COR, DND_FILES, ESTADOS, PALETAS, TEMAS, BarraFina, Botao, Cartao, Console, RaizTk,
+                    area_util, ativar_dpi, barra_titulo, ctk, dialogo, dpi_da_janela, duracao, esp, fonte,
+                    icone_planilha, piscar_barra, px, retangulo_redondo, tema_do_windows, tipo_mensagem)
 
-try:
-    from tkinterdnd2 import DND_FILES, TkinterDnD
-    RaizTk = TkinterDnD.Tk
-except Exception:  # sem arrastar e soltar: o botao de escolher continua funcionando
-    DND_FILES, RaizTk = None, tk.Tk
-
-PALETAS = {
-    "claro": {
-        "fundo": "#f6f7f9", "cartao": "#ffffff", "borda": "#e2e5ea", "borda_forte": "#c9ced6", "texto": "#1f2328",
-        "suave": "#6b7280", "destaque": "#2f5bd3", "destaque_hover": "#2749ad", "no_destaque": "#ffffff",
-        "ok": "#1a7f37", "ok_fundo": "#d9f2e1", "erro": "#c62828", "erro_fundo": "#fdf2f2", "aviso": "#9a6700",
-        "azul_fundo": "#eef3fd", "cinza_fundo": "#f1f3f5", "botao": "#e8ebef", "botao_hover": "#dde1e7", "console": "#fbfbfc", "console_texto": "#4b5260",
-        "aviso_fundo": "#fff7e0", "aviso_borda": "#efd08a", "zebra": "#f9fafb", "ok_serie_fundo": "#b4e0c1",
-    },
-    "escuro": {
-        "fundo": "#17191e", "cartao": "#1f2229", "borda": "#2e333c", "borda_forte": "#454c58", "texto": "#e6e8eb",
-        "suave": "#9aa1ab", "destaque": "#6b93f0", "destaque_hover": "#86a7f3", "no_destaque": "#0f1115",
-        "ok": "#57c27a", "ok_fundo": "#1f3d2a", "erro": "#f07a7a", "erro_fundo": "#2e1f21", "aviso": "#d9a441",
-        "azul_fundo": "#222c40", "cinza_fundo": "#262a32", "botao": "#2b3039", "botao_hover": "#353b46", "console": "#1b1e24", "console_texto": "#b8bec7",
-        "aviso_fundo": "#2b2517", "aviso_borda": "#6b5524", "zebra": "#232730", "ok_serie_fundo": "#2c5a3b",
-    },
-}
-TEMAS = {"auto": "Automático", "claro": "Claro", "escuro": "Escuro"}  # nomes no seletor das Opcoes
 FILTROS = (("todas", "Todas", None), ("pendentes", "Pendentes", {"pendente", "executando"}), ("pausadas", "Pausadas", {"pausado"}),
            ("erros", "Erros", {"erro"}), ("concluidas", "Concluídas", {"ok"}))
 # ritmo da SNAC0234 para o tempo previsto antes de iniciar (v1.8.0: media de ~2,3 s por linha, 194 linhas dos logs de 30/10)
 SEG_LINHA = 2.3
 CHECAR_A_CADA = 60 * 60 * 1000  # ms: com o app aberto o dia todo, a versao nova aparece sem precisar reabrir
+PAUSA_PADRAO = 0.25  # s entre teclas na SNAC0234 (Opcoes)
+ESPERA_FECHAR = 15  # s: no X com o robo rodando, espera ele parar (e a pintura da planilha terminar) ate isso
 MARCA_TROCADA = " ✎"  # na celula da Conta trocada pela sugestao do SRP
 # telas do SRP, uma aba cada: (chave, codigo, nome no SRP, subtitulo da janela)
 TELAS = (("snac0234", "SNAC0234", "Requisição Suprimento", "Preenchimento de requisições do SRP a partir da planilha"),
          ("snac0236", "SNAC0236", "Documento Recebimento", "Digitação de documentos de recebimento a partir da planilha"))
-COR = dict(PALETAS["claro"])
-FONTE = "Segoe UI"
-FONTE_FORTE = "Segoe UI Semibold"
-ESTADOS = {"pendente": "○  Pendente", "executando": "●  Em andamento", "pausado": "●  Pausada", "ok": "●  Concluída", "erro": "●  Erro"}
 ARQUIVO_CONFIG = pasta_base() / "config.json"
-ESCALA = 1.0  # DPI do monitor / 96; tamanhos em pixels passam por px()
 
-
-def px(valor):
-    return max(1, round(valor * ESCALA))
-
-
-def fonte(pontos, forte=False, mono=False):
-    """Fonte com tamanho em pixels da escala atual (tamanho negativo = pixels no Tk): nao depende do cache do
-    tk scaling, que deixava parte das fontes no tamanho do monitor anterior."""
-    familia = "Consolas" if mono else (FONTE_FORTE if forte else FONTE)
-    return (familia, -max(1, round(pontos * ESCALA * 96 / 72)))
-
-
-def ativar_dpi():
-    """Declara ao Windows que o app desenha na escala de cada monitor (sem isso, a 150% a janela fica desfocada).
-    Precisa rodar antes de criar qualquer janela."""
-    try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # por monitor (v2)
-        return
-    except (AttributeError, OSError):
-        pass
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except (AttributeError, OSError):
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except (AttributeError, OSError):
-            pass
-
-
-def dpi_da_janela(janela):
-    try:
-        return ctypes.windll.user32.GetDpiForWindow(int(janela.wm_frame(), 16)) or 96
-    except (AttributeError, OSError, ValueError):
-        return 96
-
-
-def area_util():
-    """(esq, topo, dir, base) da area de trabalho do monitor principal, sem a barra de tarefas."""
-    try:
-        import ctypes.wintypes
-        ret = ctypes.wintypes.RECT()
-        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(ret), 0)  # SPI_GETWORKAREA
-        return ret.left, ret.top, ret.right, ret.bottom
-    except (AttributeError, OSError):
-        return 0, 0, 1366, 728
-
-
-def tema_do_windows():
-    """'claro' ou 'escuro' conforme o modo de cor dos apps no Windows (claro se nao der para ler)."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as chave:
-            return "claro" if winreg.QueryValueEx(chave, "AppsUseLightTheme")[0] else "escuro"
-    except OSError:
-        return "claro"
-
-
-def barra_titulo(janela):
-    """Barra de titulo do Windows no tema do app (escura no escuro). Atributo 20 do DWM (Windows 10 20H1+ e 11; 19
-    nas builds antigas); sem ele, a barra fica como esta. O SetWindowPos com FRAMECHANGED redesenha a moldura na
-    hora (sem isso a cor so muda quando a janela perde e ganha o foco)."""
-    try:
-        janela.update_idletasks()
-        hwnd = ctypes.windll.user32.GetParent(janela.winfo_id())
-        if not hwnd:
-            return
-        valor = ctypes.c_int(int(COR["fundo"] == PALETAS["escuro"]["fundo"]))
-        for atributo in (20, 19):
-            if not ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, atributo, ctypes.byref(valor), ctypes.sizeof(valor)):
-                break
-        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x27)  # FRAMECHANGED|NOZORDER|NOSIZE|NOMOVE
-    except (AttributeError, OSError, tk.TclError):
-        pass
-
-
-def tipo_mensagem(texto):
-    """Cor da mensagem no console: 'erro', 'aviso', 'srp' ou None."""
-    if re.search(r"Interrompido|Nao iniciei|^Erro|falhou|nao encontrad", texto):
-        return "erro"
-    if ": SRP: " in texto:
-        return "srp"
-    if re.search(r"AVISO|ATENCAO|PAUSADO|Pausado|Ainda pausado|^Aviso|^F9", texto):
-        return "aviso"
-    return None
-
-
-def duracao(segundos):
-    segundos = int(segundos)
-    return f"{segundos // 3600}:{segundos // 60 % 60:02d}:{segundos % 60:02d}" if segundos >= 3600 else f"{segundos // 60:02d}:{segundos % 60:02d}"
 
 
 def ler_config():
@@ -173,189 +47,14 @@ def ler_config():
 
 
 def gravar_config(dados):
+    """Grava o config.json por um arquivo temporario trocado de uma vez (os.replace): o app fechado no meio da
+    gravacao (queda de energia, Citrix desconectado) nao deixa o arquivo pela metade e as preferencias perdidas."""
+    temporario = ARQUIVO_CONFIG.with_name(ARQUIVO_CONFIG.name + ".tmp")
     try:
-        ARQUIVO_CONFIG.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporario.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporario, ARQUIVO_CONFIG)
     except OSError:
         pass
-
-
-class BarraFina(ctk.CTkProgressBar):
-    """Barra de progresso fina de pontas redondas; aceita configure(value=, maximum=) e barra["value"] como a
-    ttk.Progressbar (a do clam ignora a espessura). So redesenha quando a fracao muda."""
-
-    def __init__(self, pai):
-        self._valor, self._maximo, self._fracao, self._cor = 0, 1, None, COR["destaque"]
-        super().__init__(pai, height=px(6), corner_radius=px(3), border_width=0, fg_color=COR["borda"],
-                         progress_color=COR["destaque"], mode="determinate")
-        self._desenhar()
-
-    def _desenhar(self):
-        fracao = max(0.0, min(1.0, self._valor / self._maximo)) if self._maximo else 0.0
-        if fracao != self._fracao:
-            self._fracao = fracao
-            self.set(fracao)
-            cor = COR["destaque"] if fracao > 0 else COR["borda"]  # em 0 o customtkinter ainda desenha a ponta redonda
-            if cor != self._cor:
-                self._cor = cor
-                ctk.CTkProgressBar.configure(self, progress_color=cor)
-
-    def configure(self, require_redraw=False, **opcoes):
-        if "value" in opcoes or "maximum" in opcoes:
-            self._valor = opcoes.pop("value", self._valor)
-            self._maximo = opcoes.pop("maximum", self._maximo) or 1
-            self._desenhar()
-        return super().configure(require_redraw, **opcoes) if (require_redraw or opcoes) else None
-
-    config = configure
-
-    def __setitem__(self, chave, valor):
-        self.configure(**{chave: valor})
-
-    def __getitem__(self, chave):
-        return {"value": self._valor, "maximum": self._maximo}.get(chave) if chave in ("value", "maximum") else super().__getitem__(chave)
-
-
-class Botao(ctk.CTkButton):
-    """Botao de cantos redondos (customtkinter) que aceita os style= dos ttk.Button de antes ("Primario.TButton",
-    "Secundario.TButton", "Perigo.TButton") e state=. Largura = texto + 16 px de cada lado (o CTkButton nao tem
-    padding). O configure so repassa o que mudou: o _atualizar_botoes reconfigura a cada estado."""
-
-    def __init__(self, pai, text="", style="Secundario.TButton", command=None, state="normal"):
-        self._tk_pai, self._estilo, self._estado, self._texto = pai.tk, style, state, text
-        super().__init__(pai, command=command, corner_radius=px(6), border_width=0, height=px(34), **self._opcoes())
-        self._aplicadas = self._opcoes()
-
-    def _opcoes(self):
-        tipo = self._estilo.split(".")[0]
-        primario = tipo == "Primario"
-        letra = fonte(10, forte=primario)
-        largura = max(px(72), int(self._tk_pai.call("font", "measure", letra, self._texto)) + px(32))
-        opcoes = dict(text=self._texto, font=letra, width=largura, state=self._estado,
-                      fg_color=COR["destaque"] if primario else COR["botao"],
-                      hover_color=COR["destaque_hover"] if primario else COR["botao_hover"],
-                      text_color=COR["no_destaque"] if primario else COR["erro"] if tipo == "Perigo" else COR["texto"],
-                      text_color_disabled=COR["suave"] if primario else COR["borda_forte"])
-        if self._estado == "disabled":
-            opcoes["fg_color"] = COR["cinza_fundo"]
-        return opcoes
-
-    def configure(self, require_redraw=False, **opcoes):
-        if not hasattr(self, "_aplicadas"):  # chamadas do proprio CTkButton durante o __init__ (cursor)
-            return super().configure(require_redraw, **opcoes)
-        self._estilo = opcoes.pop("style", self._estilo)
-        self._estado = opcoes.pop("state", self._estado)
-        self._texto = opcoes.pop("text", self._texto)
-        novas = self._opcoes()
-        mudou = {k: v for k, v in novas.items() if self._aplicadas.get(k) != v}
-        self._aplicadas = novas
-        if mudou or opcoes or require_redraw:
-            super().configure(require_redraw, **mudou, **opcoes)
-
-    config = configure
-
-
-class Cartao(ctk.CTkFrame):
-    """Cartao de cantos redondos (customtkinter) que aceita as opcoes de tk.Frame que o app usa: bg (fundo),
-    highlightbackground (borda), highlightthickness (0 = sem borda); highlightcolor e cursor sao ignorados (o
-    CTkFrame e coberto pelo proprio Canvas). Filhos tk com o fundo do cartao precisam de margem de ~4 px para nao
-    cobrir os cantos. Arrastar e soltar: registra o cartao e o Canvas de dentro (e ele que recebe o mouse)."""
-
-    def __init__(self, pai, bg=None, borda=None, raio=8):
-        super().__init__(pai, corner_radius=px(raio), border_width=1, fg_color=bg or COR["cartao"],
-                         border_color=borda or COR["borda"], width=px(40), height=px(40))
-        self._pronto = True
-
-    def configure(self, require_redraw=False, **opcoes):
-        if not hasattr(self, "_pronto"):
-            return super().configure(require_redraw, **opcoes)
-        traduzidas = {}
-        for chave, valor in opcoes.items():
-            if chave in ("bg", "background"):
-                traduzidas["fg_color"] = valor
-            elif chave == "highlightbackground":
-                traduzidas["border_color"] = valor
-            elif chave == "highlightthickness":
-                traduzidas["border_width"] = 1 if valor else 0
-            elif chave not in ("highlightcolor", "cursor"):
-                traduzidas[chave] = valor
-        return super().configure(require_redraw, **traduzidas) if traduzidas or require_redraw else None
-
-    config = configure
-
-    def drop_target_register(self, *tipos):
-        tk.BaseWidget.drop_target_register(self, *tipos)
-        self._canvas.drop_target_register(*tipos)
-
-    def dnd_bind(self, sequencia=None, funcao=None, add=None):
-        self._canvas.dnd_bind(sequencia, funcao, add)
-        return tk.BaseWidget.dnd_bind(self, sequencia, funcao, add)
-
-
-class Console(ctk.CTkTextbox):
-    """Detalhes (log da execucao): texto so leitura com barra de rolagem fina que so aparece quando o texto passa das
-    `linhas` visiveis (v1.13.4). O CTkTextbox confere a barra num laco a cada 200 ms; aqui so confere depois de
-    escrever/apagar e quando o tamanho muda (nada rodando em segundo plano). Cores por tipo: tags erro/aviso/srp."""
-
-    def __init__(self, pai, linhas=6):
-        letra = fonte(9, mono=True)
-        altura = linhas * int(pai.tk.call("font", "metrics", letra, "-linespace")) + 2 * px(6) + 2 * px(3) + px(4)
-        super().__init__(pai, height=altura, corner_radius=0, border_width=0, border_spacing=px(3), wrap="word",
-                         state="disabled", fg_color=COR["console"], text_color=COR["console_texto"], font=letra,
-                         scrollbar_button_color=COR["borda_forte"], scrollbar_button_hover_color=COR["suave"],
-                         padx=px(8), pady=px(6))
-        self._conferindo = None
-        self._textbox.bind("<Configure>", lambda _e: self._conferir_logo(), add="+")
-        for tipo, cor in (("erro", "erro"), ("aviso", "aviso"), ("srp", "destaque")):
-            self.tag_config(tipo, foreground=COR[cor])
-
-    def _check_if_scrollbars_needed(self, event=None, continue_loop=False):
-        self._conferindo = None
-        if self.winfo_exists():
-            super()._check_if_scrollbars_needed(event, False)
-
-    def _conferir_logo(self):
-        if self._conferindo is None:
-            self._conferindo = self.after(50, self._check_if_scrollbars_needed)
-
-    def insert(self, index, text, tags=None):
-        self._conferir_logo()
-        return super().insert(index, text, tags)
-
-    def delete(self, index1, index2=None):
-        self._conferir_logo()
-        return super().delete(index1, index2)
-
-
-def icone_planilha(lado, cor, fundo):
-    """Icone de planilha desenhado (v1.13.3; o caractere da fonte saia serrilhado): folha de cantos redondos na `cor`,
-    com a linha do cabecalho e a grade vazadas na cor do `fundo`; desenhado 4x e reduzido para suavizar."""
-    from PIL import Image, ImageDraw
-    grande = lado * 4
-    imagem = Image.new("RGBA", (grande, grande), (0, 0, 0, 0))
-    desenho = ImageDraw.Draw(imagem)
-    x0 = y0 = grande * 0.08
-    x1 = y1 = grande * 0.92
-    desenho.rounded_rectangle((x0, y0, x1, y1), radius=grande * 0.16, fill=cor)
-    traco = max(4, grande // 16)
-    cabecalho = y0 + (y1 - y0) * 0.32
-    for fracao in (0.32, 0.55, 0.78):
-        y = y0 + (y1 - y0) * fracao
-        desenho.line([(x0, y), (x1, y)], fill=fundo, width=traco)
-    x = x0 + (x1 - x0) * 0.38
-    desenho.line([(x, cabecalho), (x, y1)], fill=fundo, width=traco)
-    return ImageTk.PhotoImage(imagem.resize((lado, lado), Image.LANCZOS))
-
-
-def retangulo_redondo(tela, x1, y1, x2, y2, raio, **opcoes):
-    """Retangulo de cantos redondos num Canvas (aceita fill, outline, width, dash, tags). Cada canto = arco de 9
-    pontos: o smooth=True do Tk so chanfrava o canto."""
-    pontos = []
-    for cx, cy, inicio in ((x2 - raio, y1 + raio, -90), (x2 - raio, y2 - raio, 0), (x1 + raio, y2 - raio, 90),
-                           (x1 + raio, y1 + raio, 180)):
-        for passo in range(9):
-            angulo = math.radians(inicio + passo * 90 / 8)
-            pontos += (cx + raio * math.cos(angulo), cy + raio * math.sin(angulo))
-    return tela.create_polygon(pontos, **opcoes)
 
 
 class App(RaizTk):
@@ -402,8 +101,10 @@ class App(RaizTk):
         self.thread = None
         self.concluidas = 0
         self.limite = tk.StringVar(value="0")
-        self.pausa = tk.StringVar(value="0.25")
-        self.conferir = tk.BooleanVar(value=caminho_tesseract() is not None)
+        # pausa e conferir ficam no config.json (v1.14.0); sem o Tesseract a conferencia fica desligada
+        pausa = self.config_usuario.get("pausa_0234", PAUSA_PADRAO)
+        self.pausa = tk.StringVar(value=f"{pausa:g}" if isinstance(pausa, (int, float)) and 0.05 <= pausa <= 5 else f"{PAUSA_PADRAO:g}")
+        self.conferir = tk.BooleanVar(value=caminho_tesseract() is not None and bool(self.config_usuario.get("conferir_0234", True)))
         if DND_FILES:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._soltou)
@@ -411,15 +112,101 @@ class App(RaizTk):
         self.checando = False
         self.links_versao = []
         self.baixando = None  # versao sendo baixada (o andamento aparece na aba aberta e no link da versao)
-        self.p0236 = Pagina0236(self, sys.modules[__name__])
+        self.p0236 = Pagina0236(self)
         self._construir()
         self.after_idle(barra_titulo, self)  # a moldura do Windows so existe depois que a janela aparece
         self.bind("<Configure>", self._talvez_mudou_monitor)
+        self.protocol("WM_DELETE_WINDOW", self.fechar)
+        # atalhos de teclado (v1.14.0): valem na janela principal (nao nos dialogos), na aba aberta
+        for sequencia in ("<Control-o>", "<Control-O>"):
+            self.bind(sequencia, lambda _e: self._atalho("escolher"))
+        self.bind("<F5>", lambda _e: self._atalho("recarregar"))
+        for numero, (chave, *_) in enumerate(TELAS, start=1):
+            self.bind(f"<Control-Key-{numero}>", lambda _e, c=chave: self.trocar_aba(c))
+        self.fechando = None  # hora em que o usuario pediu para fechar com o robo rodando (espera ele parar)
         threading.Thread(target=self._vigiar_citrix, daemon=True).start()
         self.after(100, self._drenar)
         self.after(1000, self._tique)
         if getattr(sys, "frozen", False):  # so no exe; rodando pelo codigo-fonte nao se atualiza sozinho
             self.after(2000, self._checar_atualizacao)
+
+    def report_callback_exception(self, tipo, valor, rastro):
+        """Erro dentro de um callback do Tk: vai para logs\\app-erros.log (o exe nao tem console para mostrar)."""
+        try:
+            raise valor.with_traceback(rastro)
+        except Exception:
+            registrar_falha_tela("callback da janela")
+        if not getattr(sys, "frozen", False):  # pelo codigo-fonte, mostra tambem no terminal
+            super().report_callback_exception(tipo, valor, rastro)
+
+    # ---------- dialogos (no tema do app) ----------
+    def perguntar(self, titulo, texto, sim="OK", nao="Cancelar", perigo=False, lista=None, tipo="pergunta", titulo_janela=None):
+        """Sim/nao. Com `perigo` o botao do sim fica vermelho e o Enter escolhe o nao (o seguro)."""
+        botoes = [(nao, False, "Secundario.TButton"), (sim, True, "Perigo.TButton" if perigo else "Primario.TButton")]
+        return bool(dialogo(self, titulo, texto, botoes, tipo="aviso" if perigo else tipo, lista=lista,
+                            padrao=0 if perigo else 1, cancelar=False, titulo_janela=titulo_janela))
+
+    def avisar(self, titulo, texto, tipo="info", lista=None):
+        dialogo(self, titulo, texto, [("OK", True, "Primario.TButton")], tipo=tipo, lista=lista, padrao=0)
+
+    def salvar_config(self):
+        """Grava as preferencias (self.config_usuario) no config.json; as duas abas gravam por aqui."""
+        gravar_config(self.config_usuario)
+
+    def _atalho(self, acao):
+        """Ctrl+O (escolher planilha) e F5 (recarregar) na aba aberta; nada durante um preenchimento."""
+        if self.ocupado or self.p0236.ocupado or self.baixando:
+            return
+        pagina = self.p0236 if self.aba == "snac0236" else self
+        getattr(pagina, acao)()
+
+    # ---------- fechar ----------
+    def fechar(self):
+        """X da janela (v1.14.0; ate a v1.13.4 fechava na hora e matava o robo no meio da linha, sem perguntar). Com o
+        robo rodando: confirma, aciona o Parar das duas abas e fecha quando a thread terminar (no maximo
+        ESPERA_FECHAR s). Antes de fechar espera a pintura da planilha da SNAC0236 terminar."""
+        if self.fechando:
+            return
+        if self.baixando:
+            if not self.perguntar("Fechar", "A atualização está sendo baixada. Fechar agora cancela a atualização.",
+                                  "Fechar mesmo assim", "Continuar baixando", perigo=True):
+                return
+            self.destroy()
+            return
+        if self.ocupado or self.p0236.ocupado:
+            if not self.perguntar("Fechar o robô", "O robô está preenchendo o SRP. Fechar agora para o robô onde ele "
+                                  "está: a linha (ou nota) atual pode ficar pela metade no SRP.",
+                                  "Parar e fechar", "Continuar preenchendo", perigo=True):
+                return
+            self.parar.set()
+            self.p0236.parar.set()
+            self.retomar.set()  # numa pausa, o robo acorda e ve o Parar
+            self.p0236.retomar.set()
+        self.fechando = time.time()
+        self._fechar_quando_livre()
+
+    def destroy(self):
+        """Cancela os after pendentes (fila, relogio, contagem) antes de fechar: sem isso o Tcl reclamava de
+        'invalid command name ..._drenar' ao fechar."""
+        try:
+            for pendente in self.tk.splitlist(self.tk.call("after", "info")):
+                self.tk.call("after", "cancel", pendente)  # so desarma: cada widget apaga os proprios comandos
+        except tk.TclError:
+            pass
+        super().destroy()
+
+    def _fechar_quando_livre(self):
+        threads = [t for t in (self.thread, self.p0236.thread) if t and t.is_alive()]
+        pintando = self.p0236.fila_pintar.unfinished_tasks > 0
+        if (threads or pintando) and time.time() - self.fechando < ESPERA_FECHAR:
+            pagina = self.p0236 if self.aba == "snac0236" else self
+            try:
+                pagina._status("Parando o robô para fechar..." if threads else "Terminando de pintar a planilha...", "aviso")
+            except (tk.TclError, AttributeError):
+                pass
+            self.after(200, self._fechar_quando_livre)
+            return
+        self.destroy()
 
     # ---------- atualizacao ----------
     def _checar_atualizacao(self, manual=False):
@@ -445,7 +232,7 @@ class App(RaizTk):
 
     def _link_versao(self, rodape):
         """Versao no rodape (das duas abas): clique = verifica agora ou, com versao nova achada, oferece de novo."""
-        rotulo = tk.Label(rodape, bg=COR["fundo"], font=fonte(8), cursor="hand2")
+        rotulo = tk.Label(rodape, bg=COR["fundo"], font=fonte("legenda"), cursor="hand2")
         rotulo.bind("<Button-1>", lambda _e: self._clicou_versao())
         rotulo.bind("<Enter>", lambda _e: rotulo.configure(fg=COR["destaque_hover"]))
         rotulo.bind("<Leave>", lambda _e: self._pintar_links_versao())
@@ -478,8 +265,9 @@ class App(RaizTk):
             if manual or info["versao"] != self.atualizacao_recusada:  # recusada: so de novo se pedir no link
                 self._oferecer_atualizacao(info, manual)
         elif manual:
-            (messagebox.showwarning if texto.startswith("Nao consegui") else messagebox.showinfo)(
-                "Atualizações", texto.replace("Atualizacoes: ", ""))
+            falhou = texto.startswith("Nao consegui")
+            self.avisar("Não consegui verificar" if falhou else "Atualizações", com_acentos(texto.replace("Atualizacoes: ", "")),
+                        tipo="aviso" if falhou else "info")
 
     def _oferecer_atualizacao(self, info, manual=False):
         if not info:
@@ -487,21 +275,19 @@ class App(RaizTk):
         if self.ocupado:  # nao interrompe um preenchimento: pergunta quando terminar
             self.atualizacao_pendente = info
             if manual:
-                messagebox.showinfo("Atualização disponível",
-                                    f"Versão {info['versao']} disponível. O app pergunta quando o preenchimento terminar.")
+                self.avisar(f"Versão {info['versao']} disponível", "O app pergunta de novo quando o preenchimento terminar.")
             return
         if not getattr(sys, "frozen", False):
-            messagebox.showinfo("Atualização disponível", f"Versão {info['versao']} disponível. Rodando pelo código-fonte "
-                                "o app não se atualiza: atualize pelo git ou instale o zip do release.")
+            self.avisar(f"Versão {info['versao']} disponível", "Rodando pelo código-fonte o app não se atualiza: atualize "
+                        "pelo git ou instale o zip do release.")
             return
         self.atualizacao_pendente = None
         notas = re.sub(r"[*#`]", "", info["notas"]).strip()
         notas = notas if len(notas) <= 700 else notas[:700].rsplit("\n", 1)[0] + "\n..."
-        if not messagebox.askyesno(
-                "Atualização disponível",
-                f"Versão {info['versao']} disponível (você tem a {VERSAO}).\n\n{notas}\n\n"
-                "Atualizar agora? O app fecha e abre de novo sozinho em alguns segundos. "
-                "Configurações, contas aprendidas, andamento e logs são mantidos."):
+        if not self.perguntar(
+                f"Atualizar para a versão {info['versao']}?",
+                f"Você tem a {VERSAO}. O app fecha e abre de novo sozinho em alguns segundos; configurações, contas "
+                f"aprendidas, andamento e logs são mantidos.\n\n{notas}", sim="Atualizar agora", nao="Depois"):
             self.atualizacao_recusada = info["versao"]
             self.escrever(f"Atualizacao {info['versao']} adiada; o app pergunta de novo na proxima abertura "
                           "(ou clique na versao no rodape).")
@@ -544,8 +330,8 @@ class App(RaizTk):
             self._andamento_atualizacao("Atualização falhou: o app continua na versão atual", None, "erro")
             registrar_atualizacao(f"Download/instalacao falhou: {item[1]}")
             self.escrever(f"A atualizacao falhou: {item[1]}. O app continua na versao {VERSAO}.")
-            messagebox.showwarning("Atualização", f"A atualização falhou: {item[1]}\n\nO app continua na versão "
-                                   f"{VERSAO}. O erro fica em logs\\atualizacao.log.")
+            self.avisar("A atualização falhou", f"{item[1]}\n\nO app continua na versão {VERSAO}. O erro fica em "
+                        "logs\\atualizacao.log.", tipo="erro")
 
     def _andamento_atualizacao(self, texto, fracao, cor="destaque"):
         """Andamento do download no status e na barra da aba ABERTA (ate a v1.12.20 ia so para a SNAC0234: na
@@ -575,9 +361,8 @@ class App(RaizTk):
 
     # ---------- visual ----------
     def _aplicar_escala(self, dpi):
-        global ESCALA
         self.dpi = round(dpi)
-        ESCALA = self.dpi / 96
+        visual.ESCALA = self.dpi / 96
         self.tk.call("tk", "scaling", self.dpi / 72)  # fontes em pontos acompanham o DPI
 
     def _talvez_mudou_monitor(self, evento):
@@ -606,57 +391,21 @@ class App(RaizTk):
     def _estilos(self):
         estilo = ttk.Style(self)
         estilo.theme_use("clam")
-        estilo.configure(".", font=fonte(10), background=COR["fundo"], foreground=COR["texto"])
-        base = dict(padding=(px(16), px(8)), borderwidth=1, relief="flat", focusthickness=0, lightcolor=COR["cartao"],
-                    darkcolor=COR["cartao"])
-        estilo.configure("Primario.TButton", **{**base, "lightcolor": COR["destaque"], "darkcolor": COR["destaque"]},
-                         font=fonte(10, forte=True), background=COR["destaque"], foreground=COR["no_destaque"],
-                         bordercolor=COR["destaque"])
-        estilo.map("Primario.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])],
-                   foreground=[("disabled", COR["suave"])], bordercolor=[("disabled", COR["borda"]), ("active", COR["destaque_hover"])],
-                   lightcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])],
-                   darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["destaque_hover"])])
-        for nome, cor_texto in (("Secundario", COR["texto"]), ("Perigo", COR["erro"])):
-            estilo.configure(f"{nome}.TButton", **{**base, "lightcolor": COR["botao"], "darkcolor": COR["botao"]},
-                             font=fonte(10), background=COR["botao"], foreground=cor_texto, bordercolor=COR["botao"])
-            estilo.map(f"{nome}.TButton", background=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
-                       foreground=[("disabled", COR["borda_forte"])],
-                       bordercolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
-                       lightcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])],
-                       darkcolor=[("disabled", COR["cinza_fundo"]), ("active", COR["botao_hover"])])
-        estilo.configure("Link.TButton", font=fonte(9), padding=(px(6), px(2)), background=COR["fundo"], foreground=COR["destaque"],
-                         borderwidth=0, relief="flat", focusthickness=0)
-        estilo.map("Link.TButton", foreground=[("active", COR["destaque_hover"]), ("disabled", COR["suave"])],
-                   background=[("active", COR["fundo"])])
-        estilo.configure("Treeview", font=fonte(10), rowheight=px(26), background=COR["cartao"], fieldbackground=COR["cartao"],
+        estilo.configure(".", font=fonte("corpo"), background=COR["fundo"], foreground=COR["texto"])
+        estilo.configure("Treeview", font=fonte("corpo"), rowheight=px(26), background=COR["cartao"], fieldbackground=COR["cartao"],
                          foreground=COR["texto"], borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["cartao"],
                          bordercolor=COR["cartao"])
-        estilo.configure("Treeview.Heading", font=fonte(9), background=COR["cartao"], foreground=COR["suave"],
+        estilo.configure("Treeview.Heading", font=fonte("pequeno"), background=COR["cartao"], foreground=COR["suave"],
                          relief="flat", padding=(px(8), px(6)), borderwidth=0, lightcolor=COR["cartao"], darkcolor=COR["borda"],
                          bordercolor=COR["borda"])
         estilo.map("Treeview.Heading", background=[("active", COR["cinza_fundo"])])
         estilo.map("Treeview", background=[("selected", COR["azul_fundo"])], foreground=[("selected", COR["texto"])])
-        estilo.configure("Barra.Horizontal.TProgressbar", troughcolor=COR["borda"], background=COR["destaque"],
-                         borderwidth=0, thickness=4, lightcolor=COR["destaque"], darkcolor=COR["destaque"])
-        estilo.configure("Vertical.TScrollbar", background=COR["cinza_fundo"], troughcolor=COR["cartao"],
-                         bordercolor=COR["cartao"], arrowcolor=COR["suave"], relief="flat", lightcolor=COR["cinza_fundo"],
-                         darkcolor=COR["cinza_fundo"], gripcount=0)
-        estilo.map("Vertical.TScrollbar", background=[("active", COR["borda_forte"])])
-        estilo.configure("TEntry", padding=(px(6), px(3)), fieldbackground=COR["cartao"], foreground=COR["texto"],
-                         bordercolor=COR["borda_forte"], lightcolor=COR["cartao"], darkcolor=COR["cartao"],
-                         insertcolor=COR["texto"])
-        estilo.map("TEntry", bordercolor=[("focus", COR["destaque"])], lightcolor=[("focus", COR["destaque"])])
-        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=fonte(9),
+        estilo.configure("TCheckbutton", background=COR["fundo"], foreground=COR["texto"], font=fonte("pequeno"),
                          indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
                          upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
         estilo.map("TCheckbutton", background=[("active", COR["fundo"])],
                    indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
         self._caixa_de_marcar(estilo)
-        estilo.configure("TRadiobutton", background=COR["fundo"], foreground=COR["texto"], font=fonte(9),
-                         indicatorbackground=COR["cartao"], indicatorforeground=COR["destaque"],
-                         upperbordercolor=COR["borda_forte"], lowerbordercolor=COR["borda_forte"], focusthickness=0)
-        estilo.map("TRadiobutton", background=[("active", COR["fundo"])],
-                   indicatorbackground=[("selected", COR["cartao"]), ("active", COR["cinza_fundo"])])
 
     def _caixa_de_marcar(self, estilo):
         """Caixa de marcar com ✓ (usuario, 09/11/2026: o X do tema clam parecia Windows antigo): imagens desenhadas no
@@ -701,7 +450,7 @@ class App(RaizTk):
         tk.Entry de dentro (`campo._entry`); bind e focus_set do CTkEntry ja vao para ele."""
         campo = ctk.CTkEntry(pai, textvariable=variavel, width=px(largura), height=px(30), corner_radius=px(6),
                              border_width=1, fg_color=COR["cartao"], border_color=COR["borda_forte"],
-                             text_color=COR["texto"], font=fonte(10), justify="center", **opcoes)
+                             text_color=COR["texto"], font=fonte("corpo"), justify="center", **opcoes)
         campo.bind("<FocusIn>", lambda _e: campo.configure(border_color=COR["destaque"]), add="+")
         campo.bind("<FocusOut>", lambda _e: campo.configure(border_color=COR["borda_forte"]), add="+")
         return campo
@@ -713,43 +462,49 @@ class App(RaizTk):
 
     def _link(self, pai, texto, comando, cor="destaque", bg=None):
         """Texto clicavel (sem borda de botao)."""
-        rotulo = tk.Label(pai, text=texto, bg=bg or COR["fundo"], fg=COR[cor], font=fonte(9), cursor="hand2")
+        rotulo = tk.Label(pai, text=texto, bg=bg or COR["fundo"], fg=COR[cor], font=fonte("pequeno"), cursor="hand2",
+                          takefocus=1)
         rotulo.bind("<Button-1>", lambda _e: comando())
+        # teclado (v1.14.0): o Tab chega no link, Enter ou Espaco clicam e o foco sublinha o texto
+        for tecla in ("<Return>", "<space>"):
+            rotulo.bind(tecla, lambda _e: comando())
+        rotulo.bind("<FocusIn>", lambda _e: rotulo.configure(font=fonte("pequeno") + ("underline",)))
+        rotulo.bind("<FocusOut>", lambda _e: rotulo.configure(font=fonte("pequeno")))
         rotulo.bind("<Enter>", lambda _e: rotulo.configure(fg=COR["destaque_hover"] if cor == "destaque" else COR["texto"]))
         rotulo.bind("<Leave>", lambda _e: rotulo.configure(fg=COR[cor]))
         return rotulo
 
     def _montar(self):
-        margem = px(20)
+        margem = esp(5)
         # cabecalho numa linha so (v1.13.2; usuario, 10/11/2026: nome e abas em duas faixas tiravam linhas da tabela):
         # nome | abas (sublinhado da ativa sobre a linha divisoria) | ... | Citrix e Opcoes. Sem largura, as abas
         # ficam so com o codigo (`caber`)
         topo = tk.Frame(self, bg=COR["fundo"])
-        topo.pack(fill="x", padx=margem, pady=(px(8), 0))
+        topo.pack(fill="x", padx=margem, pady=(esp(2), 0))
         topo.columnconfigure(2, weight=1)
         # so o nome (usuario, 09/11/2026): o subtitulo repetia o que a aba ja diz e tirava altura da tabela
-        tk.Label(topo, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w").grid(
-            row=0, column=0, sticky="w", pady=(0, px(3)))
+        tk.Label(topo, text=NOME, bg=COR["fundo"], fg=COR["texto"], font=fonte("titulo", forte=True), anchor="w").grid(
+            row=0, column=0, sticky="w", pady=(0, esp(1)))
         lado = tk.Frame(topo, bg=COR["fundo"])
-        lado.grid(row=0, column=3, sticky="e", pady=(0, px(3)))
+        lado.grid(row=0, column=3, sticky="e", pady=(0, esp(1)))
         self.b_opcoes = self._link(lado, "⚙  Opções", self.abrir_opcoes, cor="suave")
         self.b_opcoes.pack(side="right")
-        self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9))
-        self.chip_citrix.pack(side="right", padx=(0, px(16)))
+        self.chip_citrix = tk.Label(lado, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte("pequeno"))
+        self.chip_citrix.pack(side="right", padx=(0, esp(4)))
 
         # abas: uma por tela do SRP (codigo em destaque + nome; sublinhado na aba ativa, sobre a linha divisoria)
         barra_abas = tk.Frame(topo, bg=COR["fundo"])
-        barra_abas.grid(row=0, column=1, sticky="sw", padx=(px(24), 0))
+        barra_abas.grid(row=0, column=1, sticky="sw", padx=(esp(6), 0))
         self.abas = {}
         for chave, codigo, nome, _ in TELAS:
             aba = tk.Frame(barra_abas, bg=COR["fundo"], cursor="hand2")
-            aba.pack(side="left", padx=(0, px(6)))
+            aba.pack(side="left", padx=(0, esp(2)))
             textos = tk.Frame(aba, bg=COR["fundo"], cursor="hand2")
-            textos.pack(padx=px(12), pady=(px(8), px(8)))
-            rotulo_codigo = tk.Label(textos, text=codigo, bg=COR["fundo"], font=fonte(10, forte=True), cursor="hand2")
+            textos.pack(padx=esp(3), pady=(esp(2), esp(2)))
+            rotulo_codigo = tk.Label(textos, text=codigo, bg=COR["fundo"], font=fonte("corpo", forte=True), cursor="hand2")
             rotulo_codigo.pack(side="left")
-            rotulo_nome = tk.Label(textos, text=nome, bg=COR["fundo"], font=fonte(9), cursor="hand2")
-            rotulo_nome.pack(side="left", padx=(px(6), 0))
+            rotulo_nome = tk.Label(textos, text=nome, bg=COR["fundo"], font=fonte("pequeno"), cursor="hand2")
+            rotulo_nome.pack(side="left", padx=(esp(2), 0))
             traco = tk.Frame(aba, height=px(3), bg=COR["fundo"])
             traco.pack(fill="x")
             for parte in (aba, textos, rotulo_codigo, rotulo_nome):
@@ -768,7 +523,7 @@ class App(RaizTk):
                     nome.pack_forget()
             elif not com_nome and topo.winfo_reqwidth() + sum(n.winfo_reqwidth() + px(6) for n in nomes) <= largura:
                 for nome in nomes:
-                    nome.pack(side="left", padx=(px(6), 0))
+                    nome.pack(side="left", padx=(esp(2), 0))
         topo.bind("<Configure>", caber)
         lado.bind("<Configure>", caber)  # o texto do Citrix muda de largura
 
@@ -789,55 +544,55 @@ class App(RaizTk):
         self.area_avisos.pack(fill="x")
         self.faixa_pausa = Cartao(self.area_avisos, bg=COR["aviso_fundo"], borda=COR["aviso_borda"])
         textos = tk.Frame(self.faixa_pausa, bg=COR["aviso_fundo"])
-        textos.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(10))
-        self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"], font=fonte(11, forte=True), anchor="w")
+        textos.pack(side="left", fill="both", expand=True, padx=esp(4), pady=esp(3))
+        self.pausa_titulo = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["aviso"], font=fonte("subtitulo", forte=True), anchor="w")
         self.pausa_titulo.pack(fill="x")
-        self.pausa_srp = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["texto"], font=fonte(10), anchor="w",
+        self.pausa_srp = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["texto"], font=fonte("corpo"), anchor="w",
                                   justify="left", wraplength=px(560))
-        self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte(9), anchor="w",
+        self.pausa_instrucao = tk.Label(textos, text="", bg=COR["aviso_fundo"], fg=COR["suave"], font=fonte("pequeno"), anchor="w",
                                         justify="left", wraplength=px(560))
-        self.pausa_instrucao.pack(fill="x", pady=(px(2), 0))
+        self.pausa_instrucao.pack(fill="x", pady=(esp(0.5), 0))
         self.b_continuar_faixa = Botao(self.faixa_pausa, text="Continuar", style="Primario.TButton", command=self.continuar)
-        self.b_continuar_faixa.pack(side="right", padx=px(14))
+        self.b_continuar_faixa.pack(side="right", padx=esp(4))
 
         self.painel = self._cartao(self.area_avisos)
         direita = tk.Frame(self.painel, bg=COR["cartao"])
-        direita.pack(side="right", padx=px(14), pady=px(10))
-        self.painel_tempo = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte(13, forte=True), anchor="e")
+        direita.pack(side="right", padx=esp(4), pady=esp(3))
+        self.painel_tempo = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte("titulo", forte=True), anchor="e")
         self.painel_tempo.pack(fill="x")
-        self.painel_resta = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="e")
+        self.painel_resta = tk.Label(direita, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"), anchor="e")
         self.painel_resta.pack(fill="x")
         esquerda = tk.Frame(self.painel, bg=COR["cartao"])
-        esquerda.pack(side="left", fill="x", expand=True, padx=px(14), pady=px(10))
-        self.painel_linha = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte(13, forte=True), anchor="w")
+        esquerda.pack(side="left", fill="x", expand=True, padx=esp(4), pady=esp(3))
+        self.painel_linha = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["texto"], font=fonte("titulo", forte=True), anchor="w")
         self.painel_linha.pack(fill="x")
-        self.painel_detalhe = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="w")
+        self.painel_detalhe = tk.Label(esquerda, text="", bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"), anchor="w")
         self.painel_detalhe.pack(fill="x")
 
         # filtros da tabela (com a contagem de cada estado)
         filtros = self.filtros = tk.Frame(corpo, bg=COR["fundo"])
-        filtros.pack(fill="x", pady=(10, 6))
+        filtros.pack(fill="x", pady=(esp(3), esp(2)))
         self.botoes_filtro = {}
         for chave, titulo, _ in FILTROS:
-            rotulo = tk.Label(filtros, text=titulo, bg=COR["fundo"], fg=COR["suave"], font=fonte(9), cursor="hand2",
-                              padx=px(10), pady=px(3))
-            rotulo.pack(side="left", padx=(0, px(4)))
+            rotulo = tk.Label(filtros, text=titulo, bg=COR["fundo"], fg=COR["suave"], font=fonte("pequeno"), cursor="hand2",
+                              padx=esp(3), pady=esp(1))
+            rotulo.pack(side="left", padx=(0, esp(1)))
             rotulo.bind("<Button-1>", lambda _e, c=chave: self.filtrar(c))
             self.botoes_filtro[chave] = (rotulo, titulo)
 
         rodape = tk.Frame(corpo, bg=COR["fundo"])
-        rodape.pack(side="bottom", fill="x", pady=(6, 0))
+        rodape.pack(side="bottom", fill="x", pady=(esp(2), 0))
         self.b_console = self._link(rodape, "", self.alternar_console)
         self.b_console.pack(side="left")
         self.b_copiar = self._link(rodape, "Copiar", self.copiar_console)
-        self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(px(14), 0))
+        self._link(rodape, "Abrir pasta de logs", lambda: os.startfile(pasta_logs())).pack(side="left", padx=(esp(4), 0))
         self._link_versao(rodape).pack(side="right")
         self.caixa_saida = self._cartao(corpo, bg=COR["console"])
         self.saida = Console(self.caixa_saida)  # rolagem propria (v1.13.4)
-        self.saida.pack(fill="x", padx=px(4), pady=px(4))  # margem: o texto quadrado cobriria os cantos
+        self.saida.pack(fill="x", padx=esp(1), pady=esp(1))  # margem: o texto quadrado cobriria os cantos
 
         self.botoes = tk.Frame(corpo, bg=COR["fundo"])
-        self.botoes.pack(side="bottom", fill="x", pady=(12, 10))
+        self.botoes.pack(side="bottom", fill="x", pady=(esp(3), esp(3)))
         # so os botoes que servem agora (usuario, 09/11/2026; `_atualizar_botoes`): parado = Iniciar (+ Continuar da
         # linha N) + Simular; executando = Parar (o Continuar da pausa fica na faixa amarela)
         self.b_iniciar = Botao(self.botoes, text="Iniciar preenchimento", style="Primario.TButton", command=self.iniciar)
@@ -847,14 +602,14 @@ class App(RaizTk):
         self.botoes_visiveis = None
 
         progresso = self.progresso = tk.Frame(corpo, bg=COR["fundo"])
-        progresso.pack(side="bottom", fill="x", pady=(12, 0))
+        progresso.pack(side="bottom", fill="x", pady=(esp(3), 0))
         progresso.columnconfigure(0, weight=1)
-        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w")
+        self.status = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["suave"], font=fonte("pequeno"), anchor="w")
         self.status.grid(row=0, column=0, sticky="w")
         # tempo previsto antes de iniciar (usuario, 09/11/2026); durante a execucao o painel mostra o restante
-        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte(9, forte=True), anchor="e")
+        self.previsao = tk.Label(progresso, text="", bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno", forte=True), anchor="e")
         self.barra = BarraFina(progresso)
-        self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(6), 0))
+        self.barra.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(esp(2), 0))
         self.barra.grid_remove()  # aparece com a planilha (`_arrumar_andamento`)
 
         cartao = self.cartao = self._cartao(corpo)
@@ -868,8 +623,8 @@ class App(RaizTk):
             self.tabela.column(coluna, width=largura, minwidth=px(50), anchor=ancora, stretch=coluna == "status")
         rolagem = self._rolagem(cartao, self.tabela.yview)
         self.tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
-        self.tabela.pack(side="left", fill="both", expand=True, padx=(px(4), 0), pady=px(4))  # margem: cantos redondos
+        rolagem.pack(side="right", fill="y", padx=(0, esp(1)), pady=esp(2))
+        self.tabela.pack(side="left", fill="both", expand=True, padx=(esp(1), 0), pady=esp(1))  # margem: cantos redondos
         # ordem importa: tags configuradas depois tem prioridade (o fundo do estado vence o da zebra)
         self.tabela.tag_configure("par", background=COR["zebra"])
         self.tabela.tag_configure("impar", background=COR["cartao"])
@@ -897,7 +652,7 @@ class App(RaizTk):
     def _mostrar_aba(self):
         for chave, pagina in self.paginas.items():
             if chave == self.aba:
-                pagina.pack(fill="both", expand=True, padx=px(20), pady=(14, 12))
+                pagina.pack(fill="both", expand=True, padx=esp(5), pady=(esp(4), esp(3)))
             else:
                 pagina.pack_forget()
         self._pintar_abas()
@@ -911,7 +666,7 @@ class App(RaizTk):
         self._esconder_dica()
         self.aba = chave
         self.config_usuario["aba"] = chave
-        gravar_config(self.config_usuario)
+        self.salvar_config()
         self._mostrar_aba()
 
     # ---------- tela sem planilha (as duas abas; usuario, 09/11/2026) ----------
@@ -923,7 +678,7 @@ class App(RaizTk):
     def _lembrar_planilha(self, chave, caminho):
         if self.config_usuario.get(chave) != caminho:
             self.config_usuario[chave] = caminho
-            gravar_config(self.config_usuario)
+            self.salvar_config()
 
     def _zona_vazia(self, zona, titulo, colunas, escolher, abrir, chave_ultima):
         """Sem planilha: a zona ocupa o lugar da tabela, com borda tracejada (realce no mouse), botao Escolher planilha,
@@ -933,7 +688,7 @@ class App(RaizTk):
         tela.pack(fill="both", expand=True)
         centro = tk.Frame(tela, bg=COR["cartao"])
         janela = tela.create_window(0, 0, window=centro, anchor="center")
-        borda = {"cor": COR["borda_forte"]}
+        borda = {"cor": COR["tracejado"]}
 
         def desenhar_borda(_evento=None):
             largura, altura = tela.winfo_width(), tela.winfo_height()
@@ -951,24 +706,24 @@ class App(RaizTk):
         icone = tk.Label(centro, image=imagem, bg=COR["cartao"], cursor="hand2")
         icone.image = imagem
         icone.pack()
-        rotulo = tk.Label(centro, text=titulo, bg=COR["cartao"], fg=COR["texto"], font=fonte(11, forte=True), cursor="hand2")
-        rotulo.pack(pady=(px(4), 0))
-        sub = tk.Label(centro, text="ou escolha o arquivo (.xlsx)", bg=COR["cartao"], fg=COR["suave"], font=fonte(9),
+        rotulo = tk.Label(centro, text=titulo, bg=COR["cartao"], fg=COR["texto"], font=fonte("subtitulo", forte=True), cursor="hand2")
+        rotulo.pack(pady=(esp(1), 0))
+        sub = tk.Label(centro, text="ou escolha o arquivo (.xlsx)  ·  Ctrl+O", bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"),
                        cursor="hand2")
         sub.pack()
-        Botao(centro, text="Escolher planilha", style="Primario.TButton", command=escolher).pack(pady=(px(14), 0))
+        Botao(centro, text="Escolher planilha", style="Primario.TButton", command=escolher).pack(pady=(esp(4), 0))
         ultima = self._ultima_planilha(chave_ultima)
         if ultima:
             quando = time.strftime("%d/%m %H:%M", time.localtime(Path(ultima).stat().st_mtime))
             self._link(centro, f"Abrir a última: {Path(ultima).name}  ·  alterada em {quando}", lambda: abrir(ultima),
-                       bg=COR["cartao"]).pack(pady=(px(10), 0))
+                       bg=COR["cartao"]).pack(pady=(esp(3), 0))
         tk.Label(centro, text="Colunas da planilha: " + "  ·  ".join(colunas), bg=COR["cartao"], fg=COR["suave"],
-                 font=fonte(8), wraplength=px(560), justify="center").pack(pady=(px(16), 0))
+                 font=fonte("legenda"), wraplength=px(560), justify="center").pack(pady=(esp(4), 0))
         for parte in (tela, icone, rotulo, sub):
             parte.bind("<Button-1>", lambda _e: escolher())
         for parte in (tela, centro, icone, rotulo, sub):
             parte.bind("<Enter>", lambda _e: realce(COR["destaque"]), add="+")
-            parte.bind("<Leave>", lambda _e: realce(COR["borda_forte"]), add="+")
+            parte.bind("<Leave>", lambda _e: realce(COR["tracejado"]), add="+")
             if DND_FILES:
                 parte.drop_target_register(DND_FILES)
                 parte.dnd_bind("<<Drop>>", self._soltou)
@@ -980,8 +735,8 @@ class App(RaizTk):
         self.barra.grid() if com_andamento else self.barra.grid_remove()
         self.status.grid() if com_andamento or self.status_atual[0] else self.status.grid_remove()
         # sem nada a mostrar, sem as margens dos blocos vazios: a zona desce ate o rodape
-        self.progresso.pack_configure(pady=(12, 0) if com_andamento or self.status_atual[0] else 0)
-        self.botoes.pack_configure(pady=(12, 10) if com_andamento else (0, 10))
+        self.progresso.pack_configure(pady=(esp(3), 0) if com_andamento or self.status_atual[0] else 0)
+        self.botoes.pack_configure(pady=(esp(3), esp(3)) if com_andamento else (0, esp(3)))
 
     def _arrumar_vazia(self):
         """SNAC0234 sem planilha: so a zona (grande), sem filtros nem tabela vazia."""
@@ -993,7 +748,7 @@ class App(RaizTk):
         else:
             self.zona.pack_configure(fill="x", expand=False)
             if not self.filtros.winfo_manager():
-                self.filtros.pack(fill="x", pady=(10, 6), after=self.area_avisos)
+                self.filtros.pack(fill="x", pady=(esp(3), esp(2)), after=self.area_avisos)
                 self.cartao.pack(fill="both", expand=True, after=self.filtros)
                 self.tabela.yview_moveto(0)
 
@@ -1012,18 +767,18 @@ class App(RaizTk):
         self.zona.unbind("<Enter>")
         self.zona.unbind("<Leave>")
         acoes = tk.Frame(self.zona, bg=COR["cartao"])
-        acoes.pack(side="right", padx=px(14))
+        acoes.pack(side="right", padx=esp(4))
         self.b_recarregar = self._link(acoes, "Recarregar", self.recarregar, bg=COR["cartao"])
         self.b_recarregar.pack(side="right")
-        self._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, px(14)))
+        self._link(acoes, "Trocar planilha", self.escolher, bg=COR["cartao"]).pack(side="right", padx=(0, esp(4)))
         imagem = icone_planilha(px(30), COR["ok"], COR["cartao"])
         icone = tk.Label(self.zona, image=imagem, bg=COR["cartao"])
         icone.image = imagem
-        icone.pack(side="left", padx=(px(16), px(10)))
+        icone.pack(side="left", padx=(esp(4), esp(3)))
         textos = tk.Frame(self.zona, bg=COR["cartao"])
-        textos.pack(side="left", fill="x", expand=True, pady=px(8))
+        textos.pack(side="left", fill="x", expand=True, pady=esp(2))
         caminho = Path(self.caminho_atual)
-        tk.Label(textos, text=caminho.name, bg=COR["cartao"], fg=COR["texto"], font=fonte(10, forte=True),
+        tk.Label(textos, text=caminho.name, bg=COR["cartao"], fg=COR["texto"], font=fonte("corpo", forte=True),
                  anchor="w").pack(fill="x")
         linha = tk.Frame(textos, bg=COR["cartao"])
         linha.pack(fill="x")
@@ -1035,10 +790,10 @@ class App(RaizTk):
         if self.resumo:
             linhas, com_conta, erros = self.resumo
             partes[:0] = [f"{linhas} linhas", f"{com_conta} com conta"]
-        tk.Label(linha, text="  ·  ".join(partes), bg=COR["cartao"], fg=COR["suave"], font=fonte(9), anchor="w").pack(side="left")
+        tk.Label(linha, text="  ·  ".join(partes), bg=COR["cartao"], fg=COR["suave"], font=fonte("pequeno"), anchor="w").pack(side="left")
         if self.resumo and self.resumo[2]:
             tk.Label(linha, text=f"  ·  {qtd(self.resumo[2], 'erro', 'erros')} na planilha", bg=COR["cartao"], fg=COR["erro"],
-                     font=fonte(9)).pack(side="left")
+                     font=fonte("pequeno")).pack(side="left")
 
     def _tags(self, linha, nome):
         """Zebra so nas linhas sem fundo proprio: no Treeview a cor de fundo da zebra venceria a do estado. Concluida =
@@ -1072,11 +827,11 @@ class App(RaizTk):
 
     def _pintar_citrix(self):
         if self.citrix is None:
-            self.chip_citrix.configure(text="● Procurando o Citrix…", fg=COR["destaque"] if self.pulso else COR["borda_forte"])
+            self.chip_citrix.configure(text="● Procurando o Citrix…", fg=COR["destaque"] if self.pulso else COR["suave"])
         elif self.citrix:
             self.chip_citrix.configure(text="● Citrix conectado", fg=COR["ok"])
         else:
-            self.chip_citrix.configure(text="● Citrix não encontrado, procurando…", fg=COR["erro"] if self.pulso else COR["borda_forte"])
+            self.chip_citrix.configure(text="● Citrix não encontrado, procurando…", fg=COR["erro"] if self.pulso else COR["suave"])
 
     # ---------- tabela: filtro e dica da conta trocada ----------
     def filtrar(self, chave):
@@ -1102,7 +857,7 @@ class App(RaizTk):
             ativo = chave == self.filtro
             rotulo.configure(text=f"{titulo}  {total}", bg=COR["azul_fundo"] if ativo else COR["fundo"],
                              fg=COR["destaque"] if ativo else (COR["erro"] if chave == "erros" and total else COR["suave"]),
-                             font=fonte(9, forte=ativo))
+                             font=fonte("pequeno", forte=ativo))
 
     def _dica_conta(self, evento):
         """Ao passar o mouse na Conta trocada, mostra a conta que estava na planilha."""
@@ -1119,7 +874,7 @@ class App(RaizTk):
         self.dica = tk.Toplevel(self)
         self.dica.texto = texto
         self.dica.overrideredirect(True)
-        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=fonte(9), padx=px(8), pady=px(4)).pack()
+        tk.Label(self.dica, text=texto, bg=COR["texto"], fg=COR["fundo"], font=fonte("pequeno"), padx=esp(2), pady=esp(1)).pack()
         self.dica.geometry(f"+{evento.x_root + 14}+{evento.y_root + 12}")
 
     def _esconder_dica(self):
@@ -1128,16 +883,22 @@ class App(RaizTk):
             self.dica = None
 
     # ---------- console ----------
+    def abrir_console(self):
+        """Abre os Detalhes sem mudar a preferencia salva (o Simular e os erros abrem sozinhos)."""
+        if not self.console_aberto:
+            self.console_aberto = True
+            self._mostrar_console()
+
     def alternar_console(self):
         self.console_aberto = not self.console_aberto
         self.config_usuario["console_aberto"] = self.console_aberto
-        gravar_config(self.config_usuario)
+        self.salvar_config()
         self._mostrar_console()
 
     def _mostrar_console(self):
         if self.console_aberto:
             self.caixa_saida.pack(side="bottom", fill="x", before=self.botoes)
-            self.b_copiar.pack(side="left", padx=(px(14), 0), after=self.b_console)
+            self.b_copiar.pack(side="left", padx=(esp(4), 0), after=self.b_console)
             self.saida.see("end")
         else:
             self.caixa_saida.pack_forget()
@@ -1151,62 +912,105 @@ class App(RaizTk):
 
     # ---------- opcoes ----------
     def abrir_opcoes(self):
+        """Opcoes (v1.14.0): Tema (geral), SNAC0234 (conferir, limite, pausa) e SNAC0236 (Passo a passo; o NFs a
+        lancar fica na aba, vale por execucao). Pausa e conferir ficam no config.json; o limite vale ate fechar o app.
+        Os campos so aceitam numeros (validatecommand) e a pausa fora de 0,05-5 s volta ao padrao ao fechar.
+        Trocar o tema refaz a janela principal e reabre as Opcoes."""
         janela = tk.Toplevel(self)
         janela.title("Opções")
         janela.configure(bg=COR["fundo"])
         janela.transient(self)
         janela.resizable(False, False)
         janela.iconphoto(False, self._icone)
-        margem = px(16)
+        margem = esp(4)
         corpo = tk.Frame(janela, bg=COR["fundo"])
         corpo.pack(fill="both", padx=margem, pady=margem)
-        # estas opcoes valem so para a SNAC0234; as da SNAC0236 ficam na propria aba (usuario, 09/11/2026)
-        tk.Label(corpo, text="SNAC0234  ·  Requisição Suprimento", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
-                 anchor="w").pack(fill="x")
-        tk.Label(corpo, text="As opções da SNAC0236 (Passo a passo, NFs a lançar) ficam na própria aba.", bg=COR["fundo"],
-                 fg=COR["suave"], font=fonte(8), anchor="w").pack(fill="x")
-        ttk.Checkbutton(corpo, text="Conferir a quantidade na tela (OCR)", variable=self.conferir).pack(anchor="w", pady=(px(6), 0))
-        for rotulo, variavel, ajuda in (("Limite de linhas", self.limite, "0 = todas"),
-                                        ("Pausa entre teclas (s)", self.pausa, "padrão 0.25")):
-            linha = tk.Frame(corpo, bg=COR["fundo"])
-            linha.pack(fill="x", pady=(px(8), 0))
-            tk.Label(linha, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte(9), width=22, anchor="w").pack(side="left")
-            self._campo(linha, variavel).pack(side="left")
-            tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte(8)).pack(side="left", padx=(px(8), 0))
-        tk.Label(corpo, text="Tema", bg=COR["fundo"], fg=COR["texto"], font=fonte(10, forte=True),
-                 anchor="w").pack(fill="x", pady=(px(16), 0))
+
+        def titulo(texto, primeiro=False):
+            tk.Label(corpo, text=texto, bg=COR["fundo"], fg=COR["texto"], font=fonte("corpo", forte=True),
+                     anchor="w").pack(fill="x", pady=(0 if primeiro else esp(4), 0))
+
+        def nota(texto):
+            tk.Label(corpo, text=texto, bg=COR["fundo"], fg=COR["suave"], font=fonte("legenda"), anchor="w", justify="left",
+                     wraplength=px(380)).pack(fill="x", pady=(esp(1), 0))
+
+        titulo("Tema", primeiro=True)
         # seletor de 3 partes (v1.13.4): trilho cinza e a parte escolhida em "cartao", como um interruptor
 
-        def mudar_tema(titulo):
-            chave = next(c for c, t in TEMAS.items() if t == titulo)
+        def mudar_tema(nome):
+            chave = next(c for c, t in TEMAS.items() if t == nome)
             if chave == self.tema_escolhido:
                 return
-            janela.destroy()  # a janela principal e refeita no tema novo
+            fechar()
             self.escolher_tema(chave)
+            self.after_idle(self.abrir_opcoes)  # a janela principal foi refeita: as Opcoes voltam no tema novo
+        ocupado = self.ocupado or self.p0236.ocupado
         seletor = ctk.CTkSegmentedButton(corpo, values=list(TEMAS.values()), command=mudar_tema, height=px(30),
-                                         corner_radius=px(7), border_width=px(3), font=fonte(9), fg_color=COR["botao"],
+                                         corner_radius=px(7), border_width=px(3), font=fonte("pequeno"), fg_color=COR["botao"],
                                          unselected_color=COR["botao"], unselected_hover_color=COR["botao_hover"],
                                          selected_color=COR["cartao"], selected_hover_color=COR["cartao"],
-                                         text_color=COR["texto"], dynamic_resizing=False, width=px(300))
+                                         text_color=COR["texto"], text_color_disabled=COR["suave"],
+                                         dynamic_resizing=False, width=px(300), state="disabled" if ocupado else "normal")
         seletor.set(TEMAS[self.tema_escolhido])
-        seletor.pack(anchor="w", pady=(px(6), 0))
-        tk.Label(corpo, text="Automático segue o modo de cor do Windows.", bg=COR["fundo"], fg=COR["suave"], font=fonte(8),
-                 anchor="w").pack(fill="x", pady=(px(4), 0))
-        Botao(corpo, text="Fechar", style="Secundario.TButton", command=janela.destroy).pack(anchor="e", pady=(px(16), 0))
+        seletor.pack(anchor="w", pady=(esp(2), 0))
+        nota("Troque o tema depois do preenchimento (ele refaz a janela)." if ocupado
+             else "Automático segue o modo de cor do Windows.")
+
+        titulo("SNAC0234  ·  Requisição Suprimento")
+        ttk.Checkbutton(corpo, text="Conferir a quantidade na tela (OCR)", variable=self.conferir).pack(anchor="w", pady=(esp(2), 0))
+        so_inteiro = (janela.register(lambda novo: novo == "" or (novo.isdigit() and len(novo) <= 4)), "%P")
+        so_decimal = (janela.register(lambda novo: re.fullmatch(r"\d{0,1}([.,]\d{0,2})?", novo) is not None), "%P")
+        for rotulo, variavel, ajuda, valida in (("Limite de linhas", self.limite, "0 = todas", so_inteiro),
+                                                ("Pausa entre teclas (s)", self.pausa, "0,05 a 5; padrão 0,25", so_decimal)):
+            linha = tk.Frame(corpo, bg=COR["fundo"])
+            linha.pack(fill="x", pady=(esp(2), 0))
+            tk.Label(linha, text=rotulo, bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno"), anchor="w").pack(side="left")
+            tk.Label(linha, text=ajuda, bg=COR["fundo"], fg=COR["suave"], font=fonte("legenda")).pack(side="right")
+            self._campo(linha, variavel, validate="key", validatecommand=valida).pack(side="right", padx=(0, esp(2)))
+
+        titulo("SNAC0236  ·  Documento Recebimento")
+        ttk.Checkbutton(corpo, text="Passo a passo (0,5 s entre ações)", variable=self.p0236.passo_a_passo).pack(
+            anchor="w", pady=(esp(2), 0))
+        nota("A quantidade de NFs a lançar fica na própria aba (vale para cada execução).")
+
+        def fechar():
+            self._gravar_opcoes()
+            janela.destroy()
+        Botao(corpo, text="Fechar", style="Secundario.TButton", command=fechar).pack(anchor="e", pady=(esp(4), 0))
+        janela.bind("<Escape>", lambda _e: fechar())
+        janela.protocol("WM_DELETE_WINDOW", fechar)
         barra_titulo(janela)  # ja faz o update_idletasks
         janela.geometry(f"+{self.b_opcoes.winfo_rootx() + self.b_opcoes.winfo_width() - janela.winfo_width()}"
                         f"+{self.b_opcoes.winfo_rooty() + self.b_opcoes.winfo_height() + px(6)}")
         janela.grab_set()
 
+    def _gravar_opcoes(self):
+        """Normaliza os campos das Opcoes (vazio ou fora da faixa = padrao) e guarda pausa e conferir no config.json."""
+        try:
+            limite = int(self.limite.get() or 0)
+        except ValueError:
+            limite = 0
+        self.limite.set(str(limite))
+        try:
+            pausa = float(self.pausa.get().replace(",", "."))
+        except ValueError:
+            pausa = PAUSA_PADRAO
+        if not 0.05 <= pausa <= 5:
+            pausa = PAUSA_PADRAO
+        self.pausa.set(f"{pausa:g}")
+        self.config_usuario.update(pausa_0234=pausa, conferir_0234=bool(self.conferir.get()))
+        self.salvar_config()
+        self._atualizar_previsao()
+
     # ---------- execucao: painel, faixa de pausa e resumo ----------
     def _mostrar_avisos(self):
         pausa = self.ocupado and self.pausado and self.execucao
         if pausa:
-            self.faixa_pausa.pack(fill="x", pady=(px(10), 0))
+            self.faixa_pausa.pack(fill="x", pady=(esp(3), 0))
         else:
             self.faixa_pausa.pack_forget()
         if self.ocupado and self.execucao and not pausa:  # na pausa a faixa ocupa o lugar do painel (sobra espaco para a tabela)
-            self.painel.pack(fill="x", pady=(px(10), 0))
+            self.painel.pack(fill="x", pady=(esp(3), 0))
         else:
             self.painel.pack_forget()
         if pausa:
@@ -1216,7 +1020,7 @@ class App(RaizTk):
             srp = self.srp_por_linha.get(linha)
             if srp:
                 self.pausa_srp.configure(text=f"SRP: “{srp}”")
-                self.pausa_srp.pack(fill="x", pady=(px(4), 0), before=self.pausa_instrucao)
+                self.pausa_srp.pack(fill="x", pady=(esp(1), 0), before=self.pausa_instrucao)
             else:
                 self.pausa_srp.pack_forget()
             instrucao = re.sub(r"^Linha \d+: ", "", self.execucao.get("instrucao", ""))
@@ -1280,23 +1084,23 @@ class App(RaizTk):
         janela.transient(self)
         janela.resizable(False, False)
         janela.iconphoto(False, self._icone)
-        margem = px(18)
+        margem = esp(4)
         tk.Label(janela, text="Preenchimento concluído" if completo else "Preenchimento interrompido", bg=COR["fundo"],
-                 fg=COR["ok"] if completo else COR["erro"], font=fonte(13, forte=True), anchor="w").pack(fill="x", padx=margem,
+                 fg=COR["ok"] if completo else COR["erro"], font=fonte("titulo", forte=True), anchor="w").pack(fill="x", padx=margem,
                                                                                                        pady=(margem, 0))
         if not completo and self.ultimo_erro:
-            tk.Label(janela, text=self.ultimo_erro, bg=COR["fundo"], fg=COR["texto"], font=fonte(9), anchor="w", justify="left",
-                     wraplength=px(440)).pack(fill="x", padx=margem, pady=(px(4), 0))
+            tk.Label(janela, text=self.ultimo_erro, bg=COR["fundo"], fg=COR["texto"], font=fonte("pequeno"), anchor="w", justify="left",
+                     wraplength=px(440)).pack(fill="x", padx=margem, pady=(esp(1), 0))
         numeros = tk.Frame(janela, bg=COR["fundo"])
-        numeros.pack(fill="x", padx=margem, pady=(px(14), 0))
+        numeros.pack(fill="x", padx=margem, pady=(esp(4), 0))
         for valor, legenda, cor in ((f"{e['feitas']}/{e['total']}", "linhas concluídas", "texto"),
                                     (str(e["erros"]), "com erro", "erro" if e["erros"] else "texto"),
                                     (str(e["pausas"]), "pausas", "aviso" if e["pausas"] else "texto"),
                                     (duracao(time.time() - e["inicio"]), "tempo total", "texto")):
             caixa = self._cartao(numeros)
-            caixa.pack(side="left", fill="x", expand=True, padx=(0, px(8)))
-            tk.Label(caixa, text=valor, bg=COR["cartao"], fg=COR[cor], font=fonte(15, forte=True)).pack(padx=px(14), pady=(px(8), 0))
-            tk.Label(caixa, text=legenda, bg=COR["cartao"], fg=COR["suave"], font=fonte(8)).pack(padx=px(14), pady=(0, px(8)))
+            caixa.pack(side="left", fill="x", expand=True, padx=(0, esp(2)))
+            tk.Label(caixa, text=valor, bg=COR["cartao"], fg=COR[cor], font=fonte("numero", forte=True)).pack(padx=esp(4), pady=(esp(2), 0))
+            tk.Label(caixa, text=legenda, bg=COR["cartao"], fg=COR["suave"], font=fonte("legenda")).pack(padx=esp(4), pady=(0, esp(2)))
         botoes = tk.Frame(janela, bg=COR["fundo"])
         botoes.pack(fill="x", padx=margem, pady=margem)
 
@@ -1304,10 +1108,13 @@ class App(RaizTk):
             janela.destroy()
             self.escolher()
         Botao(botoes, text="Fechar", style="Primario.TButton", command=janela.destroy).pack(side="right")
-        Botao(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, px(8)))
+        Botao(botoes, text="Nova planilha", style="Secundario.TButton", command=nova).pack(side="right", padx=(0, esp(2)))
         Botao(botoes, text="Abrir log", style="Secundario.TButton", command=self.abrir_ultimo_log).pack(side="right",
-                                                                                                       padx=(0, px(8)))
+                                                                                                       padx=(0, esp(2)))
+        for tecla in ("<Escape>", "<Return>"):
+            janela.bind(tecla, lambda _e: janela.destroy())
         barra_titulo(janela)  # ja faz o update_idletasks
+        janela.focus_force()
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
                         f"+{self.winfo_rooty() + px(120)}")
         janela.lift()
@@ -1319,7 +1126,7 @@ class App(RaizTk):
     def escolher_tema(self, escolha):
         self.tema_escolhido = escolha
         self.config_usuario["tema"] = escolha
-        gravar_config(self.config_usuario)
+        self.salvar_config()
         self._aplicar_tema(tema_do_windows() if escolha == "auto" else escolha)
 
     def _aplicar_tema(self, tema):
@@ -1352,7 +1159,7 @@ class App(RaizTk):
             termino = time.strftime("%H:%M", time.localtime(time.time() + segundos))
             self.previsao.configure(text=f"{qtd(linhas, 'linha', 'linhas')}  ·  {texto_duracao(segundos)}  ·  término ~{termino} (sem pausas)")
             if not self.previsao.winfo_manager():
-                self.previsao.grid(row=0, column=1, sticky="ne", padx=(px(16), 0))
+                self.previsao.grid(row=0, column=1, sticky="ne", padx=(esp(4), 0))
         except (tk.TclError, AttributeError):
             pass  # widgets sendo refeitos
 
@@ -1401,36 +1208,47 @@ class App(RaizTk):
             time.sleep(3)
 
     def _drenar(self):
+        """Trata as mensagens da thread do robo. Cada mensagem tem o seu try e o reagendamento fica no finally (ate a
+        v1.13.4 uma excecao qualquer aqui parava o laco de vez e a tela deixava de acompanhar o robo)."""
         try:
             while True:
-                item = self.fila.get_nowait()
-                if item is None:
-                    if self.soltar_atalhos:
-                        self.soltar_atalhos()
-                        self.soltar_atalhos = None
-                    self.ocupado = False
-                    self.pausado = False
-                    self.pausar.clear()
-                    self._atualizar_botoes()
-                    self._fim_da_execucao()
-                    self._resumo_final()
-                    if self.atualizacao_pendente:
-                        self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
-                elif isinstance(item, tuple) and item[0] in ("atualizacao", "baixando", "baixado", "falha_atualizacao"):
-                    self._evento_atualizacao(item)
-                elif isinstance(item, tuple) and item[0] == "tecla":
-                    self._tecla(item[1])
-                elif isinstance(item, tuple) and item[0] == "citrix":
-                    if item[1] != self.citrix:
-                        self.citrix = item[1]
-                        self._pintar_citrix()
-                elif isinstance(item, tuple):
-                    self._estado_linha(*item)
-                else:
-                    self.escrever(item)
-        except queue.Empty:
-            pass
-        self.after(100, self._drenar)
+                try:
+                    item = self.fila.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self._tratar(item)
+                except Exception:
+                    registrar_falha_tela(f"mensagem da SNAC0234: {item!r}"[:300])
+        finally:
+            self.after(100, self._drenar)
+
+    def _tratar(self, item):
+        if item is None:
+            if self.soltar_atalhos:
+                self.soltar_atalhos()
+                self.soltar_atalhos = None
+            self.ocupado = False
+            self.pausado = False
+            self.pausar.clear()
+            self._atualizar_botoes()
+            self._fim_da_execucao()
+            piscar_barra(self)
+            self._resumo_final()
+            if self.atualizacao_pendente:
+                self.after(1500, lambda: self._oferecer_atualizacao(self.atualizacao_pendente))
+        elif isinstance(item, tuple) and item[0] in ("atualizacao", "baixando", "baixado", "falha_atualizacao"):
+            self._evento_atualizacao(item)
+        elif isinstance(item, tuple) and item[0] == "tecla":
+            self._tecla(item[1])
+        elif isinstance(item, tuple) and item[0] == "citrix":
+            if item[1] != self.citrix:
+                self.citrix = item[1]
+                self._pintar_citrix()
+        elif isinstance(item, tuple):
+            self._estado_linha(*item)
+        else:
+            self.escrever(item)
 
     def _estado_linha(self, linha, nome):
         anterior = self.estados.get(linha)
@@ -1463,6 +1281,7 @@ class App(RaizTk):
             self.bell()
             self.deiconify()
             self.lift()
+            piscar_barra(self)
         elif nome == "ok":
             self.concluidas += 1
             self.barra["value"] = self.concluidas
@@ -1500,13 +1319,13 @@ class App(RaizTk):
                 botao.pack_forget()
             esquerda = [b for b in visiveis if b is not self.b_parar]
             for indice, botao in enumerate(esquerda):
-                botao.pack(side="left", padx=(8 if indice else 0, 0))
+                botao.pack(side="left", padx=(esp(2) if indice else 0, 0))
             if self.b_parar in visiveis:
                 self.b_parar.pack(side="right")
         self.b_continuar_faixa.configure(text="Continuar (corrigido no SRP)")
         self._atualizar_previsao()
         if self.b_recarregar:
-            self.b_recarregar.configure(state="disabled" if self.ocupado else "normal", disabledforeground=COR["borda_forte"])
+            self.b_recarregar.configure(state="disabled" if self.ocupado else "normal", disabledforeground=COR["desativado"])
 
     def continuar(self):
         """Durante uma pausa, libera o robo; depois de uma interrupcao, retoma pelas linhas nao concluidas."""
@@ -1532,6 +1351,19 @@ class App(RaizTk):
             self.escrever("F9: o robo pausa ao terminar a linha atual.")
             self._status("Pausando ao fim da linha...", "aviso")
 
+    def contagem(self, pagina, texto, segundos=5):
+        """Os segundos que o usuario tem para clicar no SRP depois do Iniciar, no status da `pagina` (v1.14.0; antes
+        nada contava). Para sozinha se o robo escrever outro status ou a execucao acabar."""
+        marca = [pagina.status_atual[0]]
+
+        def passo(n):
+            if n <= 0 or not pagina.ocupado or pagina.status_atual[0] != marca[0]:
+                return
+            marca[0] = f"{texto}: começa em {n} s"
+            pagina._status(marca[0], "destaque")
+            self.after(1000, passo, n - 1)
+        self.after_idle(passo, segundos)
+
     def _fim_da_execucao(self):
         if self.registros and self.concluidas == len(self.registros):
             self._status("Tudo concluído", "ok")
@@ -1550,10 +1382,11 @@ class App(RaizTk):
             self.carregar(caminho)
 
     def recarregar(self):
-        if not self.caminho_atual:
+        if not self.caminho_atual or self.ocupado:
             return
-        if self.concluidas and not messagebox.askokcancel(
-                "Recarregar", f"Recarregar apaga o andamento ({qtd(self.concluidas, 'linha concluída', 'linhas concluídas')}).\nContinuar?"):
+        if self.concluidas and not self.perguntar(
+                "Recarregar a planilha?", f"Recarregar apaga o andamento "
+                f"({qtd(self.concluidas, 'linha concluída', 'linhas concluídas')}).", sim="Recarregar", perigo=True):
             return
         if self.registros:
             gravar_progresso(self.originais, set())
@@ -1573,7 +1406,7 @@ class App(RaizTk):
         try:
             registros = ler_planilha(caminho)
         except Exception as erro:
-            messagebox.showerror("Planilha", str(erro))
+            self.avisar("Não consegui ler a planilha", str(erro), tipo="erro")
             self._atualizar_botoes()
             return
         self._lembrar_planilha("ultima_0234", caminho)  # atalho "Abrir a ultima" na tela sem planilha
@@ -1587,7 +1420,7 @@ class App(RaizTk):
         if erros:
             self._status("Corrija a planilha e clique em Recarregar", "erro")
             self.escrever("Planilha invalida, corrija no Excel, salve e clique em Recarregar:\n  " + "\n  ".join(erros))
-            messagebox.showerror("Planilha inválida", "\n".join(erros[:10]) + "\n\nCorrija no Excel, salve e clique em 'Recarregar'.")
+            self.avisar("Planilha inválida", "Corrija no Excel, salve e clique em Recarregar.", tipo="erro", lista=erros)
         elif not registros:
             self._status("Planilha vazia", "aviso")
         else:
@@ -1642,14 +1475,14 @@ class App(RaizTk):
         janela.iconphoto(False, self._icone)
         marcadas = {linha for linha, *_ in suspeitas}
         escolha = set()
-        margem = px(16)
+        margem = esp(4)
         tk.Label(janela, text=f"{len(suspeitas)} linha(s) com uma Conta que o SRP já recusou para o mesmo Item e C/Custo",
-                 bg=COR["fundo"], fg=COR["texto"], font=fonte(11, forte=True), anchor="w").pack(fill="x", padx=margem,
-                                                                                               pady=(margem, px(2)))
+                 bg=COR["fundo"], fg=COR["texto"], font=fonte("subtitulo", forte=True), anchor="w").pack(fill="x", padx=margem,
+                                                                                               pady=(margem, esp(0.5)))
         tk.Label(janela, text="Clique numa linha para marcar ou desmarcar. As marcadas usam a conta que o SRP informou "
                               "como correta; as outras ficam como estão e o robô pausa nelas. A planilha no Excel não muda.",
-                 bg=COR["fundo"], fg=COR["suave"], font=fonte(9), anchor="w", justify="left",
-                 wraplength=px(560)).pack(fill="x", padx=margem, pady=(0, px(10)))
+                 bg=COR["fundo"], fg=COR["suave"], font=fonte("pequeno"), anchor="w", justify="left",
+                 wraplength=px(560)).pack(fill="x", padx=margem, pady=(0, esp(3)))
         cartao = self._cartao(janela)
         cartao.pack(fill="both", expand=True, padx=margem)
         colunas = ("usar", "linha", "item", "conta", "sugerida")
@@ -1663,8 +1496,8 @@ class App(RaizTk):
         if len(suspeitas) > 10:
             rolagem = self._rolagem(cartao, tabela.yview)
             tabela.configure(yscrollcommand=rolagem.set)
-            rolagem.pack(side="right", fill="y", padx=(0, px(4)), pady=px(8))
-        tabela.pack(fill="both", expand=True, padx=px(4), pady=px(4))
+            rolagem.pack(side="right", fill="y", padx=(0, esp(1)), pady=esp(2))
+        tabela.pack(fill="both", expand=True, padx=esp(1), pady=esp(1))
 
         def alternar(evento):
             iid = tabela.identify_row(evento.y)
@@ -1680,8 +1513,11 @@ class App(RaizTk):
         botoes.pack(fill="x", padx=margem, pady=margem)
         Botao(botoes, text="Usar as marcadas", style="Primario.TButton", command=usar).pack(side="right")
         Botao(botoes, text="Manter a planilha", style="Secundario.TButton", command=janela.destroy).pack(side="right",
-                                                                                                         padx=(0, px(8)))
+                                                                                                         padx=(0, esp(2)))
+        janela.bind("<Return>", lambda _e: usar())
+        janela.bind("<Escape>", lambda _e: janela.destroy())
         barra_titulo(janela)  # ja faz o update_idletasks
+        janela.focus_force()
         janela.geometry(f"+{self.winfo_rootx() + max((self.winfo_width() - janela.winfo_width()) // 2, 0)}"
                         f"+{self.winfo_rooty() + px(80)}")
         janela.grab_set()
@@ -1693,17 +1529,21 @@ class App(RaizTk):
             limite = int(self.limite.get() or 0)
             pausa = float(self.pausa.get().replace(",", "."))
         except ValueError:
-            messagebox.showerror("Opções", "O limite deve ser um número inteiro e a pausa deve ser um número.")
+            self.avisar("Opções", "O limite deve ser um número inteiro e a pausa deve ser um número.", tipo="erro")
             return None
         base = [r for r in self.registros if self.estados.get(r["linha"]) != "ok"] if retomar else self.registros
         return (base[:limite] if limite > 0 else base), pausa
 
     def simular(self):
+        """Mostra nos Detalhes as teclas de cada linha (v1.14.0: abre os Detalhes; fechados, o Simular parecia nao
+        fazer nada)."""
         escolha = self.selecionadas()
         if escolha:
             for r in escolha[0]:
                 self.escrever(f"linha {r['linha']}: {descrever(r)}")
             self.escrever("Simulacao: nada foi enviado. A Conta so e digitada se estiver editavel na tela.")
+            self.abrir_console()
+            self._status(f"Simulação de {qtd(len(escolha[0]), 'linha', 'linhas')} nos Detalhes (nada foi digitado)")
 
     def iniciar(self, retomar=False):
         escolha = self.selecionadas(retomar)
@@ -1712,28 +1552,29 @@ class App(RaizTk):
         if not citrix_aberto():
             self.citrix = False
             self._pintar_citrix()
-            messagebox.showwarning("Citrix não encontrado",
-                                   "Não achei a janela do Citrix (Desktop Viewer).\nAbra o SRP e tente de novo.")
+            self.avisar("Citrix não encontrado", "Não achei a janela do Citrix (Desktop Viewer). Abra o SRP e tente de "
+                        "novo.", tipo="aviso")
             return
         registros, pausa = escolha
         if not registros:
-            messagebox.showinfo("Nada a fazer", "Não há linhas pendentes.")
+            self.avisar("Nada a fazer", "Não há linhas pendentes.")
             return
         if retomar:
-            aviso = (f"Continuar a partir da linha {registros[0]['linha']} ({qtd(len(registros), 'linha', 'linhas')})?\n\n"
-                     f"Antes: confira no SRP se a linha {registros[0]['linha']} ficou pela metade e limpe-a se precisar.\n"
-                     "Depois do OK você terá 5 segundos para clicar no campo Item dela.")
+            titulo = f"Continuar da linha {registros[0]['linha']} ({qtd(len(registros), 'linha', 'linhas')})?"
+            texto = (f"Antes, confira no SRP se a linha {registros[0]['linha']} ficou pela metade e limpe-a se precisar. "
+                     "Depois de Iniciar você terá 5 segundos para clicar no campo Item dela.")
         else:
-            aviso = (f"Preencher {qtd(len(registros), 'linha', 'linhas')} no SRP?\n\n"
-                     "Depois do OK você terá 5 segundos para clicar no campo Item da primeira linha livre.")
+            titulo = f"Preencher {qtd(len(registros), 'linha', 'linhas')} no SRP?"
+            texto = "Depois de Iniciar você terá 5 segundos para clicar no campo Item da primeira linha livre."
+        atencao = []
         suspeitas = contas_suspeitas(registros)
         if suspeitas:
-            aviso += (f"\n\nATENÇÃO: {qtd(len(suspeitas), 'linha', 'linhas')} com Conta que o SRP já recusou (linhas "
-                      + ", ".join(str(l) for l, *_ in suspeitas[:8]) + "). O robô vai pausar nelas.")
+            atencao.append(f"{qtd(len(suspeitas), 'linha', 'linhas')} com Conta que o SRP já recusou (linhas "
+                           + ", ".join(str(l) for l, *_ in suspeitas[:8]) + "): o robô vai pausar nelas.")
         if self.conferir.get() and itens_repetidos(self.registros):
-            aviso += ("\n\nATENÇÃO: a planilha tem itens repetidos e a conferência da quantidade está ligada. "
-                      "Como o SRP soma itens iguais, a conferência vai interromper nesses itens.")
-        if not messagebox.askokcancel("Iniciar", aviso):
+            atencao.append("A planilha tem itens repetidos e a conferência da quantidade está ligada: como o SRP soma "
+                           "itens iguais, a conferência vai interromper nesses itens.")
+        if not self.perguntar(titulo, texto, sim="Iniciar", lista=atencao or None, tipo="aviso" if atencao else "pergunta"):
             return
         self.parar.clear()
         self.execucao = {"inicio": time.time(), "total": len(registros), "feitas": 0, "erros": 0, "pausas": 0,
@@ -1752,6 +1593,7 @@ class App(RaizTk):
                 self._estado_linha(r["linha"], "pendente")
         self.barra.configure(value=self.concluidas, maximum=len(self.registros))
         self._status("Iniciando...", "destaque")
+        self.contagem(self, "Clique no campo Item no SRP")
         self.ocupado = True
         self.pausar.clear()
         self._atualizar_botoes()

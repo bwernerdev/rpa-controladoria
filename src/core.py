@@ -885,6 +885,19 @@ def registrar_atualizacao(texto):
         pass
 
 
+def registrar_falha_tela(contexto):
+    """Guarda o traceback da excecao em curso em logs\\app-erros.log (com data, hora e `contexto`). O exe roda sem
+    console: sem isso, um erro dentro de um callback da janela sumia sem rastro. Falha ao gravar = ignora."""
+    import traceback
+    try:
+        arquivo = pasta_logs() / "app-erros.log"
+        arquivo.parent.mkdir(parents=True, exist_ok=True)
+        with open(arquivo, "a", encoding="utf-8") as saida:
+            saida.write(f"{time.strftime('%d/%m/%Y %H:%M:%S')} {contexto}\n{traceback.format_exc()}\n")
+    except OSError:
+        pass
+
+
 def _baixar_powershell(url, arquivo, total, progresso, tempo_limite=900):
     """Baixa `url` para `arquivo` pelo proxy do Windows, informando o tamanho do arquivo enquanto cresce."""
     import threading

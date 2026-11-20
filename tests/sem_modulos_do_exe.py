@@ -1,4 +1,4 @@
-"""Roda a suite com os modulos que o build.ps1 tira do exe bloqueados (import deles da ImportError), para pegar codigo
+r"""Roda a suite com os modulos que o build.ps1 tira do exe bloqueados (import deles da ImportError), para pegar codigo
 novo que passe a depender de um deles. Uso: .venv\Scripts\python.exe tests\sem_modulos_do_exe.py
 1) importa todos os modulos de src com tudo bloqueado; 2) roda a suite liberando so a fonte (PIL._imagingft): os testes
 de OCR desenham texto com Tahoma para simular a tela, o app nao. unittest/doctest ficam fora: a suite precisa deles."""

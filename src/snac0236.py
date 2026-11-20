@@ -924,11 +924,12 @@ def conferir_com_logs(notas, logs):
 
 
 def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0,
-             serie_ponto=None):
+             serie_ponto=None, pausar=None):
     """Preenche as notas no SRP. `serie_ponto(linhas)`: chamado antes de marcar 'ok' a nota em que o robo pos "." na
     Serie (janela "ja existe"). `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
     acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
-    as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. Devolve 0 se concluiu."""
+    as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. `pausar` (Event,
+    F9; v1.14.0): pausa entre uma nota integrada e a proxima, com o cursor na Chave. Devolve 0 se concluiu."""
     core.limpar_logs()
     caminho_log = core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log"
     log = open(caminho_log, "w", encoding="utf-8")
@@ -1773,8 +1774,16 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                     marcar(linhas, "ok")
                 break
             if cliques == 3 and foco_chave:  # integrada com sucesso e cursor na Chave: proxima nota, sem pausa
+                if pausar is not None and pausar.is_set() and retomar is not None:  # F9: pausa aqui, entre as notas
+                    pausar.clear()
+                    foco = esperar_na_chave(
+                        "F9: PAUSADO entre as notas. Para seguir, deixe o cursor na Chave Acesso NF-e e clique em "
+                        "Continuar.", [notas[numero]["itens"][0]["linha"]])
+                    continue
                 foco = foco_chave
                 continue
+            if pausar is not None:
+                pausar.clear()  # a pausa abaixo ja atende o F9
             if retomar is None:
                 registrar("Sem o botao Continuar o robo para aqui: confira a integracao e inicie de novo pela proxima nota.")
                 return 1
