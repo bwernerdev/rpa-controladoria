@@ -922,109 +922,110 @@ def conferir_com_logs(notas, logs):
     return saida
 
 
-def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0,
-             serie_ponto=None, pausar=None):
-    """Preenche as notas no SRP. `serie_ponto(linhas)`: chamado antes de marcar 'ok' a nota em que o robo pos "." na
-    Serie (janela "ja existe"). `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
-    acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
-    as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. `pausar` (Event,
-    F9; v1.14.0): pausa entre uma nota integrada e a proxima, com o cursor na Chave. Devolve 0 se concluiu."""
-    core.limpar_logs()
-    caminho_log = core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log"
-    log = open(caminho_log, "w", encoding="utf-8")
-    with _TRAVA_LOG:
-        _LOG.update(caminho=caminho_log, arquivo=log, ultimo=time.time())
-    rateio_salvo = [None]
-    confia_barra = [True]  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
-    atual = []  # linhas marcadas 'executando'
-    serie_com_ponto_feita = [False]  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
-    sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor nesta execucao: ali a espera e curta
+class Execucao0236:
+    """Uma execucao do `executar` (v1.14.0: antes uma funcao de 881 linhas com 33 funcoes internas).
+    Os parametros e o estado que as etapas dividem ficam em self; cada etapa e um metodo; `rodar` e o laco."""
 
-    def registrar(texto, mostrar=True):
+    def __init__(self, notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0,
+             serie_ponto=None, pausar=None):
+        self.notas = notas
+        self.janela_trecho = janela_trecho
+        self.pausa = pausa
+        self.render = render
+        self.espera = espera
+        self.parar = parar
+        self.aviso = aviso
+        self.estado = estado
+        self.retomar = retomar
+        self.intervalo = intervalo
+        self.serie_ponto = serie_ponto
+        self.pausar = pausar
+
+    def registrar(self, texto, mostrar=True):
         """Linha no log com hora e o tempo desde a linha anterior (+s), para achar o que demora."""
         with _TRAVA_LOG:
-            if not log.closed:
+            if not self.log.closed:
                 _escrever_log(texto)
         if mostrar:
-            aviso(texto)
+            self.aviso(texto)
 
-    def marcar(linhas, nome):
+    def marcar(self, linhas, nome):
         for linha in linhas:
-            if estado:
-                estado(linha, nome)
-        atual[:] = list(linhas) if nome == "executando" else [l for l in atual if l not in linhas]
+            if self.estado:
+                self.estado(linha, nome)
+        self.atual[:] = list(linhas) if nome == "executando" else [l for l in self.atual if l not in linhas]
 
-    def checar_parada():
-        if parar.is_set() or core.mouse_no_canto():
+    def checar_parada(self):
+        if self.parar.is_set() or core.mouse_no_canto():
             raise KeyboardInterrupt
 
-    def devagar(texto):
+    def devagar(self, texto):
         """Modo passo a passo: anuncia a proxima acao e espera `intervalo` segundos (F8/Parar/mouse no canto valem)."""
-        if intervalo <= 0:
+        if self.intervalo <= 0:
             return
-        aviso(f"Passo a passo: {texto}")
-        registrar(f"  passo a passo: {texto}", mostrar=False)
-        fim = time.time() + intervalo
+        self.aviso(f"Passo a passo: {texto}")
+        self.registrar(f"  passo a passo: {texto}", mostrar=False)
+        fim = time.time() + self.intervalo
         while time.time() < fim:
-            checar_parada()
+            self.checar_parada()
             time.sleep(0.1)
 
-    def digitar(texto, campo):
-        checar_parada()
-        devagar(f"digitar '{texto}' em {NOME[campo]}" if texto else f"{NOME[campo]} fica em branco")
+    def digitar(self, texto, campo):
+        self.checar_parada()
+        self.devagar(f"digitar '{texto}' em {NOME[campo]}" if texto else f"{NOME[campo]} fica em branco")
         if texto:
             core.send_keys(texto.replace(",", "{,}"), pause=0.03)
-            time.sleep(min(pausa, 0.05))
+            time.sleep(min(self.pausa, 0.05))
 
-    def limpar_campo(campo, quantos=10):
+    def limpar_campo(self, campo, quantos=10):
         """Apaga o conteudo do campo em foco: End + Backspace (serve com o texto selecionado ou com o cursor no meio)."""
-        checar_parada()
-        devagar(f"apagar o que houver em {NOME[campo]}")
+        self.checar_parada()
+        self.devagar(f"apagar o que houver em {NOME[campo]}")
         core.send_keys(f"{{END}}{{BACKSPACE {quantos}}}", pause=0.03)
 
-    def enters(campo, quantos, foco):
+    def enters(self, campo, quantos, foco):
         """Enter `quantos` vezes; cada um precisa mover o foco ou, na grade rolada, rolar a grade (senao: aviso do SRP
         ou campo preso)."""
         for vez in range(quantos):
-            checar_parada()
-            devagar(f"Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
-            antes = core.capturar(janela) if campo in GRADE_ROLADA and foco is not None else None
+            self.checar_parada()
+            self.devagar(f"Enter {vez + 1} de {quantos} depois do {NOME[campo]}")
+            antes = core.capturar(self.janela) if campo in GRADE_ROLADA and foco is not None else None
             core.send_keys("{ENTER}", pause=0.03)
-            foco = depois_do_enter(campo, vez, foco, antes)
+            foco = self.depois_do_enter(campo, vez, foco, antes)
         return foco
 
-    def depois_do_enter(campo, vez, foco, antes=None):
+    def depois_do_enter(self, campo, vez, foco, antes=None):
         """Nova caixa do foco (None = campo sem cor, ex.: lista Lemg); aviso ou foco parado = Travou. Onde o foco ja
         ficou sem cor nesta execucao (mesmo campo e mesmo Enter), espera so SEM_COR_CONHECIDO s sem ciano."""
-        curto = (campo, vez) in sem_cor_visto
-        novo = aguardar(janela, foco, render, fixos, sem_cor=SEM_COR_CONHECIDO if curto else SEM_COR, antes=antes)
+        curto = (campo, vez) in self.sem_cor_visto
+        novo = aguardar(self.janela, foco, self.render, self.fixos, sem_cor=SEM_COR_CONHECIDO if curto else SEM_COR, antes=antes)
         if novo in (None, "aviso") and campo in ("chave", "serie"):
-            texto = janela_ja_existe()
-            if texto and campo == "chave" and not serie_com_ponto_feita[0]:
+            texto = self.janela_ja_existe()
+            if texto and campo == "chave" and not self.serie_com_ponto_feita:
                 raise DocumentoExiste(campo, texto)
             if texto:
                 raise Travou(campo, f"o SRP diz que o Documento Recebimento já existe mesmo com '.' na Série ('{texto[:90]}')")
         if novo is None:
             # 09/11/2026 13:04: o Enter depois do Valor do ICMS ficou 4,5 s parado (nas outras notas, ate 0,7 s) e o robo
             # pausou sem saber por que. Antes de pausar espera mais uma vez (SRP lento), sem apertar nada.
-            novo = aguardar(janela, foco, render, fixos, antes=antes)
+            novo = aguardar(self.janela, foco, self.render, self.fixos, antes=antes)
             if novo is not None:
-                registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: o SRP demorou mais de {render:.0f} s", mostrar=False)
+                self.registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: o SRP demorou mais de {self.render:.0f} s", mostrar=False)
         if novo in (None, "aviso"):
             motivo = "apareceu um aviso do SRP" if novo == "aviso" else "o cursor não saiu do lugar"
-            raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}{diagnostico(campo)}")
+            raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}{self.diagnostico(campo)}")
         if novo == "sem_cor" and not curto:
-            sem_cor_visto.add((campo, vez))
+            self.sem_cor_visto.add((campo, vez))
         novo = None if novo == "sem_cor" else novo
-        registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: foco={novo} perto de {onde_esta(novo, lidas)!r}",
+        self.registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: foco={novo} perto de {onde_esta(novo, self.lidas)!r}",
                   mostrar=False)
         return novo
 
-    def diagnostico(campo):
+    def diagnostico(self, campo):
         """Quando o cursor prende: texto da janela do SRP por cima (barra azul), se houver, e um print da janela do
         Citrix em logs\\telas (fica so neste computador; apagado com os logs, em 30 dias). Texto para a mensagem."""
         try:
-            imagem = core.capturar(janela)
+            imagem = core.capturar(self.janela)
         except Exception:
             return ""
         nome = f"{datetime.now():%Y%m%d-%H%M%S}-{campo}.png"
@@ -1032,282 +1033,282 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             pasta = core.pasta_logs() / "telas"
             pasta.mkdir(exist_ok=True)
             imagem.save(pasta / nome)
-            registrar(f"  print da tela: logs\\telas\\{nome}", mostrar=False)
+            self.registrar(f"  print da tela: logs\\telas\\{nome}", mostrar=False)
         except Exception as erro:
-            registrar(f"  print da tela falhou: {erro}", mostrar=False)
+            self.registrar(f"  print da tela falhou: {erro}", mostrar=False)
         texto = ""
-        if tesseract:
+        if self.tesseract:
             try:
                 barras = barras_dialogo(imagem)
                 if barras:
                     texto = normalizar(" ".join(p[0] for p in core.palavras_tela(
-                        imagem.crop(area_dialogo(imagem, barras)), tesseract, escala=4 if imagem.width < 2000 else 2)))
+                        imagem.crop(area_dialogo(imagem, barras)), self.tesseract, escala=4 if imagem.width < 2000 else 2)))
             except Exception as erro:
-                registrar(f"  leitura da janela por cima falhou: {erro}", mostrar=False)
-        registrar(f"  janela por cima: {texto[:200]!r}" if texto else "  nenhuma janela do SRP por cima", mostrar=False)
+                self.registrar(f"  leitura da janela por cima falhou: {erro}", mostrar=False)
+        self.registrar(f"  janela por cima: {texto[:200]!r}" if texto else "  nenhuma janela do SRP por cima", mostrar=False)
         return f" (janela do SRP na tela: '{texto[:100]}')" if texto else ""
 
-    def local(caixa):
+    def local(self, caixa):
         if caixa is None:
             return " (o cursor está num campo sem cor, como uma lista)"
-        texto = onde_esta(caixa, lidas)
+        texto = onde_esta(caixa, self.lidas)
         return f" (o cursor está em '{texto}')" if texto else ""
 
-    def ir_ate(campo, alvo, quantos, foco, anterior):
+    def ir_ate(self, campo, alvo, quantos, foco, anterior):
         """Depois de digitar `campo`, Enter ate o foco chegar em `alvo` (conferido pelo rotulo lido no inicio), no maximo
         `quantos` + 4 vezes: o SRP pula ou nao campos que ele mesmo preenche (CNPJ, Filial Fiscal...). Sem rotulo para
         conferir, so conta os `quantos` Enter combinados."""
-        if posicao_ok(alvo, foco, rotulos, anterior, lidas) is None:
-            return enters(campo, quantos, foco)
+        if posicao_ok(alvo, foco, self.rotulos, anterior, self.lidas) is None:
+            return self.enters(campo, quantos, foco)
         limite = quantos + 4
         for vez in range(limite):
-            checar_parada()
-            devagar(f"Enter {vez + 1} depois do {NOME[campo]} (procurando {NOME[alvo]}; previstos {quantos})")
+            self.checar_parada()
+            self.devagar(f"Enter {vez + 1} depois do {NOME[campo]} (procurando {NOME[alvo]}; previstos {quantos})")
             core.send_keys("{ENTER}", pause=0.03)
-            foco = depois_do_enter(campo, vez, foco)
-            if posicao_ok(alvo, foco, rotulos, anterior, lidas):
+            foco = self.depois_do_enter(campo, vez, foco)
+            if posicao_ok(alvo, foco, self.rotulos, anterior, self.lidas):
                 if vez + 1 != quantos:
-                    registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
+                    self.registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
                 return foco
-        raise Travou(alvo, f"não cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{local(foco)}")
+        raise Travou(alvo, f"não cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{self.local(foco)}")
 
-    def fechar_referencia(imagem, area):
+    def fechar_referencia(self, imagem, area):
         """Janela "Nota fiscal de referencia do faturamento": so OK, sem ler a nota (usuario, 05/11/2026). Clique no
         botao OK; sem o botao lido, Enter ate a janela fechar (o Enter atravessa a grade e chega no OK), no maximo 8."""
-        botao = botao_referencia(imagem, area, tesseract)
+        botao = botao_referencia(imagem, area, self.tesseract)
         if botao:
-            devagar("clicar em OK na 'Nota Fiscal de Referência'")
-            ret = janela.rectangle()
+            self.devagar("clicar em OK na 'Nota Fiscal de Referência'")
+            ret = self.janela.rectangle()
             clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
-            registrar("  NF de referência: cliquei em OK", mostrar=False)
+            self.registrar("  NF de referência: cliquei em OK", mostrar=False)
             return
-        registrar("  NF de referência: não li o botão OK; Enter até a janela fechar", mostrar=False)
+        self.registrar("  NF de referência: não li o botão OK; Enter até a janela fechar", mostrar=False)
         for vez in range(8):
-            checar_parada()
-            devagar(f"Enter {vez + 1} na 'Nota Fiscal de Referência' (até o OK)")
-            antes = core.capturar(janela)
+            self.checar_parada()
+            self.devagar(f"Enter {vez + 1} na 'Nota Fiscal de Referência' (até o OK)")
+            antes = core.capturar(self.janela)
             core.send_keys("{ENTER}", pause=0.03)
-            esperar_tela(antes, 1.0)
-            if not barras_dialogo(core.capturar(janela)):
-                registrar(f"  NF de referência: fechou com {vez + 1} Enter", mostrar=False)
+            self.esperar_tela(antes, 1.0)
+            if not barras_dialogo(core.capturar(self.janela)):
+                self.registrar(f"  NF de referência: fechou com {vez + 1} Enter", mostrar=False)
                 return
         raise Travou("item", "a janela 'Nota Fiscal de Referência' não fechou (não li o botão OK e 8 Enter não bastaram)")
 
-    def janela_ja_existe():
+    def janela_ja_existe(self):
         """Texto (normalizado) da janela "Documento Recebimento ... ja existe" se ela estiver aberta; senao None. So e
         chamada quando o cursor nao anda depois da Chave ou da Serie (le o recorte da barra azul; sem barra, a tela)."""
-        if not tesseract:
+        if not self.tesseract:
             return None
-        imagem = core.capturar(janela)
+        imagem = core.capturar(self.janela)
         barras = barras_dialogo(imagem)
         alvo = imagem.crop(area_dialogo(imagem, barras)) if barras else imagem
         for escala in ((2, 4) if barras else (2,)):  # em 1366x768 o texto da janela e pequeno
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(alvo, tesseract, escala=escala)))
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(alvo, self.tesseract, escala=escala)))
             if documento_ja_existe(texto):
                 return texto
         return None
 
-    def serie_com_ponto(nota, foco, texto):
+    def serie_com_ponto(self, nota, foco, texto):
         """Janela "Documento Recebimento ... ja existe, foi integrado no sistema em ..." depois da Chave (usuario,
         09/11/2026): Enter (OK), apaga a Chave, Enter ate a Serie e poe "." no fim dela ("1" -> "1."); depois segue
         com Enter ate a Filial Fisica, como sempre. Devolve o foco na Filial Fisica."""
-        registrar(f"  janela 'já existe': {texto[:120]!r}", mostrar=False)
-        checar_parada()
-        devagar("Enter no aviso 'Documento Recebimento já existe' (OK)")
-        antes = core.capturar(janela)
+        self.registrar(f"  janela 'já existe': {texto[:120]!r}", mostrar=False)
+        self.checar_parada()
+        self.devagar("Enter no aviso 'Documento Recebimento já existe' (OK)")
+        antes = core.capturar(self.janela)
         core.send_keys("{ENTER}", pause=0.03)
-        esperar_tela(antes, render)
-        if janela_ja_existe():
+        self.esperar_tela(antes, self.render)
+        if self.janela_ja_existe():
             raise Travou("chave", "a janela 'Documento Recebimento já existe' não fechou com Enter")
-        foco = foco_tela(janela) or foco
-        if posicao_ok("chave", foco, rotulos, None, lidas) is False:
-            raise Travou("chave", f"depois do OK na janela 'já existe' o cursor não voltou para a Chave{local(foco)}")
-        limpar_campo("chave", 60)
-        serie_com_ponto_feita[0] = True
-        rotulo = next((c for t, c in lidas if t.startswith("serie")), None)
+        foco = foco_tela(self.janela) or foco
+        if posicao_ok("chave", foco, self.rotulos, None, self.lidas) is False:
+            raise Travou("chave", f"depois do OK na janela 'já existe' o cursor não voltou para a Chave{self.local(foco)}")
+        self.limpar_campo("chave", 60)
+        self.serie_com_ponto_feita = True
+        rotulo = next((c for t, c in self.lidas if t.startswith("serie")), None)
         if not rotulo:
             raise Travou("serie", "o SRP disse que o Documento Recebimento já existe, mas não li o rótulo Série na tela")
         limite = ENTERS_CHAVE_SERIE + 4
         for vez in range(limite):
-            checar_parada()
-            devagar(f"Enter {vez + 1} depois de apagar a Chave (procurando a Série)")
+            self.checar_parada()
+            self.devagar(f"Enter {vez + 1} depois de apagar a Chave (procurando a Série)")
             core.send_keys("{ENTER}", pause=0.03)
-            foco = depois_do_enter("chave", vez, foco)
-            if foco and ao_lado(foco, rotulo, lidas):
+            foco = self.depois_do_enter("chave", vez, foco)
+            if foco and ao_lado(foco, rotulo, self.lidas):
                 break
         else:
-            raise Travou("serie", f"não cheguei na Série com {limite} Enter depois de apagar a Chave{local(foco)}")
-        checar_parada()
-        devagar("ir para o fim da Série e digitar '.'")
+            raise Travou("serie", f"não cheguei na Série com {limite} Enter depois de apagar a Chave{self.local(foco)}")
+        self.checar_parada()
+        self.devagar("ir para o fim da Série e digitar '.'")
         core.send_keys("{END}.", pause=0.03)
-        time.sleep(min(pausa, 0.05))
-        registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse que o Documento Recebimento já existe; apaguei a Chave e "
+        time.sleep(min(self.pausa, 0.05))
+        self.registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse que o Documento Recebimento já existe; apaguei a Chave e "
                   "pus '.' no fim da Série.")
-        return ir_ate("serie", "filial1", 2, foco, anterior=foco)
+        return self.ir_ate("serie", "filial1", 2, foco, anterior=foco)
 
-    def janela_no_caminho(foco):
+    def janela_no_caminho(self, foco):
         """Depois de cada Enter do Frete ao Item: janela por cima (barra de titulo azul, ~0,07 s)? A "Nota fiscal de
         referencia do faturamento" abre nesse caminho (usuario, 05/11/2026): `fechar_referencia` e segue. Outra janela
         qualquer: pausa (nao da Enter as cegas)."""
-        if not tesseract:
+        if not self.tesseract:
             return foco
-        imagem = core.capturar(janela)
+        imagem = core.capturar(self.janela)
         barras = barras_dialogo(imagem)
         if not barras:
             return foco
         area = area_dialogo(imagem, barras)
-        texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract)))
+        texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), self.tesseract)))
         if not nf_referencia(texto):
             raise Travou("item", f"apareceu uma janela do SRP entre o Frete e o Item ('{texto[:60]}')")
-        fechar_referencia(imagem, area)
-        novo = aguardar(janela, foco, render, fixos)
+        self.fechar_referencia(imagem, area)
+        novo = aguardar(self.janela, foco, self.render, self.fixos)
         if novo in (None, "aviso"):
             raise Travou("item", "depois do OK na 'Nota Fiscal de Referência' "
                          + ("apareceu um aviso do SRP" if novo == "aviso" else "a tela não mudou"))
-        registrar(f"  NF de referência fechada entre o Frete e o Item: foco={novo}", mostrar=False)
+        self.registrar(f"  NF de referência fechada entre o Frete e o Item: foco={novo}", mostrar=False)
         return novo if isinstance(novo, tuple) else None
 
-    def ir_para_item(foco):
+    def ir_para_item(self, foco):
         """Depois do Frete: Enter ate o Item da 1a linha da grade, no maximo ENTERS_FRETE_ITEM + 4 (usuario, 05/11/2026).
         De 04/11 a 05/11 o robo clicava no Item, mas o clique pulava os campos em que o SRP abre a janela "Nota fiscal de
         referencia do faturamento", que entao so aparecia depois (raramente). Depois de cada Enter, `janela_no_caminho`.
         Sem o rotulo Item lido: so a contagem."""
-        conferir = posicao_ok("item", foco, rotulos, foco, lidas) is not None
+        conferir = posicao_ok("item", foco, self.rotulos, foco, self.lidas) is not None
         limite = ENTERS_FRETE_ITEM + 4 if conferir else ENTERS_FRETE_ITEM
         for vez in range(limite):
-            checar_parada()
-            devagar(f"Enter {vez + 1} depois do Frete (procurando o Item da grade)")
+            self.checar_parada()
+            self.devagar(f"Enter {vez + 1} depois do Frete (procurando o Item da grade)")
             core.send_keys("{ENTER}", pause=0.03)
-            foco = janela_no_caminho(depois_do_enter("frete", vez, foco))
-            if conferir and posicao_ok("item", foco, rotulos, None, lidas):
-                registrar(f"  Item: cheguei com {vez + 1} Enter depois do Frete", mostrar=False)
+            foco = self.janela_no_caminho(self.depois_do_enter("frete", vez, foco))
+            if conferir and posicao_ok("item", foco, self.rotulos, None, self.lidas):
+                self.registrar(f"  Item: cheguei com {vez + 1} Enter depois do Frete", mostrar=False)
                 return foco
         if not conferir:
             return foco
-        raise Travou("item", f"não cheguei no Item da grade com {limite} Enter depois do Frete{local(foco)}")
+        raise Travou("item", f"não cheguei no Item da grade com {limite} Enter depois do Frete{self.local(foco)}")
 
-    def descer_para_item(foco, anterior):
+    def descer_para_item(self, foco, anterior):
         """Item seguinte da mesma nota. Depois do Tributos OK o SRP deixa o foco no Item da MESMA linha (05/11/2026 15:20:
         o robo digitou o 2o item por cima do 1o): seta para baixo leva ao Item da linha de baixo (sugestao do usuario).
         `anterior` = caixa do Item da linha do item anterior."""
         meio = lambda c: (c[1] + c[3]) / 2  # noqa: E731
-        if (isinstance(foco, tuple) and posicao_ok("item", foco, rotulos, None, lidas) is not False
+        if (isinstance(foco, tuple) and posicao_ok("item", foco, self.rotulos, None, self.lidas) is not False
                 and meio(foco) > anterior[3]):
-            registrar(f"  depois do Tributos OK o foco já está no Item da linha de baixo: {foco}", mostrar=False)
+            self.registrar(f"  depois do Tributos OK o foco já está no Item da linha de baixo: {foco}", mostrar=False)
             return foco
-        if not (isinstance(foco, tuple) and posicao_ok("item", foco, rotulos, None, lidas) is not False
+        if not (isinstance(foco, tuple) and posicao_ok("item", foco, self.rotulos, None, self.lidas) is not False
                 and anterior[1] <= meio(foco) <= anterior[3]):
-            raise Travou("item", f"depois do Tributos OK o cursor não ficou no Item da linha do item anterior{local(foco)}; "
+            raise Travou("item", f"depois do Tributos OK o cursor não ficou no Item da linha do item anterior{self.local(foco)}; "
                                  "não sei em que linha digitar o próximo item")
-        checar_parada()
-        devagar("seta para baixo: Item da próxima linha da grade")
+        self.checar_parada()
+        self.devagar("seta para baixo: Item da próxima linha da grade")
         core.send_keys("{DOWN}", pause=0.03)
-        novo = aguardar(janela, foco, render, fixos)
+        novo = aguardar(self.janela, foco, self.render, self.fixos)
         if novo == "aviso":
             raise Travou("item", "apareceu um aviso do SRP depois da seta para baixo na grade")
-        if (isinstance(novo, tuple) and posicao_ok("item", novo, rotulos, None, lidas) is not False
+        if (isinstance(novo, tuple) and posicao_ok("item", novo, self.rotulos, None, self.lidas) is not False
                 and meio(novo) > anterior[3]):
-            registrar(f"  seta para baixo: Item da linha de baixo, foco={novo}", mostrar=False)
+            self.registrar(f"  seta para baixo: Item da linha de baixo, foco={novo}", mostrar=False)
             return novo
-        raise Travou("item", f"a seta para baixo não levou ao Item da linha de baixo{local(novo if isinstance(novo, tuple) else None)}")
+        raise Travou("item", f"a seta para baixo não levou ao Item da linha de baixo{self.local(novo if isinstance(novo, tuple) else None)}")
 
-    def entrar_no_valor_unit(foco):
+    def entrar_no_valor_unit(self, foco):
         """2o Enter depois do Qtd Fiscal: sai do Qtd.Fisica e entra no Valor Unit, que fica AMARELO (sem ciano) e faz a
         grade rolar para a direita. Conta como entrou se o ciano andar ou sumir, ou se a faixa acima do campo mudar
         (rolagem); nada disso em `render` s = Travou. Devolve o ciano que sobrar na tela (ou None)."""
-        checar_parada()
-        devagar("Enter 2 de 2 depois do Qtd Fiscal (entra no Valor Unit, que fica amarelo)")
-        antes = core.capturar(janela)
+        self.checar_parada()
+        self.devagar("Enter 2 de 2 depois do Qtd Fiscal (entra no Valor Unit, que fica amarelo)")
+        antes = core.capturar(self.janela)
         core.send_keys("{ENTER}", pause=0.03)
-        prazo, sumiu = time.time() + render, None
+        prazo, sumiu = time.time() + self.render, None
         while time.time() < prazo:
-            atual, tem_aviso = ler_estado(janela, fixos)
+            atual, tem_aviso = ler_estado(self.janela, self.fixos)
             if tem_aviso:
                 raise Travou("unit", "apareceu um aviso do SRP no Enter 2 depois do Qtd Fiscal")
             andou = atual is not None and foco is not None and (abs(atual[0] - foco[0]) > 5 or abs(atual[1] - foco[1]) > 5)
             sumiu = (sumiu or time.time()) if atual is None else None
-            rolou = foco is not None and mudou_acima(antes, core.capturar(janela), foco)
-            if andou or rolou or (sumiu and time.time() - sumiu >= min(0.3, render / 2)):
+            rolou = foco is not None and mudou_acima(antes, core.capturar(self.janela), foco)
+            if andou or rolou or (sumiu and time.time() - sumiu >= min(0.3, self.render / 2)):
                 time.sleep(0.3)  # a grade termina de rolar
                 if andou or rolou:  # sem ciano (o normal: Valor Unit amarelo) nao precisa reler
-                    atual, _ = ler_estado(janela, fixos)
-                registrar(f"  Enter 2 depois do Qtd Fiscal: no Valor Unit (andou={andou}, rolou={rolou}, "
+                    atual, _ = ler_estado(self.janela, self.fixos)
+                self.registrar(f"  Enter 2 depois do Qtd Fiscal: no Valor Unit (andou={andou}, rolou={rolou}, "
                           f"sem ciano={bool(sumiu)}); ciano agora={atual}", mostrar=False)
                 return atual
             time.sleep(0.05)
         raise Travou("unit", "o cursor não saiu do Qtd.Fisica no Enter 2 depois do Qtd Fiscal (a grade não rolou)")
 
-    def enter_rateio(campo, vez, foco):
-        checar_parada()
-        antes = core.capturar(janela) if foco is not None else None
+    def enter_rateio(self, campo, vez, foco):
+        self.checar_parada()
+        antes = core.capturar(self.janela) if foco is not None else None
         core.send_keys("{ENTER}", pause=0.03)
-        return depois_do_enter(campo, vez, foco, antes)
+        return self.depois_do_enter(campo, vez, foco, antes)
 
-    def achar_botao(chave, antes):
+    def achar_botao(self, chave, antes):
         """Rele o botao (`chave` de localizar_rateio) na faixa em volta de onde estava; None se nao estiver a vista."""
-        tela_agora = core.capturar(janela)
+        tela_agora = core.capturar(self.janela)
         esq, topo = max(antes[0] - 300, 0), max(antes[1] - 80, 0)
         recorte = tela_agora.crop((esq, topo, min(antes[2] + 300, tela_agora.width), min(antes[3] + 80, tela_agora.height)))
-        caixa = localizar_rateio(core.palavras_tela(binarizar(recorte), tesseract)).get(chave)
+        caixa = localizar_rateio(core.palavras_tela(binarizar(recorte), self.tesseract)).get(chave)
         return (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
 
-    def confirma_terceiros(rateio):
+    def confirma_terceiros(self, rateio):
         """Le so o recorte em volta do rotulo ICMS TERCEIROS (~0,5 s, contra ~5 s da tela inteira)."""
         c = rateio["terceiros"]
         h = c[3] - c[1]
-        imagem = core.capturar(janela)
+        imagem = core.capturar(self.janela)
         recorte = imagem.crop((max(c[0] - 2 * h, 0), max(c[1] - h, 0), min(c[2] + 2 * h, imagem.width),
                                min(c[3] + h, imagem.height)))
         escala = 2 if h >= 20 else 4  # em 1366x768 o rotulo tem ~8 px
         for img in (recorte, binarizar(recorte)) + ((binarizar(recorte, 120),) if escala > 2 else ()):
-            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, tesseract, escala=escala)))
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, self.tesseract, escala=escala)))
             if "tercei" in texto or "erceiro" in texto:
                 return True
-        registrar(f"  recorte do ICMS TERCEIROS não confere: {texto!r}", mostrar=False)
+        self.registrar(f"  recorte do ICMS TERCEIROS não confere: {texto!r}", mostrar=False)
         return False
 
-    def clicar_ident_terceiros(pos, foco, vez):
+    def clicar_ident_terceiros(self, pos, foco, vez):
         """Com o Rateio aberto e o foco no Ident Tributo de uma linha acima (199/198): clique no Ident Tributo da linha
         ICMS TERCEIROS, em vez dos ~6 Enter pelas linhas de cima (usuario, 04/11/2026). Foco que nao anda: segue com
         Enter, como antes."""
         t = pos["terceiros"]
         x, y = (foco[0] + foco[2]) / 2, (t[1] + t[3]) / 2
-        ret = janela.rectangle()
-        checar_parada()
-        devagar("clicar no Ident Tributo da linha ICMS TERCEIROS")
+        ret = self.janela.rectangle()
+        self.checar_parada()
+        self.devagar("clicar no Ident Tributo da linha ICMS TERCEIROS")
         clicar(ret.left + x, ret.top + y)
-        novo = aguardar(janela, foco, render, fixos)
+        novo = aguardar(self.janela, foco, self.render, self.fixos)
         if novo == "aviso":
             raise Travou("rateio", "apareceu um aviso do SRP depois do clique no Ident Tributo do ICMS TERCEIROS")
         if isinstance(novo, tuple):
-            registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS em ({x:.0f}, {y:.0f}) no Enter {vez + 1}: foco={novo}",
+            self.registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS em ({x:.0f}, {y:.0f}) no Enter {vez + 1}: foco={novo}",
                       mostrar=False)
             return novo
-        registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS, mas o foco não andou ({novo}): sigo com Enter", mostrar=False)
+        self.registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS, mas o foco não andou ({novo}): sigo com Enter", mostrar=False)
         return None if novo == "sem_cor" else foco
 
-    def preencher_rateio(r, foco):
+    def preencher_rateio(self, r, foco):
         """Depois do Valor do ICMS: Enter ate o Ident Tributo da linha ICMS TERCEIROS (lida no OCR quando o Rateio abre),
         digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
-        if not tesseract:
+        if not self.tesseract:
             raise Travou("rateio", "sem o Tesseract não consigo achar a linha ICMS TERCEIROS no Rateio")
         rateio = None
-        salvo = rateio_salvo[0]  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
+        salvo = self.rateio_salvo  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
         clicou = False
         for vez in range(MAX_ATE_RATEIO):
-            devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
-            foco = enter_rateio("icms", vez, foco)
+            self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
+            foco = self.enter_rateio("icms", vez, foco)
             pos = rateio or salvo
             # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
             # de cima (na grade principal o campo nessa altura e largo: 635 px contra 107 px da celula Ident, 4K)
             if (pos and not clicou and celula_ident(foco, pos)
                     and foco[1] > pos["ident"][3] and foco[3] < pos["terceiros"][1]):
                 clicou = True
-                foco = clicar_ident_terceiros(pos, foco, vez)
+                foco = self.clicar_ident_terceiros(pos, foco, vez)
             if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and celula_ident(foco, salvo):
-                if confirma_terceiros(salvo):
+                if self.confirma_terceiros(salvo):
                     rateio = salvo
-                    registrar(f"  Rateio: posições da nota anterior; ICMS TERCEIROS conferido no recorte (Enter {vez + 1})",
+                    self.registrar(f"  Rateio: posições da nota anterior; ICMS TERCEIROS conferido no recorte (Enter {vez + 1})",
                               mostrar=False)
                 else:
                     salvo = None  # le a tela inteira de novo
@@ -1315,19 +1316,19 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 salvo = None  # nao bateu com as posicoes salvas: le a tela inteira
             if rateio is None and not salvo and vez + 1 >= LER_RATEIO_DESDE:
                 t_leitura = time.time()
-                lido = ler_rateio(core.capturar(janela), tesseract)
-                registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
+                lido = ler_rateio(core.capturar(self.janela), self.tesseract)
+                self.registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
-                    registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
+                    self.registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
                     faltam = [NOME_RATEIO[c] for c in COLUNAS_RATEIO if c not in rateio and c in valores_rateio(r) or
                               c == "ident" and c not in rateio]
                     if faltam:
                         raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
-                    rateio_salvo[0] = rateio
-                    gravar_posicoes(tamanho, rateio)
+                    self.rateio_salvo = rateio
+                    gravar_posicoes(self.tamanho, rateio)
             if rateio and na_linha(foco, rateio["terceiros"]) and celula_ident(foco, rateio):
-                registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
+                self.registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
             linha = (rateio or salvo or {}).get("terceiros")
             if linha and foco is not None and foco[1] > linha[3] + (foco[3] - foco[1]):
@@ -1336,139 +1337,139 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             raise Travou("rateio", f"não cheguei no Ident Tributo da linha ICMS TERCEIROS com {MAX_ATE_RATEIO} Enter depois "
                          "do Valor do ICMS" + ("" if rateio else " (não achei o Rateio na tela)"))
         valores = valores_rateio(r)
-        registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto: {valores}", mostrar=False)
+        self.registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto: {valores}", mostrar=False)
         pendentes = [c for c in COLUNAS_RATEIO if c in valores]
         # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026). Chegando pelo clique, o cursor fica onde clicou e o
         # texto nao e selecionado: digitar "1" virava "11" e dava erro. Pelo Enter o texto vem selecionado. Apaga antes.
-        limpar_campo("ident")
-        digitar(valores["ident"], "ident")
+        self.limpar_campo("ident")
+        self.digitar(valores["ident"], "ident")
         pendentes.remove("ident")
         for vez in range(len(COLUNAS_RATEIO) + 2):
             if not pendentes:
                 break
-            devagar(f"Enter {vez + 1} na linha ICMS TERCEIROS (procurando {NOME_RATEIO[pendentes[0]]})")
-            foco = enter_rateio("rateio", vez, foco)
+            self.devagar(f"Enter {vez + 1} na linha ICMS TERCEIROS (procurando {NOME_RATEIO[pendentes[0]]})")
+            foco = self.enter_rateio("rateio", vez, foco)
             if not na_linha(foco, rateio["terceiros"]):
                 raise Travou("rateio", f"o cursor saiu da linha ICMS TERCEIROS antes do campo {NOME_RATEIO[pendentes[0]]}"
-                                       f"{local(foco)}; confira os campos dessa linha")
+                                       f"{self.local(foco)}; confira os campos dessa linha")
             coluna = coluna_rateio(foco, rateio)
-            registrar(f"  Enter {vez + 1} na linha ICMS TERCEIROS: foco={foco} coluna={coluna}", mostrar=False)
+            self.registrar(f"  Enter {vez + 1} na linha ICMS TERCEIROS: foco={foco} coluna={coluna}", mostrar=False)
             if coluna in pendentes:
                 if coluna != pendentes[0]:
                     raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
-                digitar(valores[coluna], coluna)
+                self.digitar(valores[coluna], coluna)
                 pendentes.remove(coluna)
         if pendentes:
             raise Travou("rateio", f"não cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
-        botao = achar_botao("tributos_ok", rateio["tributos_ok"])
+        botao = self.achar_botao("tributos_ok", rateio["tributos_ok"])
         if not botao:
             raise Travou("rateio", "não achei o botão Tributos OK na tela")
-        ret = janela.rectangle()
-        checar_parada()
-        devagar("clicar em Tributos OK")
+        ret = self.janela.rectangle()
+        self.checar_parada()
+        self.devagar("clicar em Tributos OK")
         clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
-        registrar(f"  linha {r['linha']}: clique em Tributos OK", mostrar=False)
-        prazo = time.time() + 2 * render
+        self.registrar(f"  linha {r['linha']}: clique em Tributos OK", mostrar=False)
+        prazo = time.time() + 2 * self.render
         while time.time() < prazo:
-            checar_parada()
+            self.checar_parada()
             time.sleep(0.3)
-            if not achar_botao("tributos_ok", rateio["tributos_ok"]):
+            if not self.achar_botao("tributos_ok", rateio["tributos_ok"]):
                 time.sleep(0.3)
-                return foco_tela(janela)
+                return foco_tela(self.janela)
         raise Travou("rateio", "o Rateio não fechou depois do Tributos OK (aviso do SRP?)")
 
-    def esperar_continuar():
-        retomar.clear()
-        while not retomar.is_set():
-            if parar.is_set():
+    def esperar_continuar(self):
+        self.retomar.clear()
+        while not self.retomar.is_set():
+            if self.parar.is_set():
                 raise KeyboardInterrupt
             time.sleep(0.2)
 
-    def foco_depois_de_continuar():
-        janela.set_focus()
-        aviso("Continuando em 2 s...")
+    def foco_depois_de_continuar(self):
+        self.janela.set_focus()
+        self.aviso("Continuando em 2 s...")
         for _ in range(20):
-            checar_parada()
+            self.checar_parada()
             time.sleep(0.1)
-        return foco_tela(janela)
+        return foco_tela(self.janela)
 
-    def esperar_na_chave(texto, linhas):
+    def esperar_na_chave(self, texto, linhas):
         """Pausa ate o cursor estar na Chave Acesso NF-e (proxima nota) e o usuario clicar em Continuar."""
-        registrar(texto)
-        marcar(linhas, "pausado")
+        self.registrar(texto)
+        self.marcar(linhas, "pausado")
         while True:
-            esperar_continuar()
-            caixa = foco_depois_de_continuar()
-            if caixa and posicao_ok("chave", caixa, rotulos, None, lidas) is not False:
+            self.esperar_continuar()
+            caixa = self.foco_depois_de_continuar()
+            if caixa and posicao_ok("chave", caixa, self.rotulos, None, self.lidas) is not False:
                 return caixa
-            registrar("Ainda pausado: deixe o cursor no campo Chave Acesso NF-e (vazio) e clique em Continuar.")
-            marcar(linhas, "pausado")
+            self.registrar("Ainda pausado: deixe o cursor no campo Chave Acesso NF-e (vazio) e clique em Continuar.")
+            self.marcar(linhas, "pausado")
 
-    def esperar_no_item(r):
-        registrar(f"Linha {r['linha']}: o cursor não está no Item da grade. PAUSADO. Deixe o cursor no Item da próxima "
+    def esperar_no_item(self, r):
+        self.registrar(f"Linha {r['linha']}: o cursor não está no Item da grade. PAUSADO. Deixe o cursor no Item da próxima "
                   "linha livre da grade e clique em Continuar.")
-        marcar([r["linha"]], "pausado")
+        self.marcar([r["linha"]], "pausado")
         while True:
-            esperar_continuar()
-            caixa = foco_depois_de_continuar()
-            if caixa and posicao_ok("item", caixa, rotulos, None, lidas) is not False:
-                marcar([r["linha"]], "executando")
+            self.esperar_continuar()
+            caixa = self.foco_depois_de_continuar()
+            if caixa and posicao_ok("item", caixa, self.rotulos, None, self.lidas) is not False:
+                self.marcar([r["linha"]], "executando")
                 return caixa
-            registrar("Ainda pausado: deixe o cursor no Item da próxima linha livre da grade e clique em Continuar.")
-            marcar([r["linha"]], "pausado")
+            self.registrar("Ainda pausado: deixe o cursor no Item da próxima linha livre da grade e clique em Continuar.")
+            self.marcar([r["linha"]], "pausado")
 
-    def localizar_integrar():
-        if not tesseract:
+    def localizar_integrar(self):
+        if not self.tesseract:
             return None
         try:
             # le so a faixa em volta de onde o botao estava no inicio (mais rapido); sem posicao inicial, a tela toda
-            tela_agora = core.capturar(janela)
-            antes = rotulos.get("integrar")
+            tela_agora = core.capturar(self.janela)
+            antes = self.rotulos.get("integrar")
             if antes:
                 esq, topo = max(antes[0] - 300, 0), max(antes[1] - 80, 0)
                 recorte = tela_agora.crop((esq, topo, min(antes[2] + 300, tela_agora.width), min(antes[3] + 80, tela_agora.height)))
-                caixa = localizar_rotulos(core.palavras_tela(binarizar(recorte), tesseract)).get("integrar")
+                caixa = localizar_rotulos(core.palavras_tela(binarizar(recorte), self.tesseract)).get("integrar")
                 achado = (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
             else:
-                achado = ler_rotulos(tela_agora, tesseract).get("integrar")
+                achado = ler_rotulos(tela_agora, self.tesseract).get("integrar")
         except Exception as erro:
-            registrar(f"  leitura do botão Integrar falhou: {erro}", mostrar=False)
+            self.registrar(f"  leitura do botão Integrar falhou: {erro}", mostrar=False)
             return None
         return achado
 
-    def clicar_integrar(nota, vez):
+    def clicar_integrar(self, nota, vez):
         """Clica em Integrar se o botao estiver a vista (confere de novo pelo OCR antes de clicar). True = clicou."""
-        botao = localizar_integrar()
+        botao = self.localizar_integrar()
         if not botao:
             return False
-        ret = janela.rectangle()
+        ret = self.janela.rectangle()
         x, y = ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2
-        checar_parada()
-        devagar("clicar em Integrar" + (" de novo" if vez > 1 else ""))
-        antes = core.capturar(janela)
+        self.checar_parada()
+        self.devagar("clicar em Integrar" + (" de novo" if vez > 1 else ""))
+        antes = core.capturar(self.janela)
         clicar(x, y)
-        registrar(f"  nota ...{nota['chave'][-6:]}: clique {vez} em Integrar em ({x:.0f}, {y:.0f})", mostrar=False)
-        prazo = time.time() + render  # espera a tela reagir ao clique antes do proximo passo
-        while time.time() < prazo and not tela_mudou(antes, core.capturar(janela)):
-            checar_parada()
+        self.registrar(f"  nota ...{nota['chave'][-6:]}: clique {vez} em Integrar em ({x:.0f}, {y:.0f})", mostrar=False)
+        prazo = time.time() + self.render  # espera a tela reagir ao clique antes do proximo passo
+        while time.time() < prazo and not tela_mudou(antes, core.capturar(self.janela)):
+            self.checar_parada()
             time.sleep(0.1)
         time.sleep(0.3)
         return True
 
-    def esperar_tela(antes, limite):
+    def esperar_tela(self, antes, limite):
         """Espera a tela mudar em relacao a `antes` e parar de mudar (janela terminou de abrir/fechar), no maximo
         `limite` s. Evita ler a tela de novo (~2,5 s em 4K) antes de ela mudar."""
         prazo, anterior = time.time() + limite, None
         while time.time() < prazo:
-            checar_parada()
-            agora = core.capturar(janela)
+            self.checar_parada()
+            agora = core.capturar(self.janela)
             if anterior is not None and tela_mudou(antes, agora, PIXELS_JANELA) and not tela_mudou(anterior, agora, PIXELS_JANELA):
                 return True
             anterior = agora
             time.sleep(0.15)
         return False
 
-    def ajustar_acessoria(imagem, area):
+    def ajustar_acessoria(self, imagem, area):
         """Janela "Valor Calculado para Documento": le os 3 totais (varias leituras do recorte; em 1366x768 o texto e
         pequeno) e, com despesa acessoria de ate LIMITE_ACESSORIA, clica em Ajustar. Devolve None (clicou) ou o motivo
         para nao clicar."""
@@ -1476,12 +1477,12 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         valores, botao = None, None
         # no print real (06/11/2026) a leitura 4x leu os 3 totais e a binarizada nao leu nada: fica por ultimo
         for img, escala in ((recorte, 2), (recorte, 4), (binarizar(recorte), 2)):
-            palavras = core.palavras_tela(img, tesseract, escala=escala)
+            palavras = core.palavras_tela(img, self.tesseract, escala=escala)
             valores = valores or valores_acessoria(normalizar(" ".join(p[0] for p in palavras)))
             botao = botao or botao_ajustar(frases(palavras))
             if valores and botao:
                 break
-        registrar(f"  despesa acessória: valores lidos={valores}, botão Ajustar={botao}", mostrar=False)
+        self.registrar(f"  despesa acessória: valores lidos={valores}, botão Ajustar={botao}", mostrar=False)
         if not valores:
             return "não consegui ler os totais (Geral, Documento e Acessória conferindo entre si)"
         geral, documento, acessoria = valores
@@ -1489,14 +1490,14 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             return f"despesa acessoria de {acessoria:.2f} (Geral {geral:.2f}, Documento {documento:.2f}), acima de 0,05"
         if not botao:
             return f"despesa acessória de {acessoria:.2f}, mas não achei o botão Ajustar"
-        devagar(f"clicar em Ajustar (despesa acessória de {acessoria:.2f})")
-        ret = janela.rectangle()
-        checar_parada()
+        self.devagar(f"clicar em Ajustar (despesa acessória de {acessoria:.2f})")
+        ret = self.janela.rectangle()
+        self.checar_parada()
         clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
-        registrar(f"  despesa acessória de {acessoria:.2f} (até 0,05): cliquei em Ajustar", mostrar=False)
+        self.registrar(f"  despesa acessória de {acessoria:.2f} (até 0,05): cliquei em Ajustar", mostrar=False)
         return None
 
-    def integrar(nota):
+    def integrar(self, nota):
         """Integrar e o que vem depois (usuario, 04/11/2026), lendo a tela antes de cada passo:
         aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
         janela "Centro de Custo e Conta Contabil para Frete LTCC" -> CLIQUE em "Frete LTCC" (Enter ali roda sem fim);
@@ -1504,15 +1505,15 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
         "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Sem nenhuma dessas janelas: Enter, ate
         ENTERS_DEPOIS_INTEGRAR, e depois Integrar de novo. Janela ja tratada que continua aberta: espera, sem Enter.
         Devolve 0 (nao achei o Integrar), 1 (nao achei o 2o Integrar), 2 (sem "Integrado com Sucesso") ou 3 (sucesso)."""
-        if not clicar_integrar(nota, 1):
+        if not self.clicar_integrar(nota, 1):
             return 0
-        if not tesseract:
+        if not self.tesseract:
             return 1
         etiqueta = f"nota ...{nota['chave'][-6:]}"
         feitos, enters, cliques, esperas, desde_clique = [], 0, 1, 0, 0
         for _ in range(MAX_PASSOS_INTEGRAR):
-            checar_parada()
-            imagem = core.capturar(janela)
+            self.checar_parada()
+            imagem = core.capturar(self.janela)
             t_leitura = time.time()
             # So o recorte das janelas por cima (barra de titulo azul): ~0,6 s em vez de ~2,2 s da tela inteira. Sem
             # barra nem le (so a busca da barra, ~0,07 s), menos na 1a leitura depois de cada clique no Integrar e na
@@ -1523,56 +1524,56 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
             area, janelas = None, []
             if barras:
                 area = area_dialogo(imagem, barras)
-                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), tesseract))))
-            if not janelas and (barras or not confia_barra[0] or desde_clique == 0 or esperas >= LEITURAS_AVISO - 1):
+                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), self.tesseract))))
+            if not janelas and (barras or not self.confia_barra or desde_clique == 0 or esperas >= LEITURAS_AVISO - 1):
                 area = (0, 0, imagem.width, imagem.height)
-                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, tesseract))))
-                if janelas and not barras and confia_barra[0]:
-                    confia_barra[0] = False
-                    registrar(f"  janela {janelas} sem barra de título azul: daqui em diante leio sempre a tela inteira",
+                janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, self.tesseract))))
+                if janelas and not barras and self.confia_barra:
+                    self.confia_barra = False
+                    self.registrar(f"  janela {janelas} sem barra de título azul: daqui em diante leio sempre a tela inteira",
                               mostrar=False)
             desde_clique += 1
             onde = "não li (nenhuma barra de janela)" if area is None else (
                 "tela inteira" if area == (0, 0, imagem.width, imagem.height) else f"recorte {area}")
-            registrar(f"  leitura depois do Integrar: {time.time() - t_leitura:.1f}s, {onde}, janelas={janelas}", mostrar=False)
+            self.registrar(f"  leitura depois do Integrar: {time.time() - t_leitura:.1f}s, {onde}, janelas={janelas}", mostrar=False)
             nova = next((nome for nome in janelas if nome not in feitos), None)
             if nova == "referencia":
                 try:
-                    fechar_referencia(imagem, area)
+                    self.fechar_referencia(imagem, area)
                 except Travou as erro:
-                    registrar(f"Nota ...{nota['chave'][-6:]}: {erro.motivo}. Termine a integração no SRP.")
+                    self.registrar(f"Nota ...{nota['chave'][-6:]}: {erro.motivo}. Termine a integração no SRP.")
                     return 2
                 # no log de 05/11 16:30 a janela fechou no 7o Enter e o 2o Integrar seguiu com frete, Resumo, LTCC e
                 # sucesso: depois do OK vai direto ao 2o Integrar, sem Enter as cegas
                 enters = ENTERS_DEPOIS_INTEGRAR
             elif nova == "acessoria":
-                problema = ajustar_acessoria(imagem, area)
+                problema = self.ajustar_acessoria(imagem, area)
                 if problema:
-                    registrar(f"Nota ...{nota['chave'][-6:]}: janela 'Valor Calculado para Documento': {problema}. "
+                    self.registrar(f"Nota ...{nota['chave'][-6:]}: janela 'Valor Calculado para Documento': {problema}. "
                               "Confira e clique em Ajustar ou Cancelar no SRP.")
                     return 2
             elif nova == "ltcc":
-                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem.crop(area)), tesseract)))
+                botao = botao_frete_ltcc(frases(core.palavras_tela(binarizar(imagem.crop(area)), self.tesseract)))
                 if not botao:
-                    registrar(f"Nota ...{nota['chave'][-6:]}: não achei o botão Frete LTCC. Clique em Frete LTCC no SRP.")
+                    self.registrar(f"Nota ...{nota['chave'][-6:]}: não achei o botão Frete LTCC. Clique em Frete LTCC no SRP.")
                     return 2
-                devagar("clicar em Frete LTCC")
-                ret = janela.rectangle()
+                self.devagar("clicar em Frete LTCC")
+                ret = self.janela.rectangle()
                 clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
             elif nova:
-                devagar({"frete": "Enter no aviso 'frete alterado para CIF' (OK)",
+                self.devagar({"frete": "Enter no aviso 'frete alterado para CIF' (OK)",
                          "resumo": "Enter no 'Resumo dos Tributos do Documento' (Confirmar)",
                          "sucesso": "Enter em 'Documento Integrado com Sucesso' (OK)"}[nova])
                 core.send_keys("{ENTER}", pause=0.03)
             if nova:
-                registrar(f"  {etiqueta}: {nova} tratado", mostrar=False)
+                self.registrar(f"  {etiqueta}: {nova} tratado", mostrar=False)
                 feitos.append(nova)
                 esperas = 0
                 if nova == "sucesso":
-                    registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
-                    esperar_tela(imagem, 1.5)
+                    self.registrar(f"Nota ...{nota['chave'][-6:]}: o SRP disse 'Documento Integrado com Sucesso'.")
+                    self.esperar_tela(imagem, 1.5)
                     return 3
-                esperar_tela(imagem, render)
+                self.esperar_tela(imagem, self.render)
                 continue
             # a NF de referencia vem antes do 2o Integrar: depois dela, sem janela, segue para o 2o Integrar
             if janelas or any(f != "referencia" for f in feitos) or (cliques == 2 and enters >= ENTERS_DEPOIS_INTEGRAR):
@@ -1581,225 +1582,249 @@ def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=N
                 esperas += 1
                 if esperas >= LEITURAS_AVISO:
                     break
-                esperar_tela(imagem, render)
+                self.esperar_tela(imagem, self.render)
                 continue
             if enters < ENTERS_DEPOIS_INTEGRAR:
                 enters += 1
-                devagar(f"Enter {enters} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
+                self.devagar(f"Enter {enters} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")
                 core.send_keys("{ENTER}", pause=0.03)
-                esperar_tela(imagem, 1.0)
+                self.esperar_tela(imagem, 1.0)
                 continue
-            if not clicar_integrar(nota, 2):
-                registrar(f"Nota ...{nota['chave'][-6:]}: dei {ENTERS_DEPOIS_INTEGRAR} Enter depois do Integrar, mas não "
+            if not self.clicar_integrar(nota, 2):
+                self.registrar(f"Nota ...{nota['chave'][-6:]}: dei {ENTERS_DEPOIS_INTEGRAR} Enter depois do Integrar, mas não "
                           "achei o Integrar de novo. Termine a integração no SRP.")
                 return 1
             cliques, desde_clique = 2, 0
-        registrar(f"Nota ...{nota['chave'][-6:]}: não vi a mensagem 'Documento Integrado com Sucesso'"
+        self.registrar(f"Nota ...{nota['chave'][-6:]}: não vi a mensagem 'Documento Integrado com Sucesso'"
                   + (f" (janela ainda aberta: {', '.join(janelas)})" if janelas else "") + ". Confira no SRP.")
         return 2
 
-    def ir_para_chave():
+    def ir_para_chave(self):
         """Depois do "Integrado com Sucesso" o SRP volta para a tela vazia com o foco no CNPJ Fornecedor: clica no campo
         Chave Acesso NF-e (linha de cima, a direita do rotulo lido no inicio) e confere que o foco foi para la (usuario,
         04/11/2026). Devolve o foco na Chave ou None (o robo pausa como antes)."""
-        rotulo = rotulos.get("chave")
+        rotulo = self.rotulos.get("chave")
         if not rotulo:
             return None
-        prazo, foco = time.time() + render, None
+        prazo, foco = time.time() + self.render, None
         while time.time() < prazo and foco is None:  # espera a tela voltar (foco no CNPJ)
-            checar_parada()
-            foco = foco_tela(janela)
+            self.checar_parada()
+            foco = foco_tela(self.janela)
             if foco is None:
                 time.sleep(0.1)
         altura = rotulo[3] - rotulo[1]
-        ret = janela.rectangle()
+        ret = self.janela.rectangle()
         x, y = rotulo[2] + max(40, 3 * altura), (rotulo[1] + rotulo[3]) / 2
-        checar_parada()
-        devagar("clicar no campo Chave Acesso NF-e (próxima nota)")
+        self.checar_parada()
+        self.devagar("clicar no campo Chave Acesso NF-e (próxima nota)")
         clicar(ret.left + x, ret.top + y)
-        novo = aguardar(janela, foco, render, fixos)
-        if isinstance(novo, tuple) and posicao_ok("chave", novo, rotulos, None, lidas):
-            registrar(f"  cliquei na Chave Acesso NF-e em ({ret.left + x:.0f}, {ret.top + y:.0f}): foco={novo}", mostrar=False)
+        novo = aguardar(self.janela, foco, self.render, self.fixos)
+        if isinstance(novo, tuple) and posicao_ok("chave", novo, self.rotulos, None, self.lidas):
+            self.registrar(f"  cliquei na Chave Acesso NF-e em ({ret.left + x:.0f}, {ret.top + y:.0f}): foco={novo}", mostrar=False)
             return novo
-        registrar(f"  cliquei na Chave Acesso NF-e, mas o foco não foi para lá (foco={novo})", mostrar=False)
+        self.registrar(f"  cliquei na Chave Acesso NF-e, mas o foco não foi para lá (foco={novo})", mostrar=False)
         return None
 
-
-    try:
-        tesseract = core.caminho_tesseract()
-        janela = core.janela_citrix(janela_trecho)
-        janela.set_focus()
-        ret0 = janela.rectangle()
-        tamanho = (ret0.right - ret0.left, ret0.bottom - ret0.top)
-        rateio_salvo[0] = ler_posicoes(tamanho)  # da execucao anterior: a 1a nota tambem nao le a tela inteira
-        if rateio_salvo[0]:
-            registrar("  posições do Rateio da execução anterior (mesmo tamanho de janela)", mostrar=False)
-        aviso(f"Clique no campo Chave Acesso NF-e. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
-        inicio = time.time()
-        tela = core.capturar(janela)
-        ret = janela.rectangle()
-        problema = core.problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela)
-        if problema:
-            registrar(f"Não iniciei: {problema.replace('no campo Item', 'no campo Chave Acesso NF-e')}. Nada foi digitado.")
-            return 1
-        try:
-            fixos = core.caixas_cor(tela, "vermelho")
-        except Exception:
-            fixos = []
-        rotulos, lidas = {}, []
-        if tesseract:
-            try:
-                rotulos = ler_rotulos(tela, tesseract, lidas)
-            except Exception as erro:
-                registrar(f"  leitura dos rótulos falhou: {erro}", mostrar=False)
-        registrar(f"  rótulos lidos: {rotulos}", mostrar=False)
-        faltam = [NOME.get(c, c) for c in ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "qtd", "unit")
-                  if c not in rotulos]
-        if faltam:
-            aviso(f"ATENÇÃO: não li na tela os rótulos {', '.join(faltam)}: nesses campos o robô só conta os Enter, sem conferir a posição.")
-        if "integrar" not in rotulos:
-            aviso("ATENÇÃO: não achei o botão Integrar na tela: no fim de cada nota o robô pausa para você clicar.")
-        while time.time() - inicio < espera:
-            if parar.is_set():
-                registrar("Interrompido antes de iniciar.")
-                return 1
-            time.sleep(0.1)
-        foco = foco_tela(janela)
-        if not foco:
-            registrar("Não iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Chave Acesso NF-e e inicie de novo. "
-                      "Nada foi digitado.")
-            return 1
-        if posicao_ok("chave", foco, rotulos, None, lidas) is False:
-            registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique nele e inicie de novo. Nada foi digitado.")
-            return 1
-
-        for numero, nota in enumerate(notas, start=1):
-            linhas = [r["linha"] for r in nota["itens"]]
-            ultima = numero == len(notas)
-            if core.titulo_janela_ativa() and janela_trecho.lower() not in core.titulo_janela_ativa().lower():
-                registrar(f"Foco saiu do Citrix antes da nota da linha {linhas[0]}. Interrompido.")
-                return 1
-            t0 = time.time()
-            etiqueta = f"Nota ...{nota['chave'][-6:]} (linha{'s' if len(linhas) > 1 else ''} {linhas[0]}" + \
-                       (f"-{linhas[-1]})" if len(linhas) > 1 else ")")
-            serie_com_ponto_feita[0] = False
-            try:
-                marcar([linhas[0]], "executando")
-                if posicao_ok("chave", foco, rotulos, None, lidas) is False:
-                    raise Travou("chave", f"o cursor não está no campo {NOME['chave']}{local(foco)}")
-                for indice, (campo, quantos) in enumerate(SEQ_CABECALHO):
-                    if foco is None:
-                        raise Travou(campo, f"não sei em que campo o cursor está antes do {NOME[campo]}{local(foco)}")
-                    digitar(nota[campo], campo)
-                    if campo == "frete":  # ultimo do cabecalho: Enter ate o Item da grade (janela de NF de referencia no caminho)
-                        foco = ir_para_item(foco)
-                        continue
-                    try:
-                        foco = ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
-                    except DocumentoExiste as existe:  # so no Enter depois da Chave
-                        foco = serie_com_ponto(nota, foco, existe.motivo)
-                caixa_item = None  # Item da linha do item anterior
-                topos_linha1 = {}  # campo -> topo dele no 1o item (1a linha da grade): o titulo da coluna fica acima
-                for indice, r in enumerate(nota["itens"]):
-                    marcar([r["linha"]], "executando")
-                    if caixa_item is not None:
-                        foco = descer_para_item(foco, caixa_item)
-                    if posicao_ok("item", foco, rotulos, None, lidas) is False:
-                        if retomar is None:
-                            raise Travou("item", f"o cursor não está no Item da grade{local(foco)}")
-                        foco = esperar_no_item(r)
-                    caixa_item = foco
-                    for posicao, (campo, quantos) in enumerate(SEQ_ITEM):
-                        if foco is None and campo != "unit":  # o Valor Unit fica amarelo (conferido na entrada)
-                            raise Travou(campo, f"o cursor está num campo sem cor antes do {NOME[campo]}; não digito sem ver o campo")
-                        if campo != "unit" and posicao_ok(campo, foco, rotulos, None, lidas) is False:
-                            raise Travou(campo, f"o cursor não está na coluna {NOME[campo]}{local(foco)}")
-                        if campo in TITULO_COLUNA and tesseract:
-                            if indice == 0:
-                                topos_linha1[campo] = foco[1]
-                            titulo = titulo_acima(core.capturar(janela), foco, tesseract, topos_linha1.get(campo))
-                            registrar(f"  título acima do {NOME[campo]}: {titulo!r}", mostrar=False)
-                            if not any(t in titulo for t in TITULO_COLUNA[campo]):
-                                raise Travou(campo, f"o cursor não está na coluna {NOME[campo]} (título acima: '{titulo}')")
-                        digitar(r[campo], campo)
-                        alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
-                        if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
-                            foco = ir_ate(campo, alvo, quantos, foco, anterior=foco)
-                        elif alvo is None:  # Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio
-                            foco = preencher_rateio(r, foco)
-                        elif alvo == "unit":  # Enter no Qtd.Fisica (ciano), Enter no Valor Unit (amarelo, grade rola)
-                            foco = entrar_no_valor_unit(enters(campo, quantos - 1, foco))
-                        else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
-                            foco = enters(campo, quantos, foco)
-                    registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)
-                    if indice < len(nota["itens"]) - 1:
-                        marcar([r["linha"]], "ok")
-            except Travou as travou:
-                if retomar is None:
-                    marcar(linhas, "erro")
-                    registrar(f"{etiqueta}: {travou.motivo}. Interrompido. A nota ficou pela metade no SRP: termine ou "
-                              "cancele a mão.")
-                    return 1
-                if ultima:
-                    registrar(f"{etiqueta}: {travou.motivo}. PAUSADO. Termine esta nota a mão no SRP (inclusive Integrar) "
-                              "e clique em Continuar.")
-                    marcar(linhas, "pausado")
-                    esperar_continuar()
-                else:
-                    foco = esperar_na_chave(
-                        f"{etiqueta}: {travou.motivo}. PAUSADO. Termine esta nota a mão no SRP (inclusive Integrar), "
-                        "deixe o cursor na Chave Acesso NF-e da próxima nota e clique em Continuar.", linhas)
-                registrar(f"OK {etiqueta}: terminada a mão.")
-                if serie_com_ponto_feita[0] and serie_ponto:
-                    serie_ponto(linhas)
-                marcar(linhas, "ok")
-                continue
-            cliques = integrar(nota)
-            clicou = cliques >= 2
-            registrar(f"OK {etiqueta}: {len(linhas)} item(ns) em {time.time() - t0:.1f}s" +
-                      ("; integrada com sucesso." if cliques == 3 else "."))
-            if cliques == 0:
-                registrar(f"{etiqueta}: não achei o botão Integrar na tela. Clique em Integrar no SRP.")
-            if serie_com_ponto_feita[0] and serie_ponto:  # antes do "ok": a pintura da planilha usa a outra cor
-                serie_ponto(linhas)
-            marcar(linhas, "ok")
-            if cliques == 3:  # integrada com sucesso: clica na Chave (tambem na ultima nota, para a proxima planilha)
-                foco_chave = ir_para_chave()
-            if ultima:
-                if not clicou and retomar is not None:
-                    registrar("Depois de integrar, clique em Continuar para encerrar.")
-                    marcar(linhas, "pausado")
-                    esperar_continuar()
-                    marcar(linhas, "ok")
-                break
-            if cliques == 3 and foco_chave:  # integrada com sucesso e cursor na Chave: proxima nota, sem pausa
-                if pausar is not None and pausar.is_set() and retomar is not None:  # F9: pausa aqui, entre as notas
-                    pausar.clear()
-                    foco = esperar_na_chave(
-                        "F9: PAUSADO entre as notas. Para seguir, deixe o cursor na Chave Acesso NF-e e clique em "
-                        "Continuar.", [notas[numero]["itens"][0]["linha"]])
-                    continue
-                foco = foco_chave
-                continue
-            if pausar is not None:
-                pausar.clear()  # a pausa abaixo ja atende o F9
-            if retomar is None:
-                registrar("Sem o botão Continuar o robô para aqui: confira a integração e inicie de novo pela próxima nota.")
-                return 1
-            foco = esperar_na_chave(
-                "PAUSADO: confira a integração no SRP. Para a próxima nota, deixe o cursor na Chave Acesso NF-e e clique "
-                "em Continuar.", [notas[numero]["itens"][0]["linha"]])
-        registrar("Concluído. Confira a integração da última nota no SRP.")
-        return 0
-    except KeyboardInterrupt:
-        registrar("Interrompido pelo usuário.")
-        return 1
-    except Exception as erro:
-        registrar(f"Erro: {erro}")
-        return 1
-    finally:
-        if atual and estado:
-            for linha in atual:
-                estado(linha, "erro")
+    def rodar(self):
+        core.limpar_logs()
+        caminho_log = core.pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}-snac0236.log"
+        self.log = open(caminho_log, "w", encoding="utf-8")
         with _TRAVA_LOG:
-            log.close()
+            _LOG.update(caminho=caminho_log, arquivo=self.log, ultimo=time.time())
+        self.rateio_salvo = None  # posicoes do Rateio da nota anterior (ou da execucao anterior)
+        self.confia_barra = True  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
+        self.atual = []  # linhas marcadas 'executando'
+        self.serie_com_ponto_feita = False  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
+        self.sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor nesta execucao: ali a espera e curta
+
+
+        try:
+            self.tesseract = core.caminho_tesseract()
+            self.janela = core.janela_citrix(self.janela_trecho)
+            self.janela.set_focus()
+            ret0 = self.janela.rectangle()
+            self.tamanho = (ret0.right - ret0.left, ret0.bottom - ret0.top)
+            self.rateio_salvo = ler_posicoes(self.tamanho)  # da execucao anterior: a 1a nota tambem nao le a tela inteira
+            if self.rateio_salvo:
+                self.registrar("  posições do Rateio da execução anterior (mesmo tamanho de janela)", mostrar=False)
+            self.aviso(f"Clique no campo Chave Acesso NF-e. Iniciando em {self.espera}s (mouse no canto superior esquerdo aborta).")
+            inicio = time.time()
+            tela = core.capturar(self.janela)
+            ret = self.janela.rectangle()
+            problema = core.problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela)
+            if problema:
+                self.registrar(f"Não iniciei: {problema.replace('no campo Item', 'no campo Chave Acesso NF-e')}. Nada foi digitado.")
+                return 1
+            try:
+                self.fixos = core.caixas_cor(tela, "vermelho")
+            except Exception:
+                self.fixos = []
+            self.rotulos, self.lidas = {}, []
+            if self.tesseract:
+                try:
+                    self.rotulos = ler_rotulos(tela, self.tesseract, self.lidas)
+                except Exception as erro:
+                    self.registrar(f"  leitura dos rótulos falhou: {erro}", mostrar=False)
+            self.registrar(f"  rótulos lidos: {self.rotulos}", mostrar=False)
+            faltam = [NOME.get(c, c) for c in ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "qtd", "unit")
+                      if c not in self.rotulos]
+            if faltam:
+                self.aviso(f"ATENÇÃO: não li na tela os rótulos {', '.join(faltam)}: nesses campos o robô só conta os Enter, sem conferir a posição.")
+            if "integrar" not in self.rotulos:
+                self.aviso("ATENÇÃO: não achei o botão Integrar na tela: no fim de cada nota o robô pausa para você clicar.")
+            while time.time() - inicio < self.espera:
+                if self.parar.is_set():
+                    self.registrar("Interrompido antes de iniciar.")
+                    return 1
+                time.sleep(0.1)
+            foco = foco_tela(self.janela)
+            if not foco:
+                self.registrar("Não iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Chave Acesso NF-e e inicie de novo. "
+                          "Nada foi digitado.")
+                return 1
+            if posicao_ok("chave", foco, self.rotulos, None, self.lidas) is False:
+                self.registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique nele e inicie de novo. Nada foi digitado.")
+                return 1
+
+            for numero, nota in enumerate(self.notas, start=1):
+                linhas = [r["linha"] for r in nota["itens"]]
+                ultima = numero == len(self.notas)
+                if core.titulo_janela_ativa() and self.janela_trecho.lower() not in core.titulo_janela_ativa().lower():
+                    self.registrar(f"Foco saiu do Citrix antes da nota da linha {linhas[0]}. Interrompido.")
+                    return 1
+                t0 = time.time()
+                etiqueta = f"Nota ...{nota['chave'][-6:]} (linha{'s' if len(linhas) > 1 else ''} {linhas[0]}" + \
+                           (f"-{linhas[-1]})" if len(linhas) > 1 else ")")
+                self.serie_com_ponto_feita = False
+                try:
+                    self.marcar([linhas[0]], "executando")
+                    if posicao_ok("chave", foco, self.rotulos, None, self.lidas) is False:
+                        raise Travou("chave", f"o cursor não está no campo {NOME['chave']}{self.local(foco)}")
+                    for indice, (campo, quantos) in enumerate(SEQ_CABECALHO):
+                        if foco is None:
+                            raise Travou(campo, f"não sei em que campo o cursor está antes do {NOME[campo]}{self.local(foco)}")
+                        self.digitar(nota[campo], campo)
+                        if campo == "frete":  # ultimo do cabecalho: Enter ate o Item da grade (janela de NF de referencia no caminho)
+                            foco = self.ir_para_item(foco)
+                            continue
+                        try:
+                            foco = self.ir_ate(campo, SEQ_CABECALHO[indice + 1][0], quantos, foco, anterior=foco)
+                        except DocumentoExiste as existe:  # so no Enter depois da Chave
+                            foco = self.serie_com_ponto(nota, foco, existe.motivo)
+                    caixa_item = None  # Item da linha do item anterior
+                    topos_linha1 = {}  # campo -> topo dele no 1o item (1a linha da grade): o titulo da coluna fica acima
+                    for indice, r in enumerate(nota["itens"]):
+                        self.marcar([r["linha"]], "executando")
+                        if caixa_item is not None:
+                            foco = self.descer_para_item(foco, caixa_item)
+                        if posicao_ok("item", foco, self.rotulos, None, self.lidas) is False:
+                            if self.retomar is None:
+                                raise Travou("item", f"o cursor não está no Item da grade{self.local(foco)}")
+                            foco = self.esperar_no_item(r)
+                        caixa_item = foco
+                        for posicao, (campo, quantos) in enumerate(SEQ_ITEM):
+                            if foco is None and campo != "unit":  # o Valor Unit fica amarelo (conferido na entrada)
+                                raise Travou(campo, f"o cursor está num campo sem cor antes do {NOME[campo]}; não digito sem ver o campo")
+                            if campo != "unit" and posicao_ok(campo, foco, self.rotulos, None, self.lidas) is False:
+                                raise Travou(campo, f"o cursor não está na coluna {NOME[campo]}{self.local(foco)}")
+                            if campo in TITULO_COLUNA and self.tesseract:
+                                if indice == 0:
+                                    topos_linha1[campo] = foco[1]
+                                titulo = titulo_acima(core.capturar(self.janela), foco, self.tesseract, topos_linha1.get(campo))
+                                self.registrar(f"  título acima do {NOME[campo]}: {titulo!r}", mostrar=False)
+                                if not any(t in titulo for t in TITULO_COLUNA[campo]):
+                                    raise Travou(campo, f"o cursor não está na coluna {NOME[campo]} (título acima: '{titulo}')")
+                            self.digitar(r[campo], campo)
+                            alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
+                            if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
+                                foco = self.ir_ate(campo, alvo, quantos, foco, anterior=foco)
+                            elif alvo is None:  # Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio
+                                foco = self.preencher_rateio(r, foco)
+                            elif alvo == "unit":  # Enter no Qtd.Fisica (ciano), Enter no Valor Unit (amarelo, grade rola)
+                                foco = self.entrar_no_valor_unit(self.enters(campo, quantos - 1, foco))
+                            else:  # depois do Valor Unit a grade rola para a direita: so a contagem combinada
+                                foco = self.enters(campo, quantos, foco)
+                        self.registrar(f"  linha {r['linha']}: item {r['item']} digitado", mostrar=False)
+                        if indice < len(nota["itens"]) - 1:
+                            self.marcar([r["linha"]], "ok")
+                except Travou as travou:
+                    if self.retomar is None:
+                        self.marcar(linhas, "erro")
+                        self.registrar(f"{etiqueta}: {travou.motivo}. Interrompido. A nota ficou pela metade no SRP: termine ou "
+                                  "cancele a mão.")
+                        return 1
+                    if ultima:
+                        self.registrar(f"{etiqueta}: {travou.motivo}. PAUSADO. Termine esta nota a mão no SRP (inclusive Integrar) "
+                                  "e clique em Continuar.")
+                        self.marcar(linhas, "pausado")
+                        self.esperar_continuar()
+                    else:
+                        foco = self.esperar_na_chave(
+                            f"{etiqueta}: {travou.motivo}. PAUSADO. Termine esta nota a mão no SRP (inclusive Integrar), "
+                            "deixe o cursor na Chave Acesso NF-e da próxima nota e clique em Continuar.", linhas)
+                    self.registrar(f"OK {etiqueta}: terminada a mão.")
+                    if self.serie_com_ponto_feita and self.serie_ponto:
+                        self.serie_ponto(linhas)
+                    self.marcar(linhas, "ok")
+                    continue
+                cliques = self.integrar(nota)
+                clicou = cliques >= 2
+                self.registrar(f"OK {etiqueta}: {len(linhas)} item(ns) em {time.time() - t0:.1f}s" +
+                          ("; integrada com sucesso." if cliques == 3 else "."))
+                if cliques == 0:
+                    self.registrar(f"{etiqueta}: não achei o botão Integrar na tela. Clique em Integrar no SRP.")
+                if self.serie_com_ponto_feita and self.serie_ponto:  # antes do "ok": a pintura da planilha usa a outra cor
+                    self.serie_ponto(linhas)
+                self.marcar(linhas, "ok")
+                if cliques == 3:  # integrada com sucesso: clica na Chave (tambem na ultima nota, para a proxima planilha)
+                    foco_chave = self.ir_para_chave()
+                if ultima:
+                    if not clicou and self.retomar is not None:
+                        self.registrar("Depois de integrar, clique em Continuar para encerrar.")
+                        self.marcar(linhas, "pausado")
+                        self.esperar_continuar()
+                        self.marcar(linhas, "ok")
+                    break
+                if cliques == 3 and foco_chave:  # integrada com sucesso e cursor na Chave: proxima nota, sem pausa
+                    if self.pausar is not None and self.pausar.is_set() and self.retomar is not None:  # F9: pausa aqui, entre as notas
+                        self.pausar.clear()
+                        foco = self.esperar_na_chave(
+                            "F9: PAUSADO entre as notas. Para seguir, deixe o cursor na Chave Acesso NF-e e clique em "
+                            "Continuar.", [self.notas[numero]["itens"][0]["linha"]])
+                        continue
+                    foco = foco_chave
+                    continue
+                if self.pausar is not None:
+                    self.pausar.clear()  # a pausa abaixo ja atende o F9
+                if self.retomar is None:
+                    self.registrar("Sem o botão Continuar o robô para aqui: confira a integração e inicie de novo pela próxima nota.")
+                    return 1
+                foco = self.esperar_na_chave(
+                    "PAUSADO: confira a integração no SRP. Para a próxima nota, deixe o cursor na Chave Acesso NF-e e clique "
+                    "em Continuar.", [self.notas[numero]["itens"][0]["linha"]])
+            self.registrar("Concluído. Confira a integração da última nota no SRP.")
+            return 0
+        except KeyboardInterrupt:
+            self.registrar("Interrompido pelo usuário.")
+            return 1
+        except Exception as erro:
+            self.registrar(f"Erro: {erro}")
+            return 1
+        finally:
+            if self.atual and self.estado:
+                for linha in self.atual:
+                    self.estado(linha, "erro")
+            with _TRAVA_LOG:
+                self.log.close()
+
+
+def executar(notas, janela_trecho, pausa, render, espera, parar, aviso, estado=None, retomar=None, intervalo=0,
+             serie_ponto=None, pausar=None):
+    """Preenche as notas no SRP. `serie_ponto(linhas)`: chamado antes de marcar 'ok' a nota em que o robo pos "." na
+    Serie (janela "ja existe"). `intervalo` (s): espera extra antes de cada acao (digitar, Enter, Integrar) e narra a
+    acao no console, para o usuario acompanhar o percurso nos testes (0 = velocidade normal). `estado(linha, nome)` por linha da planilha; `retomar` (Event, botao Continuar) liga
+    as pausas: depois de cada Integrar e quando algo nao confere. Sem ele, qualquer problema interrompe. `pausar` (Event,
+    F9; v1.14.0): pausa entre uma nota integrada e a proxima, com o cursor na Chave. Devolve 0 se concluiu."""
+    return Execucao0236(notas=notas, janela_trecho=janela_trecho, pausa=pausa, render=render, espera=espera,
+                        parar=parar, aviso=aviso, estado=estado, retomar=retomar, intervalo=intervalo,
+                        serie_ponto=serie_ponto, pausar=pausar).rodar()

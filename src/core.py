@@ -1045,6 +1045,325 @@ def proximo_campo(atual, caixa_antes, caixa_depois, colunas):
     return "quantidade" if atual == "conta" else "fim"
 
 
+class Execucao0234:
+    """Uma execucao do `executar` (v1.14.0: antes uma funcao de 307 linhas com 8 funcoes internas).
+    Os parametros e o estado que as etapas dividem ficam em self; cada etapa e um metodo; `rodar` e o laco."""
+
+    def __init__(self, registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False, retomar=None,
+             pausar=None):
+        self.registros = registros
+        self.janela_trecho = janela_trecho
+        self.pausa = pausa
+        self.render = render
+        self.espera = espera
+        self.parar = parar
+        self.aviso = aviso
+        self.estado = estado
+        self.conferir = conferir
+        self.retomar = retomar
+        self.pausar = pausar
+
+    def marcar(self, r, nome):
+        self.atual = r["linha"] if nome == "executando" else None
+        if self.estado:
+            self.estado(r["linha"], nome)
+
+    def registrar(self, texto, mostrar=True):
+        with self.trava_log:
+            if self.log.closed:
+                return
+            self.log.write(texto + "\n")
+            self.log.flush()
+        if mostrar:
+            self.aviso(texto)
+
+    def revisar(self, aguardar=False):
+        """Trata os resultados de OCR ja prontos (todos, com aguardar=True). Devolve a linha que nao conferiu, se houver."""
+        restantes = []
+        falha = None
+        for linha, esperada, futuro, recorte in self.pendentes:
+            if falha is None and (aguardar or futuro.done()):
+                confere, lidas = futuro.result()
+                self.registrar(f"  linha {linha}: quantidade lidas={lidas} esperada={esperada}", mostrar=False)
+                if not confere:
+                    pasta_ocr = pasta_logs() / "ocr"
+                    pasta_ocr.mkdir(exist_ok=True)
+                    recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{linha}.png")
+                    falha = (linha, lidas, esperada)
+            else:
+                restantes.append((linha, esperada, futuro, recorte))
+        self.pendentes[:] = restantes
+        return falha
+
+    def teclar(self, acao, valor, esperar=True):
+        """`esperar=False` em Tab seguido de aguardar_mudanca (a propria espera do foco sincroniza)."""
+        if self.parar.is_set() or mouse_no_canto():
+            raise KeyboardInterrupt
+        # 0,03 s por tecla (era 0,05): o Citrix recebe as teclas em ordem; a sincronizacao real e o foco mudar apos o Tab
+        send_keys("{TAB}" if acao == "tab" else valor.replace(",", "{,}"), pause=0.03)
+        if acao == "digitar":
+            time.sleep(min(self.pausa, 0.05))
+        elif esperar:
+            time.sleep(self.pausa)
+
+    def esperar_continuar(self):
+        self.retomar.clear()
+        while not self.retomar.is_set():
+            if self.parar.is_set():
+                raise KeyboardInterrupt
+            time.sleep(0.2)
+
+    def tratar_divergencia(self, falha, no_fim=False):
+        """Quantidade lida diferente da planilha: pausa (se houver Continuar) ou interrompe. True = seguir."""
+        linha, lidas, esperada = falha
+        if self.retomar is None:
+            self.registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
+                      "A linha já foi confirmada no SRP: corrija-a (as seguintes, até aqui, também podem estar afetadas). "
+                      "Imagem lida em logs/ocr.")
+            if self.estado:
+                self.estado(linha, "erro")
+            return False
+        self.registrar(f"Linha {linha}: a quantidade lida na tela {lidas} difere da planilha ({esperada}). PAUSADO. "
+                  f"Confira a linha {linha} no SRP (imagem lida em logs/ocr). Se estiver certa, clique em Continuar. "
+                  "Se não, corrija-a" + ("." if no_fim else ", volte o cursor para o Item da próxima linha livre") +
+                  " e clique em Continuar.")
+        if self.estado:
+            self.estado(linha, "pausado")
+        while True:
+            self.esperar_continuar()
+            if no_fim:
+                break
+            self.janela.set_focus()
+            self.aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if self.parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(self.janela)
+            if caixa and (not self.colunas or qual_coluna(caixa, self.colunas) == "item"):
+                break
+            self.registrar("Ainda pausado: deixe o cursor no Item da próxima linha livre e clique em Continuar.")
+            if self.estado:
+                self.estado(linha, "pausado")
+        self.registrar(f"  linha {linha}: quantidade conferida pelo usuário após a pausa", mostrar=False)
+        if self.estado:
+            self.estado(linha, "ok")
+        return True
+
+    def pausa_pedida(self, r):
+        """F9: pausa antes de comecar a linha `r`; volta quando o cursor estiver no Item e o usuario continuar."""
+        self.pausar.clear()
+        self.registrar(f"Pausado antes da linha {r['linha']} (F9). Para continuar: deixe o cursor no Item da linha "
+                  f"{r['linha']} no SRP e clique em Continuar (ou F9).")
+        if self.estado:
+            self.estado(r["linha"], "pausado")
+        while True:
+            self.esperar_continuar()
+            self.pausar.clear()
+            self.janela.set_focus()
+            self.aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if self.parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(self.janela)
+            if caixa and (not self.colunas or qual_coluna(caixa, self.colunas) == "item"):
+                return caixa
+            self.registrar(f"Ainda pausado: deixe o cursor no Item da linha {r['linha']} e clique em Continuar (ou F9).")
+            if self.estado:
+                self.estado(r["linha"], "pausado")
+
+    def esperar_correcao(self, r, campo_erro):
+        """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
+        'fim' quando o cursor ja esta no Item (linha completada a mao)."""
+        if self.exe_tesseract:
+            tela_do_aviso = capturar(self.janela)  # captura ja: o usuario pode fechar o aviso a qualquer momento
+
+            def ler_em_segundo_plano():
+                try:
+                    info = ler_aviso(tela_do_aviso, self.exe_tesseract, self.fixos)
+                except Exception as erro:
+                    self.registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
+                    return
+                if not info:
+                    return
+                self.registrar(f'Linha {r["linha"]}: SRP: "{info["texto"]}"')
+                if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
+                    aprender_conta(r["item"], r["custo"], info["conta_correta"])
+                    self.registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item "
+                              f"{r['item']} (C/Custo {r['custo']}); guardada para avisar nas próximas planilhas.")
+            threading.Thread(target=ler_em_segundo_plano, daemon=True).start()
+        self.registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
+                  f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
+                  "e clique em Continuar. Se completou a linha a mão, deixe o cursor no Item da linha seguinte.")
+        if self.estado:
+            self.estado(r["linha"], "pausado")
+        while True:
+            self.esperar_continuar()
+            self.janela.set_focus()
+            self.aviso("Continuando em 2 s...")
+            for _ in range(20):
+                if self.parar.is_set():
+                    raise KeyboardInterrupt
+                time.sleep(0.1)
+            caixa = caixa_foco(self.janela)
+            onde = qual_coluna(caixa, self.colunas) if caixa else None
+            if onde == "item":
+                self.registrar(f"  linha {r['linha']}: retomada com o cursor no Item (linha completada a mão)", mostrar=False)
+                if self.estado:
+                    self.estado(r["linha"], "executando")
+                return caixa, "fim"
+            if onde in ORDEM and ORDEM.index(onde) > ORDEM.index(campo_erro):
+                self.registrar(f"  linha {r['linha']}: retomada no campo {NOME_CAMPO[onde]}", mostrar=False)
+                if self.estado:
+                    self.estado(r["linha"], "executando")
+                return caixa, onde
+            self.registrar(f"Ainda pausado: o cursor está em '{NOME_CAMPO.get(onde, 'campo não identificado')}'. "
+                      f"Deixe-o no campo depois do {NOME_CAMPO[campo_erro]} (ou no Item da linha seguinte) e clique em Continuar.")
+            if self.estado:
+                self.estado(r["linha"], "pausado")
+
+    def rodar(self):
+        tesseract = caminho_tesseract() if self.conferir else None
+        limpar_logs()
+        self.log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
+        self.atual = None
+
+        self.trava_log = threading.Lock()
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        self.pendentes = []  # (linha, esperada, futuro, recorte): conferencias de OCR em andamento, em ordem
+
+        try:
+            if self.conferir and not tesseract:
+                self.aviso("ATENÇÃO: pasta 'tesseract' não encontrada ao lado do programa. Conferência da quantidade DESATIVADA nesta execução.")
+            self.janela = janela_citrix(self.janela_trecho)
+            self.janela.set_focus()
+            self.aviso(f"Clique no campo Item da primeira linha. Iniciando em {self.espera}s (mouse no canto superior esquerdo aborta).")
+            inicio_contagem = time.time()
+            self.colunas = None
+            self.exe_tesseract = caminho_tesseract()
+            tela_inicial = capturar(self.janela)
+            ret = self.janela.rectangle()
+            problema = problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela_inicial)
+            if problema:
+                self.registrar(f"Não iniciei: {problema}. Nada foi digitado.")
+                return 1
+            try:  # vermelhos que ja estao na tela (faixa do cabecalho do SRP): nao sao aviso
+                self.fixos = caixas_cor(tela_inicial, "vermelho")
+            except Exception:
+                self.fixos = []
+            self.registrar(f"  vermelhos fixos na tela: {self.fixos}", mostrar=False)
+            if self.exe_tesseract:
+                try:
+                    self.colunas = localizar_colunas(tela_inicial, self.exe_tesseract)
+                except Exception as erro:  # sem cabecalho, segue no modo antigo
+                    self.registrar(f"  leitura do cabeçalho falhou: {erro}", mostrar=False)
+            if self.colunas:
+                self.registrar(f"  colunas pelo cabeçalho: {self.colunas}", mostrar=False)
+            else:
+                self.aviso("ATENÇÃO: não localizei o cabeçalho da grade (C/Custo, Conta, Quantidade). "
+                      "Sem ele o robô não detecta C/Custo travado: o C/Custo será sempre digitado.")
+            while time.time() - inicio_contagem < self.espera:
+                if self.parar.is_set():
+                    self.registrar("Interrompido antes de iniciar.")
+                    return 1
+                time.sleep(0.1)
+            # fim da contagem: o cursor tem que estar no Item, senao nada e digitado
+            proximo = caixa_foco(self.janela)  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
+            if not proximo:
+                self.registrar("Não iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Item da primeira linha livre "
+                          "e inicie de novo. Nada foi digitado.")
+                return 1
+            if self.colunas and "item" in self.colunas and qual_coluna(proximo, self.colunas) != "item":
+                onde = qual_coluna(proximo, self.colunas)
+                self.registrar(f"Não iniciei: o cursor está {f'na coluna {NOME_CAMPO[onde]}' if onde else 'fora da grade'}, "
+                          "não no Item. Clique no campo Item da primeira linha livre e inicie de novo. Nada foi digitado.")
+                return 1
+            passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
+            coluna_qtd = None  # (esq, dir, altura) da coluna Quantidade, aprendida uma vez
+            for r in self.registros:
+                if self.janela_trecho.lower() not in titulo_janela_ativa().lower():
+                    self.registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
+                    return 1
+                falha = self.revisar()
+                while falha:
+                    if not self.tratar_divergencia(falha):
+                        return 1
+                    falha = self.revisar()
+                if self.pausar is not None and self.pausar.is_set() and self.retomar is not None:
+                    proximo = self.pausa_pedida(r)
+                self.marcar(r, "executando")
+                t0 = time.time()
+                inicial = proximo or caixa_foco(self.janela)
+                if not inicial:
+                    self.registrar(f"Linha {r['linha']}: campo em foco (ciano) não detectado. Interrompido.")
+                    return 1
+                foco, campo = inicial, "item"
+                digitados, manual, proximo = [], False, None
+                while campo != "fim":
+                    if campo == "conta" and not r["conta"]:
+                        self.registrar(f"Linha {r['linha']}: Conta editável mas em branco na planilha. Interrompido.")
+                        return 1
+                    if campo == "quantidade" and coluna_qtd is None:
+                        coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
+                    valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
+                    self.teclar("digitar", valor); self.teclar("tab", None, esperar=False)
+                    digitados.append(campo)
+                    novo = aguardar_mudanca(self.janela, foco, self.render, ver_aviso=bool(self.colunas), fixos=self.fixos)
+                    if novo == "aviso":
+                        novo = None
+                    seguinte = proximo_campo(campo, foco, novo, self.colunas) if novo else None
+                    if seguinte is None and campo == "quantidade" and not tesseract and not self.colunas:
+                        time.sleep(self.pausa)  # sem deteccao nem conferencia: sincroniza por tempo (modo antigo)
+                        break
+                    if seguinte is None:
+                        if self.retomar is None or not self.colunas:
+                            self.registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo]} "
+                                      "(aviso na tela?). Interrompido.")
+                            return 1
+                        novo, seguinte = self.esperar_correcao(r, campo)
+                        manual = True
+                    foco, campo = novo, seguinte
+                    if campo == "fim":
+                        proximo = novo
+                self.registrar(f"  linha {r['linha']}: digitados={digitados} manual={manual} tempo={time.time() - t0:.2f}s", mostrar=False)
+                if tesseract and proximo and not manual and coluna_qtd:
+                    # A celula so e lida depois do Tab (valor formatado, ex.: 1.0000): fica na linha acima do novo foco.
+                    if proximo[1] - inicial[1] > 8:
+                        passo = proximo[1] - inicial[1]
+                    topo = proximo[1] - passo
+                    celula = (coluna_qtd[0], topo, coluna_qtd[1], topo + coluna_qtd[2])
+                    esperada = float(r["quantidade"].replace(",", "."))
+                    recorte = recortar_celula(self.janela, celula)
+                    self.pendentes.append((r["linha"], esperada, pool.submit(conferir_recorte, recorte, tesseract, esperada), recorte))
+                elif tesseract and manual:
+                    self.registrar(f"  linha {r['linha']}: conferência da quantidade pulada (linha ajustada a mão)", mostrar=False)
+                conta = "digitada " + r["conta"] if "conta" in digitados else "travada"
+                custo = r["custo"] if "custo" in digitados else "travado"
+                self.registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}"
+                          + (" (ajustada a mão)" if manual else ""))
+                self.marcar(r, "ok")
+            falha = self.revisar(aguardar=True)
+            while falha:
+                if not self.tratar_divergencia(falha, no_fim=True):
+                    return 1
+                falha = self.revisar(aguardar=True)
+            self.registrar("Concluído.")
+            return 0
+        except KeyboardInterrupt:
+            self.registrar("Interrompido pelo usuário.")
+            return 1
+        except Exception as erro:
+            self.registrar(f"Erro: {erro}")
+            return 1
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+            if self.atual is not None and self.estado:
+                self.estado(self.atual, "erro")
+            self.log.close()
+
+
 def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, estado=None, conferir=False, retomar=None,
              pausar=None):
     """Preenche o SRP. `parar` e um threading.Event; `aviso(texto)` recebe o andamento;
@@ -1053,302 +1372,6 @@ def executar(registros, janela_trecho, pausa, render, espera, parar, aviso, esta
     `retomar` (threading.Event, opcional): se o SRP nao avancar (aviso na tela), o robo PAUSA e espera esse
     evento (botao Continuar) em vez de interromper. Sem ele, interrompe como antes.
     `pausar` (threading.Event, opcional; F9): pausa ao terminar a linha atual e espera `retomar`. Devolve 0 se concluiu."""
-    tesseract = caminho_tesseract() if conferir else None
-    limpar_logs()
-    log = open(pasta_logs() / f"{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
-    atual = None
-
-    def marcar(r, nome):
-        nonlocal atual
-        atual = r["linha"] if nome == "executando" else None
-        if estado:
-            estado(r["linha"], nome)
-
-    trava_log = threading.Lock()
-
-    def registrar(texto, mostrar=True):
-        with trava_log:
-            if log.closed:
-                return
-            log.write(texto + "\n")
-            log.flush()
-        if mostrar:
-            aviso(texto)
-
-    pool = ThreadPoolExecutor(max_workers=1)
-    pendentes = []  # (linha, esperada, futuro, recorte): conferencias de OCR em andamento, em ordem
-
-    def revisar(aguardar=False):
-        """Trata os resultados de OCR ja prontos (todos, com aguardar=True). Devolve a linha que nao conferiu, se houver."""
-        restantes = []
-        falha = None
-        for linha, esperada, futuro, recorte in pendentes:
-            if falha is None and (aguardar or futuro.done()):
-                confere, lidas = futuro.result()
-                registrar(f"  linha {linha}: quantidade lidas={lidas} esperada={esperada}", mostrar=False)
-                if not confere:
-                    pasta_ocr = pasta_logs() / "ocr"
-                    pasta_ocr.mkdir(exist_ok=True)
-                    recorte.save(pasta_ocr / f"{datetime.now():%H%M%S}-linha{linha}.png")
-                    falha = (linha, lidas, esperada)
-            else:
-                restantes.append((linha, esperada, futuro, recorte))
-        pendentes[:] = restantes
-        return falha
-
-    def teclar(acao, valor, esperar=True):
-        """`esperar=False` em Tab seguido de aguardar_mudanca (a propria espera do foco sincroniza)."""
-        if parar.is_set() or mouse_no_canto():
-            raise KeyboardInterrupt
-        # 0,03 s por tecla (era 0,05): o Citrix recebe as teclas em ordem; a sincronizacao real e o foco mudar apos o Tab
-        send_keys("{TAB}" if acao == "tab" else valor.replace(",", "{,}"), pause=0.03)
-        if acao == "digitar":
-            time.sleep(min(pausa, 0.05))
-        elif esperar:
-            time.sleep(pausa)
-
-    def esperar_continuar():
-        retomar.clear()
-        while not retomar.is_set():
-            if parar.is_set():
-                raise KeyboardInterrupt
-            time.sleep(0.2)
-
-    def tratar_divergencia(falha, no_fim=False):
-        """Quantidade lida diferente da planilha: pausa (se houver Continuar) ou interrompe. True = seguir."""
-        linha, lidas, esperada = falha
-        if retomar is None:
-            registrar(f"Linha {linha}: quantidade na tela {lidas} difere da planilha ({esperada}). Interrompido. "
-                      "A linha já foi confirmada no SRP: corrija-a (as seguintes, até aqui, também podem estar afetadas). "
-                      "Imagem lida em logs/ocr.")
-            if estado:
-                estado(linha, "erro")
-            return False
-        registrar(f"Linha {linha}: a quantidade lida na tela {lidas} difere da planilha ({esperada}). PAUSADO. "
-                  f"Confira a linha {linha} no SRP (imagem lida em logs/ocr). Se estiver certa, clique em Continuar. "
-                  "Se não, corrija-a" + ("." if no_fim else ", volte o cursor para o Item da próxima linha livre") +
-                  " e clique em Continuar.")
-        if estado:
-            estado(linha, "pausado")
-        while True:
-            esperar_continuar()
-            if no_fim:
-                break
-            janela.set_focus()
-            aviso("Continuando em 2 s...")
-            for _ in range(20):
-                if parar.is_set():
-                    raise KeyboardInterrupt
-                time.sleep(0.1)
-            caixa = caixa_foco(janela)
-            if caixa and (not colunas or qual_coluna(caixa, colunas) == "item"):
-                break
-            registrar("Ainda pausado: deixe o cursor no Item da próxima linha livre e clique em Continuar.")
-            if estado:
-                estado(linha, "pausado")
-        registrar(f"  linha {linha}: quantidade conferida pelo usuário após a pausa", mostrar=False)
-        if estado:
-            estado(linha, "ok")
-        return True
-
-    def pausa_pedida(r):
-        """F9: pausa antes de comecar a linha `r`; volta quando o cursor estiver no Item e o usuario continuar."""
-        pausar.clear()
-        registrar(f"Pausado antes da linha {r['linha']} (F9). Para continuar: deixe o cursor no Item da linha "
-                  f"{r['linha']} no SRP e clique em Continuar (ou F9).")
-        if estado:
-            estado(r["linha"], "pausado")
-        while True:
-            esperar_continuar()
-            pausar.clear()
-            janela.set_focus()
-            aviso("Continuando em 2 s...")
-            for _ in range(20):
-                if parar.is_set():
-                    raise KeyboardInterrupt
-                time.sleep(0.1)
-            caixa = caixa_foco(janela)
-            if caixa and (not colunas or qual_coluna(caixa, colunas) == "item"):
-                return caixa
-            registrar(f"Ainda pausado: deixe o cursor no Item da linha {r['linha']} e clique em Continuar (ou F9).")
-            if estado:
-                estado(r["linha"], "pausado")
-
-    def esperar_correcao(r, campo_erro):
-        """Pausa ate o usuario corrigir no SRP e clicar em Continuar. Devolve (caixa do foco, campo onde retomar);
-        'fim' quando o cursor ja esta no Item (linha completada a mao)."""
-        if exe_tesseract:
-            tela_do_aviso = capturar(janela)  # captura ja: o usuario pode fechar o aviso a qualquer momento
-
-            def ler_em_segundo_plano():
-                try:
-                    info = ler_aviso(tela_do_aviso, exe_tesseract, fixos)
-                except Exception as erro:
-                    registrar(f"  leitura do aviso falhou: {erro}", mostrar=False)
-                    return
-                if not info:
-                    return
-                registrar(f'Linha {r["linha"]}: SRP: "{info["texto"]}"')
-                if info["conta_correta"] and info["item"] == r["item"] and (info["custo"] in (None, r["custo"])):
-                    aprender_conta(r["item"], r["custo"], info["conta_correta"])
-                    registrar(f"Linha {r['linha']}: o SRP informou a Conta correta {info['conta_correta']} para o item "
-                              f"{r['item']} (C/Custo {r['custo']}); guardada para avisar nas próximas planilhas.")
-            threading.Thread(target=ler_em_segundo_plano, daemon=True).start()
-        registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo_erro]}. PAUSADO. "
-                  f"No SRP: feche o aviso, corrija o {NOME_CAMPO[campo_erro]}, aperte Tab para ir ao campo seguinte "
-                  "e clique em Continuar. Se completou a linha a mão, deixe o cursor no Item da linha seguinte.")
-        if estado:
-            estado(r["linha"], "pausado")
-        while True:
-            esperar_continuar()
-            janela.set_focus()
-            aviso("Continuando em 2 s...")
-            for _ in range(20):
-                if parar.is_set():
-                    raise KeyboardInterrupt
-                time.sleep(0.1)
-            caixa = caixa_foco(janela)
-            onde = qual_coluna(caixa, colunas) if caixa else None
-            if onde == "item":
-                registrar(f"  linha {r['linha']}: retomada com o cursor no Item (linha completada a mão)", mostrar=False)
-                if estado:
-                    estado(r["linha"], "executando")
-                return caixa, "fim"
-            if onde in ORDEM and ORDEM.index(onde) > ORDEM.index(campo_erro):
-                registrar(f"  linha {r['linha']}: retomada no campo {NOME_CAMPO[onde]}", mostrar=False)
-                if estado:
-                    estado(r["linha"], "executando")
-                return caixa, onde
-            registrar(f"Ainda pausado: o cursor está em '{NOME_CAMPO.get(onde, 'campo não identificado')}'. "
-                      f"Deixe-o no campo depois do {NOME_CAMPO[campo_erro]} (ou no Item da linha seguinte) e clique em Continuar.")
-            if estado:
-                estado(r["linha"], "pausado")
-
-    try:
-        if conferir and not tesseract:
-            aviso("ATENÇÃO: pasta 'tesseract' não encontrada ao lado do programa. Conferência da quantidade DESATIVADA nesta execução.")
-        janela = janela_citrix(janela_trecho)
-        janela.set_focus()
-        aviso(f"Clique no campo Item da primeira linha. Iniciando em {espera}s (mouse no canto superior esquerdo aborta).")
-        inicio_contagem = time.time()
-        colunas = None
-        exe_tesseract = caminho_tesseract()
-        tela_inicial = capturar(janela)
-        ret = janela.rectangle()
-        problema = problema_tela((ret.left, ret.top, ret.right, ret.bottom), tela_inicial)
-        if problema:
-            registrar(f"Não iniciei: {problema}. Nada foi digitado.")
-            return 1
-        try:  # vermelhos que ja estao na tela (faixa do cabecalho do SRP): nao sao aviso
-            fixos = caixas_cor(tela_inicial, "vermelho")
-        except Exception:
-            fixos = []
-        registrar(f"  vermelhos fixos na tela: {fixos}", mostrar=False)
-        if exe_tesseract:
-            try:
-                colunas = localizar_colunas(tela_inicial, exe_tesseract)
-            except Exception as erro:  # sem cabecalho, segue no modo antigo
-                registrar(f"  leitura do cabeçalho falhou: {erro}", mostrar=False)
-        if colunas:
-            registrar(f"  colunas pelo cabeçalho: {colunas}", mostrar=False)
-        else:
-            aviso("ATENÇÃO: não localizei o cabeçalho da grade (C/Custo, Conta, Quantidade). "
-                  "Sem ele o robô não detecta C/Custo travado: o C/Custo será sempre digitado.")
-        while time.time() - inicio_contagem < espera:
-            if parar.is_set():
-                registrar("Interrompido antes de iniciar.")
-                return 1
-            time.sleep(0.1)
-        # fim da contagem: o cursor tem que estar no Item, senao nada e digitado
-        proximo = caixa_foco(janela)  # caixa do Item da proxima linha (ja conhecida ao fim da anterior)
-        if not proximo:
-            registrar("Não iniciei: nenhum campo do SRP em foco (ciano). Clique no campo Item da primeira linha livre "
-                      "e inicie de novo. Nada foi digitado.")
-            return 1
-        if colunas and "item" in colunas and qual_coluna(proximo, colunas) != "item":
-            onde = qual_coluna(proximo, colunas)
-            registrar(f"Não iniciei: o cursor está {f'na coluna {NOME_CAMPO[onde]}' if onde else 'fora da grade'}, "
-                      "não no Item. Clique no campo Item da primeira linha livre e inicie de novo. Nada foi digitado.")
-            return 1
-        passo = 19  # distancia vertical entre linhas do formulario (px); recalculada quando observavel
-        coluna_qtd = None  # (esq, dir, altura) da coluna Quantidade, aprendida uma vez
-        for r in registros:
-            if janela_trecho.lower() not in titulo_janela_ativa().lower():
-                registrar(f"Foco saiu do Citrix antes da linha {r['linha']}. Interrompido.")
-                return 1
-            falha = revisar()
-            while falha:
-                if not tratar_divergencia(falha):
-                    return 1
-                falha = revisar()
-            if pausar is not None and pausar.is_set() and retomar is not None:
-                proximo = pausa_pedida(r)
-            marcar(r, "executando")
-            t0 = time.time()
-            inicial = proximo or caixa_foco(janela)
-            if not inicial:
-                registrar(f"Linha {r['linha']}: campo em foco (ciano) não detectado. Interrompido.")
-                return 1
-            foco, campo = inicial, "item"
-            digitados, manual, proximo = [], False, None
-            while campo != "fim":
-                if campo == "conta" and not r["conta"]:
-                    registrar(f"Linha {r['linha']}: Conta editável mas em branco na planilha. Interrompido.")
-                    return 1
-                if campo == "quantidade" and coluna_qtd is None:
-                    coluna_qtd = (foco[0], foco[2], foco[3] - foco[1])
-                valor = r["quantidade"].replace(".", ",") if campo == "quantidade" else r[campo]
-                teclar("digitar", valor); teclar("tab", None, esperar=False)
-                digitados.append(campo)
-                novo = aguardar_mudanca(janela, foco, render, ver_aviso=bool(colunas), fixos=fixos)
-                if novo == "aviso":
-                    novo = None
-                seguinte = proximo_campo(campo, foco, novo, colunas) if novo else None
-                if seguinte is None and campo == "quantidade" and not tesseract and not colunas:
-                    time.sleep(pausa)  # sem deteccao nem conferencia: sincroniza por tempo (modo antigo)
-                    break
-                if seguinte is None:
-                    if retomar is None or not colunas:
-                        registrar(f"Linha {r['linha']}: o SRP não avançou depois do {NOME_CAMPO[campo]} "
-                                  "(aviso na tela?). Interrompido.")
-                        return 1
-                    novo, seguinte = esperar_correcao(r, campo)
-                    manual = True
-                foco, campo = novo, seguinte
-                if campo == "fim":
-                    proximo = novo
-            registrar(f"  linha {r['linha']}: digitados={digitados} manual={manual} tempo={time.time() - t0:.2f}s", mostrar=False)
-            if tesseract and proximo and not manual and coluna_qtd:
-                # A celula so e lida depois do Tab (valor formatado, ex.: 1.0000): fica na linha acima do novo foco.
-                if proximo[1] - inicial[1] > 8:
-                    passo = proximo[1] - inicial[1]
-                topo = proximo[1] - passo
-                celula = (coluna_qtd[0], topo, coluna_qtd[1], topo + coluna_qtd[2])
-                esperada = float(r["quantidade"].replace(",", "."))
-                recorte = recortar_celula(janela, celula)
-                pendentes.append((r["linha"], esperada, pool.submit(conferir_recorte, recorte, tesseract, esperada), recorte))
-            elif tesseract and manual:
-                registrar(f"  linha {r['linha']}: conferência da quantidade pulada (linha ajustada a mão)", mostrar=False)
-            conta = "digitada " + r["conta"] if "conta" in digitados else "travada"
-            custo = r["custo"] if "custo" in digitados else "travado"
-            registrar(f"OK linha {r['linha']}: {r['item']} c/custo={custo} conta={conta} {r['quantidade']}"
-                      + (" (ajustada a mão)" if manual else ""))
-            marcar(r, "ok")
-        falha = revisar(aguardar=True)
-        while falha:
-            if not tratar_divergencia(falha, no_fim=True):
-                return 1
-            falha = revisar(aguardar=True)
-        registrar("Concluído.")
-        return 0
-    except KeyboardInterrupt:
-        registrar("Interrompido pelo usuário.")
-        return 1
-    except Exception as erro:
-        registrar(f"Erro: {erro}")
-        return 1
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-        if atual is not None and estado:
-            estado(atual, "erro")
-        log.close()
+    return Execucao0234(registros=registros, janela_trecho=janela_trecho, pausa=pausa, render=render, espera=espera,
+                        parar=parar, aviso=aviso, estado=estado, conferir=conferir, retomar=retomar,
+                        pausar=pausar).rodar()
