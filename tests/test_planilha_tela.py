@@ -2,6 +2,7 @@
 import pathlib
 import tempfile
 import unittest
+from datetime import datetime
 
 from openpyxl import Workbook
 from PIL import Image, ImageDraw
@@ -144,7 +145,7 @@ class PintarLinhas(unittest.TestCase):
                 self.assertEqual(core.pintar_linhas(caminho, [4]), "excel")
             finally:
                 core.os.replace, core._pintar_no_excel = original_replace, original_excel
-            self.assertEqual(chamadas, [(caminho, "Notas", [4], 3, core.VERDE_CONCLUIDA, {}, 1)])
+            self.assertEqual(chamadas, [(caminho, "Notas", [4], 3, core.VERDE_CONCLUIDA, {}, 1, None, None)])
             self.assertEqual(sorted(p.name for p in pathlib.Path(pasta).iterdir()), ["notas.xlsx"])
 
     def test_serie_com_ponto_outro_verde_e_comentario_na_chave(self):
@@ -175,6 +176,103 @@ class PlanilhaSolta(unittest.TestCase):
                     pass  # cabecalho da outra tela: o que importa e o arquivo solto depois
                 caminho.rename(caminho.with_name("trocado.xlsx"))  # falha no Windows se o arquivo ficou aberto
                 caminho.with_name("trocado.xlsx").unlink()
+
+
+class AbaLancados(unittest.TestCase):
+    """SNAC0236 (usuario, 20/11/2026): as linhas das notas integradas vao tambem para a aba "Lançados", com a data."""
+    A, B, C = "1" * 44, "2" * 44, "3" * 44
+    QUANDO = datetime(2026, 11, 20, 14, 30)
+
+    def planilha(self, pasta):
+        caminho = pathlib.Path(pasta) / "notas.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Notas"
+        ws.append(["CHAVE NF", "ITEM", "DATA EMISSÃO", "QTD FISCAL"])
+        ws.append([self.A, "900135", datetime(2026, 11, 1), 2])
+        ws.append([None, "900136", None, 3])  # chave em branco: mais um item da nota A
+        ws.append([self.B, "900137", datetime(2026, 11, 2), 4])
+        ws.append([self.C, "900138", datetime(2026, 11, 3), 5])
+        ws["C2"].number_format = ws["C4"].number_format = "dd/mm/yyyy"
+        ws.column_dimensions["A"].width = 50
+        wb.save(caminho)
+        return caminho
+
+    def ler(self, caminho):
+        from openpyxl import load_workbook
+        return load_workbook(caminho)
+
+    def test_cria_a_aba_ao_iniciar_so_uma_vez(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            self.assertEqual(core.pintar_linhas(caminho, [], lancados={}), "arquivo")
+            livro = self.ler(caminho)
+            self.assertEqual(livro.sheetnames, ["Notas", "Lançados"])
+            self.assertEqual(livro.active.title, "Notas")  # o robo continua lendo a aba dos dados
+            lancados = livro["Lançados"]
+            self.assertEqual([c.value for c in lancados[1]], ["CHAVE NF", "ITEM", "DATA EMISSÃO", "QTD FISCAL", "LANÇADO EM"])
+            self.assertEqual((lancados.max_row, lancados.column_dimensions["A"].width), (1, 50))
+            self.assertIsNone(core.pintar_linhas(caminho, [], lancados={}))  # ja existe: nem regrava
+            self.assertIsNone(core.pintar_linhas(caminho, []))  # sem pedido de Lançados: nada a fazer
+
+    def test_copia_as_notas_integradas_verdes_com_a_data(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            core.pintar_linhas(caminho, [2, 3], lancados=dict.fromkeys([2, 3], self.QUANDO))
+            core.pintar_linhas(caminho, [5], core.VERDE_SERIE_PONTO, {5: "lançada com '.'"},
+                               lancados={5: datetime(2026, 11, 20, 15, 0)})
+            livro = self.ler(caminho)
+            notas, lancados = livro["Notas"], livro["Lançados"]
+            self.assertEqual([[c.value for c in linha] for linha in lancados.iter_rows(min_row=2)], [
+                [self.A, "900135", datetime(2026, 11, 1), 2, self.QUANDO],
+                [None, "900136", None, 3, self.QUANDO],
+                [self.C, "900138", datetime(2026, 11, 3), 5, datetime(2026, 11, 20, 15, 0)]])
+            self.assertEqual(lancados["C2"].number_format, "dd/mm/yyyy")  # formato da celula vai junto
+            self.assertEqual(lancados["E2"].number_format, core.FORMATO_LANCADO_EM)
+            self.assertTrue(all(core.fundo_verde(lancados.cell(row=n, column=c).fill) for n in (2, 3, 4) for c in (1, 2, 3, 4)))
+            self.assertEqual(lancados["B4"].fill.fgColor.rgb[-6:], core.VERDE_SERIE_PONTO)
+            self.assertEqual(lancados["A4"].comment.text, "lançada com '.'")
+            # a aba dos dados continua com todas as linhas, verdes (usuario: "mantenha a cor verde")
+            self.assertEqual(notas.max_row, 5)
+            self.assertTrue(all(core.fundo_verde(notas.cell(row=n, column=1).fill) for n in (2, 3, 5)))
+            self.assertFalse(core.fundo_verde(notas.cell(row=4, column=1).fill))
+            self.assertEqual(livro.active.title, "Notas")
+
+    def test_nota_ja_copiada_nao_repete(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            core.pintar_linhas(caminho, [2, 3], lancados=dict.fromkeys([2, 3], self.QUANDO))
+            core.pintar_linhas(caminho, [2, 3, 4], lancados=dict.fromkeys([2, 3, 4], self.QUANDO))  # Conferir pinta de novo
+            lancados = self.ler(caminho)["Lançados"]
+            self.assertEqual([lancados.cell(row=n, column=2).value for n in range(2, lancados.max_row + 1)],
+                             ["900135", "900136", "900137"])
+
+    def test_aba_lancados_com_outras_colunas_so_avisa(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            livro = self.ler(caminho)
+            livro.create_sheet("Lançados").append(["OUTRA", "COISA"])
+            livro.save(caminho)
+            avisos = []
+            self.assertEqual(core.pintar_linhas(caminho, [4], lancados={4: self.QUANDO}, avisos=avisos), "arquivo")
+            livro = self.ler(caminho)
+            self.assertEqual(len(avisos), 1)
+            self.assertIn("colunas diferentes", avisos[0])
+            self.assertEqual(livro["Lançados"].max_row, 1)  # nada copiado
+            self.assertTrue(core.fundo_verde(livro["Notas"]["A4"].fill))  # mas pintou de verde
+
+    def test_planilha_salva_com_a_aba_lancados_aberta(self):
+        """Se o usuario salvar com a "Lançados" ativa, o robo continua pintando (e lendo) a aba dos dados."""
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = self.planilha(pasta)
+            core.pintar_linhas(caminho, [2, 3], lancados=dict.fromkeys([2, 3], self.QUANDO))
+            livro = self.ler(caminho)
+            livro.active = 1
+            livro.save(caminho)
+            core.pintar_linhas(caminho, [4], lancados={4: self.QUANDO})
+            livro = self.ler(caminho)
+            self.assertTrue(core.fundo_verde(livro["Notas"]["A4"].fill))
+            self.assertEqual(livro["Lançados"].max_row, 4)
 
 
 class FecharNoExcel(unittest.TestCase):

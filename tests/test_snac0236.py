@@ -537,6 +537,22 @@ class Planilha(unittest.TestCase):
             snac0236.ler_planilha(self.gravar_cabecalho(["ICMS TERCEIROS (BASE DE CALCULO NF)", "BASE CALC. ICMS"]))
         self.assertIn("Duas colunas para a base", str(erro.exception))
 
+    def test_le_a_aba_dos_dados_mesmo_com_a_lancados_ativa(self):
+        """Planilha salva com a aba "Lançados" aberta: o robo le a aba dos dados, nao a copia das integradas."""
+        from openpyxl import load_workbook
+        caminho = self.gravar([
+            [CHAVE_A, "30 46", datetime(2026, 11, 1), 47407.28, "CIF", 900135, 5101, 2, 10.5, 180, 1500.5, 12],
+            [CHAVE_B, "30 47", "02/11/2026", "1200", "FOB", 900135, 5102, 1, 1200, 0, 0],
+        ])
+        livro = load_workbook(caminho)
+        copia = livro.create_sheet("Lançados")
+        for linha in list(livro.active.iter_rows(max_row=2, values_only=True)):
+            copia.append(linha)
+        livro.active = 1
+        livro.save(caminho)
+        _registros, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual((erros, len(notas)), ([], 2))
+
     def test_coluna_faltando(self):
         from openpyxl import Workbook
         wb = Workbook()

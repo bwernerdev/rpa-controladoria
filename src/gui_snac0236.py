@@ -12,6 +12,7 @@ from tkinter import filedialog, ttk
 import snac0236
 import visual
 from core import (
+    ABA_LANCADOS,
     VERDE_CONCLUIDA,
     VERDE_SERIE_PONTO,
     VK_F8,
@@ -483,6 +484,7 @@ class Pagina0236(Pagina):
             return
         if not self._fechar_planilha_no_excel():
             return
+        self._criar_aba_lancados()
         for n in notas:
             for r in n["itens"]:
                 self._estado(r["linha"], "pendente")
@@ -507,6 +509,23 @@ class Pagina0236(Pagina):
             self.escrever("Passo a passo ligado: 0,5 s antes de cada ação; a próxima ação aparece aqui e na linha de status.")
         self.thread = threading.Thread(target=self._rodar, args=(notas, intervalo), daemon=True)
         self.thread.start()
+
+    def _criar_aba_lancados(self):
+        """Cria a aba "Lançados" na planilha ao iniciar (usuario, 20/11/2026), se ainda nao existir: o pintor copia
+        para la as linhas de cada nota integrada. Falha so avisa: o robo e a pintura de verde seguem."""
+        avisos = []
+        try:
+            with self.trava_pintura:
+                como = pintar_linhas(self.caminho, [], lancados={}, avisos=avisos)
+        except Exception as erro:
+            self._avisar_pintura(f"Aviso: não criei a aba {ABA_LANCADOS} na planilha ({erro}). As notas integradas "
+                                 "continuam sendo pintadas de verde.")
+            return
+        for aviso in avisos:
+            self._avisar_pintura(f"Aviso: {aviso}.")
+        if como:
+            self._avisar_pintura(f"Planilha: aba {ABA_LANCADOS} criada; as notas integradas são copiadas para lá"
+                                 + (" (no Excel aberto, falta salvar)." if como == "excel" else "."))
 
     def _fechar_planilha_no_excel(self):
         """Salva e fecha no Excel SO a planilha carregada no robo (usuario, 06/11/2026): assim as notas concluidas sao
@@ -680,15 +699,17 @@ class Pagina0236(Pagina):
             self.pintadas.update(linhas)
             self.fila_pintar.put(self._pedido_pintura(nota))
 
-    def _pedido_pintura(self, nota, quando=None):
-        """(planilha, linhas, cor, comentarios) para o pintor. Nota com "." na Serie: verde mais escuro e comentario
-        na CHAVE NF da 1a linha (usuario, 09/11/2026). `quando`: data do log em que isso aconteceu (texto)."""
+    def _pedido_pintura(self, nota, quando=None, em=None):
+        """(planilha, linhas, cor, comentarios, lancados) para o pintor. Nota com "." na Serie: verde mais escuro e
+        comentario na CHAVE NF da 1a linha (usuario, 09/11/2026). `quando`: data do log em que isso aconteceu (texto);
+        `em`: data e hora da integracao (datetime; sem ela, agora), que vai para a coluna LANCADO EM da aba Lançados."""
         linhas = [r["linha"] for r in nota["itens"]]
+        lancados = dict.fromkeys(linhas, em or datetime.now().replace(second=0, microsecond=0))
         if not set(linhas) & self.serie_ponto:
-            return self.caminho, linhas, VERDE_CONCLUIDA, {}
+            return self.caminho, linhas, VERDE_CONCLUIDA, {}, lancados
         texto = (f"Robô SRP ({quando or f'{datetime.now():%d/%m/%Y %H:%M}'}): o SRP disse que o Documento "
                  "Recebimento já existia; o robô apagou a Chave e pôs '.' no fim da Série.")
-        return self.caminho, linhas, VERDE_SERIE_PONTO, {linhas[0]: texto}
+        return self.caminho, linhas, VERDE_SERIE_PONTO, {linhas[0]: texto}, lancados
 
     def _pintor(self):
         """Thread unica: uma gravacao da planilha por vez; junta as notas que terminaram enquanto pintava."""
@@ -706,21 +727,23 @@ class Pagina0236(Pagina):
                     self.fila_pintar.task_done()
 
     def _pintar(self, pedidos):
-        """Grava os pedidos (planilha, linhas, cor, comentarios), juntando os da mesma planilha e cor."""
+        """Grava os pedidos (planilha, linhas, cor, comentarios, lancados), juntando os da mesma planilha e cor."""
         with self.trava_pintura:
             self._gravar_pedidos(pedidos)
 
     def _gravar_pedidos(self, pedidos):
-        juntos = {}  # (planilha, cor) -> (linhas, comentarios)
-        for caminho, linhas, cor, comentarios in pedidos:
-            grupo = juntos.setdefault((caminho, cor), ([], {}))
+        juntos = {}  # (planilha, cor) -> (linhas, comentarios, lancados)
+        for caminho, linhas, cor, comentarios, lancados in pedidos:
+            grupo = juntos.setdefault((caminho, cor), ([], {}, {}))
             grupo[0].extend(linhas)
             grupo[1].update(comentarios)
-        for (caminho, cor), (linhas, comentarios) in juntos.items():
+            grupo[2].update(lancados)
+        for (caminho, cor), (linhas, comentarios, lancados) in juntos.items():
             lista = ", ".join(str(n) for n in sorted(linhas))
             serie = " (verde mais escuro e comentário na CHAVE NF: '.' na Série)" if cor == VERDE_SERIE_PONTO else ""
+            avisos = []
             try:
-                como = pintar_linhas(caminho, linhas, cor, comentarios)
+                como = pintar_linhas(caminho, linhas, cor, comentarios, lancados, avisos)
             except Exception as erro:  # pintar nunca para o robo
                 self._avisar_pintura(f"Aviso: não pintei de verde a(s) linha(s) {lista} na planilha "
                                      f"{Path(caminho).name} ({erro}).")
@@ -734,7 +757,10 @@ class Pagina0236(Pagina):
                     if r["linha"] in linhas:
                         r["verde"] = True
                         r["serie_ponto"] = cor == VERDE_SERIE_PONTO
-            self._avisar_pintura(f"  Planilha: linha(s) {lista} pintada(s) de verde{serie}"
+            for aviso in avisos:
+                self._avisar_pintura(f"Aviso: {aviso}.")
+            copiadas = f" e copiada(s) para a aba {ABA_LANCADOS}" if not avisos else ""
+            self._avisar_pintura(f"  Planilha: linha(s) {lista} pintada(s) de verde{serie}{copiadas}"
                                  + (" (no Excel aberto, falta salvar)" if como == "excel" else " (arquivo gravado)"))
 
     def _avisar_pintura(self, texto):
@@ -769,7 +795,7 @@ class Pagina0236(Pagina):
             for linha in linhas:
                 self._estado(linha, "ok")
             self.pintadas.update(linhas)
-            pedidos.append(self._pedido_pintura(nota, f"log de {info.get('quando', '?')}"))
+            pedidos.append(self._pedido_pintura(nota, f"log de {info.get('quando', '?')}", info.get("em")))
         self._pintar(pedidos)
 
     def conferir(self):

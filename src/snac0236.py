@@ -140,7 +140,7 @@ def ler_planilha(caminho):
     # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
     livro = load_workbook(caminho, read_only=True, data_only=True)
     try:
-        celulas = list(livro.active.iter_rows())
+        celulas = list(core.aba_de_dados(livro).iter_rows())  # nunca a aba "Lançados" (copia das integradas)
         tema = core.cores_do_tema(getattr(livro, "loaded_theme", None))
     finally:
         livro.close()
@@ -878,7 +878,8 @@ _JA_EXISTE = re.compile(r"Nota \.\.\.(\d{6}): o SRP disse que o Documento Recebi
 
 def notas_nos_logs(pasta):
     """O que os logs da SNAC0236 em `pasta` dizem de cada nota, pelos 6 ultimos digitos da chave (os logs so guardam
-    esses): {sufixo: {"sucesso", "a_mao", "sem_confirmacao", "serie_ponto": bool, "quando": 'dd/mm hh:mm'}}.
+    esses): {sufixo: {"sucesso", "a_mao", "sem_confirmacao", "serie_ponto": bool, "quando": 'dd/mm hh:mm', "em": datetime
+    do log (vai para a coluna LANCADO EM da aba Lançados)}}.
     sucesso = o robo viu "Integrado com Sucesso"; a_mao = o usuario terminou a nota numa pausa; sem_confirmacao = o
     robo integrou mas nao viu a mensagem de sucesso (pausou para conferir). Serve para conferir a planilha (usuario,
     09/11/2026). Os logs ficam 30 dias."""
@@ -886,20 +887,24 @@ def notas_nos_logs(pasta):
     # os logs com mais de 2 dias ficam em logs/arquivo-AAAAMM.zip (core.compactar_logs): le soltos e zipados
     for nome, texto in core.ler_logs("*-snac0236.log", pasta):
         quando = f"{nome[6:8]}/{nome[4:6]} {nome[9:11]}:{nome[11:13]}"
+        try:
+            em = datetime.strptime(nome[:13], "%Y%m%d-%H%M")
+        except ValueError:
+            em = None
         for linha in core.sem_acentos(texto).splitlines():  # logs antigos (sem acento) e novos (com)
             achado = _OK_NOTA.search(linha)
             if achado:
                 nota = notas.setdefault(achado.group(1), {"sucesso": False, "a_mao": False, "sem_confirmacao": False,
-                                                          "serie_ponto": False, "quando": quando})
+                                                          "serie_ponto": False, "quando": quando, "em": em})
                 resto = achado.group(2)
                 chave = ("sucesso" if "integrada com sucesso" in resto else "a_mao" if "terminada a mao" in resto
                          else "sem_confirmacao")
-                nota[chave], nota["quando"] = True, quando
+                nota[chave], nota["quando"], nota["em"] = True, quando, em
                 continue
             achado = _JA_EXISTE.search(linha)
             if achado:
                 notas.setdefault(achado.group(1), {"sucesso": False, "a_mao": False, "sem_confirmacao": False,
-                                                   "serie_ponto": False, "quando": quando})["serie_ponto"] = True
+                                                   "serie_ponto": False, "quando": quando, "em": em})["serie_ponto"] = True
     return notas
 
 

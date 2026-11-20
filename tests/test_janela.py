@@ -270,6 +270,32 @@ class Janela(unittest.TestCase):
         self.assertEqual(p.fila.get_nowait(), ("serie_ponto", (7,)))
         self.assertEqual(p.fila.get_nowait(), ("estado", 7, "ok"))
 
+    def test_0236_cria_a_aba_lancados_e_copia_a_nota_integrada(self):
+        """Iniciar cria a aba "Lançados"; nota concluida vai pelo pintor: verde na aba dos dados e copia com a data."""
+        from openpyxl import Workbook, load_workbook
+        caminho = Path(tempfile.mkdtemp()) / "NOTAS FICTICIAS.xlsx"
+        livro = Workbook()
+        livro.active.title = "Notas"
+        livro.active.append(["CHAVE NF", "ITEM", "QTD FISCAL"])
+        livro.active.append(["1" * 44, "900135", 2])
+        livro.active.append([None, "900136", 3])
+        livro.save(caminho)
+        p = self.app.p0236
+        p.caminho, p.registros = str(caminho), []
+        p._criar_aba_lancados()
+        p._criar_aba_lancados()  # a 2a vez nao faz nada (a aba ja existe)
+        nota = {"chave": "1" * 44, "itens": [{"linha": 2}, {"linha": 3}]}
+        p._pintar([p._pedido_pintura(nota)])
+        mensagens = [m for m in p.fila.queue if isinstance(m, str)]
+        self.assertEqual(sum("aba Lançados criada" in m for m in mensagens), 1, mensagens)
+        self.assertTrue(any("pintada(s) de verde e copiada(s) para a aba Lançados" in m for m in mensagens), mensagens)
+        livro = load_workbook(caminho)
+        self.assertEqual(livro.active.title, "Notas")
+        copia = [[c.value for c in linha] for linha in livro["Lançados"].iter_rows(min_row=2)]
+        self.assertEqual([linha[:3] for linha in copia], [["1" * 44, "900135", 2], [None, "900136", 3]])
+        self.assertTrue(all(isinstance(linha[3], gui_snac0236.datetime) for linha in copia))
+        self.assertTrue(all(gui_snac0236.snac0236.core.fundo_verde(livro["Notas"].cell(row=n, column=1).fill) for n in (2, 3)))
+
     def test_trocar_tema_refaz_a_janela(self):
         self.app.carregar(self.planilha())
         self.app.escolher_tema("escuro")

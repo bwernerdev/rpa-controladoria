@@ -611,12 +611,50 @@ def fundo_verde(fill, tema=()):
     return 75 <= matiz * 360 <= 165 and saturacao >= 0.07 and valor >= 0.25
 
 
-def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
-    """Fundo `cor` nas `linhas` da aba ativa (a que o robo le), nas colunas do cabecalho; `comentarios` {linha: texto}
-    vao na celula da coluna CHAVE (sem ela, na coluna A), no lugar de um comentario que ja houver ali. Planilha fechada: grava o
-    arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade). Aberta no Excel (o Excel
-    trava o arquivo): pinta na janela do Excel aberta, sem salvar (o usuario salva). Devolve 'arquivo' ou 'excel';
-    falha = excecao (quem chama avisa e segue: pintar nunca para o robo)."""
+# aba com a copia das linhas das notas integradas (SNAC0236; usuario, 20/11/2026): as linhas continuam verdes na aba
+# dos dados e a copia ganha a coluna LANCADO EM (data e hora da integracao)
+ABA_LANCADOS = "Lançados"
+TITULO_LANCADO_EM = "LANÇADO EM"
+FORMATO_LANCADO_EM = "dd/mm/yyyy hh:mm"
+
+
+def e_aba_lancados(nome):
+    return str(nome).strip().casefold() == ABA_LANCADOS.casefold()
+
+
+def aba_de_dados(livro):
+    """A aba que o robo le e pinta: a ativa, menos a "Lançados" (se o usuario salvou a planilha com ela aberta, vale a
+    primeira outra aba)."""
+    ativa = livro.active
+    if not e_aba_lancados(ativa.title):
+        return ativa
+    return next((aba for aba in livro.worksheets if not e_aba_lancados(aba.title)), ativa)
+
+
+def _texto_chave(valor):
+    return "" if valor is None else str(valor).strip()
+
+
+def _chaves_por_linha(valores):
+    """[(linha, chave)] de uma sequencia [(linha, valor da CHAVE)]: chave em branco = item da nota de cima."""
+    saida, atual = [], ""
+    for linha, valor in valores:
+        atual = _texto_chave(valor) or atual
+        saida.append((linha, atual))
+    return saida
+
+
+def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None, lancados=None, avisos=None):
+    """Fundo `cor` nas `linhas` da aba dos dados (`aba_de_dados`), nas colunas do cabecalho; `comentarios` {linha: texto}
+    vao na celula da coluna CHAVE (sem ela, na coluna A), no lugar de um comentario que ja houver ali.
+    `lancados` {linha: datetime} (SNAC0236): depois de pintar, copia essas linhas (valores, formato, cor e comentario)
+    para o fim da aba "Lançados", com a data e hora na coluna LANCADO EM; cria a aba se faltar (com `lancados` vazio, so
+    cria). Nota cuja CHAVE ja esta na "Lançados" nao e copiada de novo. Aba "Lançados" com outras colunas = nao copia e
+    poe o motivo em `avisos` (lista), sem impedir a pintura.
+    Planilha fechada: grava o arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade).
+    Aberta no Excel (o Excel trava o arquivo): faz o mesmo na janela do Excel aberta, sem salvar (o usuario salva).
+    Devolve 'arquivo', 'excel' ou None (nada a fazer); falha = excecao (quem chama avisa e segue: pintar nunca para o
+    robo)."""
     from openpyxl import load_workbook
     from openpyxl.comments import Comment
     from openpyxl.styles import PatternFill
@@ -625,9 +663,16 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
     comentarios = comentarios or {}
     linhas = sorted(set(linhas))
     if not linhas:
-        return None
+        if lancados is None:
+            return None
+        leve = load_workbook(caminho, read_only=True)  # so os nomes das abas: nao regrava a planilha a toa
+        try:
+            if any(e_aba_lancados(nome) for nome in leve.sheetnames):
+                return None
+        finally:
+            leve.close()
     livro = load_workbook(caminho, keep_vba=caminho.suffix.lower() == ".xlsm")
-    aba = livro.active
+    aba = aba_de_dados(livro)
     colunas = max((c.column for c in aba[1] if c.value not in (None, "")), default=1)
     coluna_chave = next((c.column for c in aba[1] if str(c.value or "").strip().lower().startswith("chave")), 1)
     fundo = PatternFill("solid", fgColor=cor)
@@ -638,6 +683,8 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
         comentario = Comment(texto, "Robô SRP")
         comentario.width, comentario.height = 300, 80
         aba.cell(row=linha, column=coluna_chave).comment = comentario
+    if lancados is not None:
+        _copiar_lancados(caminho, livro, aba, colunas, coluna_chave, lancados, avisos)
     temporario = caminho.with_name(f"~rpa-{caminho.name}")
     try:
         livro.save(temporario)
@@ -651,12 +698,85 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None):
                 temporario.unlink()
             except OSError:
                 pass
-    _pintar_no_excel(caminho, aba.title, linhas, colunas, cor, comentarios, coluna_chave)
+    _pintar_no_excel(caminho, aba.title, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos)
     return "excel"
 
 
-def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, coluna_chave=1):
-    """Pinta pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o arquivo nem salva."""
+def _copiar_lancados(caminho, livro, aba, colunas, coluna_chave, lancados, avisos):
+    """Copia as linhas de `lancados` {linha: datetime} para a aba "Lançados" do `livro` (openpyxl, ainda nao salvo)."""
+    from copy import copy
+
+    from openpyxl.comments import Comment
+    from openpyxl.utils import get_column_letter
+
+    destino = next((a for a in livro.worksheets if e_aba_lancados(a.title)), None)
+    titulos = [aba.cell(row=1, column=c).value for c in range(1, colunas + 1)]
+    if destino is None:
+        destino = livro.create_sheet(ABA_LANCADOS)  # no fim; a aba ativa continua a dos dados
+        for c in range(1, colunas + 2):
+            origem = aba.cell(row=1, column=min(c, colunas))
+            celula = destino.cell(row=1, column=c, value=titulos[c - 1] if c <= colunas else TITULO_LANCADO_EM)
+            celula._style = copy(origem._style)
+            largura = aba.column_dimensions[get_column_letter(c)].width if c <= colunas else 18
+            if largura:
+                destino.column_dimensions[get_column_letter(c)].width = largura
+        destino.freeze_panes = "A2"
+    elif [destino.cell(row=1, column=c).value for c in range(1, colunas + 1)] != titulos:
+        if avisos is not None:
+            avisos.append(f"a aba {ABA_LANCADOS} tem colunas diferentes da planilha: não copiei as notas para lá")
+        return
+    if not lancados:
+        return
+    # chave de cada linha (em branco = item da nota de cima): nota ja copiada antes nao entra de novo
+    ja = {chave for _, chave in _chaves_por_linha(
+        (n, destino.cell(row=n, column=coluna_chave).value) for n in range(2, destino.max_row + 1)) if chave}
+    pedidas = sorted(lancados)
+    chave_de = dict(_chaves_por_linha((n, aba.cell(row=n, column=coluna_chave).value) for n in range(2, max(pedidas) + 1)))
+    copiar = [n for n in pedidas if chave_de.get(n) and chave_de[n] not in ja]
+    if not copiar:
+        return
+    calculados = _valores_calculados(caminho, aba.title, copiar, colunas)
+    proxima = destino.max_row + 1
+    while proxima > 2 and all(destino.cell(row=proxima - 1, column=c).value in (None, "") for c in range(1, colunas + 2)):
+        proxima -= 1  # linhas vazias com formato no fim da aba nao contam
+    for n in copiar:
+        for c in range(1, colunas + 1):
+            origem = aba.cell(row=n, column=c)
+            valor = calculados.get((n, c), origem.value) if origem.data_type == "f" else origem.value
+            celula = destino.cell(row=proxima, column=c, value=valor)
+            celula._style = copy(origem._style)
+            if origem.comment is not None:
+                comentario = Comment(origem.comment.text, origem.comment.author)
+                comentario.width, comentario.height = origem.comment.width, origem.comment.height
+                celula.comment = comentario
+        celula = destino.cell(row=proxima, column=colunas + 1, value=lancados[n])
+        celula.number_format = FORMATO_LANCADO_EM
+        proxima += 1
+
+
+def _valores_calculados(caminho, nome_aba, linhas, colunas):
+    """{(linha, coluna): valor} do ultimo calculo do Excel: a copia leva o valor, nao a formula (a formula apontaria
+    para outras linhas na aba Lançados)."""
+    from openpyxl import load_workbook
+
+    livro = load_workbook(caminho, read_only=True, data_only=True)
+    try:
+        aba = livro[nome_aba]
+        querer = set(linhas)
+        saida = {}
+        for n, linha in enumerate(aba.iter_rows(min_row=min(querer), max_row=max(querer), max_col=colunas,
+                                                values_only=True), start=min(querer)):
+            if n in querer:
+                saida.update({(n, c): valor for c, valor in enumerate(linha, start=1)})
+        return saida
+    finally:
+        livro.close()
+
+
+def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, coluna_chave=1, lancados=None,
+                     avisos=None):
+    """Pinta (e copia para a aba Lançados) pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o
+    arquivo nem salva."""
     import pythoncom
     from openpyxl.utils import get_column_letter
 
@@ -674,8 +794,83 @@ def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, 
             celula = aba.Cells(linha, coluna_chave)
             celula.ClearComments()
             celula.AddComment(texto)
+        if lancados is not None:
+            _copiar_lancados_excel(livro, aba, colunas, coluna_chave, lancados, avisos)
     finally:
         pythoncom.CoUninitialize()
+
+
+def _coluna_excel(aba, coluna, de, ate):
+    """Valores de uma coluna (linhas `de` a `ate`) pelo COM; uma celula so vem como valor solto, nao como tupla."""
+    if ate < de:
+        return []
+    valores = aba.Range(aba.Cells(de, coluna), aba.Cells(ate, coluna)).Value
+    return [linha[0] for linha in valores] if isinstance(valores, tuple) else [valores]
+
+
+def _copiar_lancados_excel(livro, aba, colunas, coluna_chave, lancados, avisos):
+    """O mesmo que `_copiar_lancados`, na pasta aberta no Excel (COM, sem salvar)."""
+    from openpyxl.utils import get_column_letter
+
+    ultima = get_column_letter(colunas)
+    data = get_column_letter(colunas + 1)
+    destino = next((livro.Worksheets(i) for i in range(1, livro.Worksheets.Count + 1)
+                    if e_aba_lancados(livro.Worksheets(i).Name)), None)
+    titulos = list(aba.Range(f"A1:{ultima}1").Value[0])
+    if destino is None:
+        ativa = livro.ActiveSheet
+        destino = livro.Worksheets.Add(None, livro.Worksheets(livro.Worksheets.Count))  # (Before, After): no fim
+        destino.Name = ABA_LANCADOS
+        aba.Range(f"A1:{ultima}1").Copy(destino.Range("A1"))
+        aba.Range(f"{ultima}1").Copy(destino.Range(f"{data}1"))
+        destino.Range(f"{data}1").Value = TITULO_LANCADO_EM
+        for c in range(1, colunas + 1):
+            destino.Columns(c).ColumnWidth = aba.Columns(c).ColumnWidth
+        destino.Columns(colunas + 1).ColumnWidth = 18
+        ativa.Activate()  # o Add deixa a aba nova ativa: volta para a que o usuario via
+    elif list(destino.Range(f"A1:{ultima}1").Value[0]) != titulos:
+        if avisos is not None:
+            avisos.append(f"a aba {ABA_LANCADOS} tem colunas diferentes da planilha: não copiei as notas para lá")
+        return
+    if not lancados:
+        return
+    usada = destino.UsedRange
+    fim = usada.Row + usada.Rows.Count - 1
+    while fim > 1 and all(v in (None, "") for v in destino.Range(f"A{fim}:{data}{fim}").Value[0]):
+        fim -= 1
+    ja = set()
+    if fim >= 2:
+        valores = _coluna_excel(destino, coluna_chave, 2, fim)
+        ja = {chave for _, chave in _chaves_por_linha(enumerate(valores, start=2)) if chave}
+    pedidas = sorted(lancados)
+    chave_de = dict(_chaves_por_linha(enumerate(_coluna_excel(aba, coluna_chave, 2, max(pedidas)), start=2)))
+    proxima = fim + 1
+    formato = _formato_data_hora_excel(livro.Application)
+    for n in pedidas:
+        if not chave_de.get(n) or chave_de[n] in ja:
+            continue
+        de, para = aba.Range(f"A{n}:{ultima}{n}"), destino.Range(f"A{proxima}:{ultima}{proxima}")
+        de.Copy(para)  # valores, formato, cor e comentario (texto continua texto: a CHAVE nao vira numero)
+        for c in range(1, colunas + 1):
+            if de.Cells(1, c).HasFormula:  # a formula apontaria para outras linhas: fica o valor calculado
+                valor = de.Cells(1, c).Value
+                para.Cells(1, c).Value = f"'{valor}" if isinstance(valor, str) else valor
+        celula = destino.Range(f"{data}{proxima}")
+        # numero de serie do Excel (dias desde 30/12/1899): o datetime pelo COM chegava 3 h adiantado (fuso)
+        celula.Value = (lancados[n] - datetime(1899, 12, 30)).total_seconds() / 86400
+        celula.NumberFormatLocal = formato
+        proxima += 1
+
+
+def _formato_data_hora_excel(app):
+    """dd/mm/aaaa hh:mm com as letras do idioma do Excel (no Excel em portugues o ano e 'a': com 'yyyy' a celula
+    mostrava '20/11/yyyy'). Codigos do Application.International: 19 ano, 20 mes, 21 dia, 22 hora, 23 minuto."""
+    try:
+        codigos = app.International
+        ano, mes, dia, hora, minuto = (codigos[i - 1] for i in (19, 20, 21, 22, 23))
+    except Exception:
+        ano, mes, dia, hora, minuto = "y", "m", "d", "h", "m"
+    return f"{dia * 2}/{mes * 2}/{ano * 4} {hora * 2}:{minuto * 2}"
 
 
 def _pasta_aberta(caminho):
