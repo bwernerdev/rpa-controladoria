@@ -25,7 +25,7 @@ Preenche o formulario "Item Requisicao Suprimento Snac" do SRP com as linhas de 
 ## Regras
 - Nunca digitar credenciais; sem login automatizado.
 - Valida a planilha inteira antes de enviar; qualquer duvida (foco nao detectado, Conta editavel em branco, foco fora do Citrix) interrompe sem digitar.
-- Abortar: botao Parar, F8 ou mouse no canto superior esquerdo da tela. F9 pausa ao fim da linha.
+- Abortar: botao Parar, F8 ou mouse no canto superior esquerdo da tela. F9 pausa ao fim da linha (na SNAC0236, ao fim da nota).
 - `pyautogui` nao compila no Python 3.14: usar `pywinauto.keyboard`.
 - Repositorio PUBLICO `github.com/bwernerdev/rpa-controladoria` (a autoatualizacao le os releases sem token). Nada da empresa vai ao git: planilhas de trabalho, `logs/` e `aprendizado.json` ficam fora (estiveram la e foram tirados do historico em 30/10/2026). Em testes e exemplos, so numeros ficticios (item 900135, C/Custo 7300, conta 8712). Cada versao (feita por mim, de ponta a ponta): subir `VERSAO`, `.\build.ps1`, escrever `scripts\notas\vX.Y.Z.md`, commit, `.\scripts\publicar.ps1` (push + release com o zip). Exe no git incharia o historico ~25 MB por build.
 - `ferramentas\gh` — GitHub CLI portatil 2.103.3 (fora do git); login em `ferramentas\gh-config` (token no Gerenciador de Credenciais do Windows). Sempre com `$env:GH_CONFIG_DIR = "$PWD\ferramentas\gh-config"`. A `AppData` vista por esta sessao e isolada do terminal do usuario: nao instalar ferramentas la. Se o login expirar, o usuario roda `gh auth login --web` na aba do Terminal (eu nunca digito credenciais).
