@@ -158,11 +158,21 @@ def ler_planilha(caminho):
     # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
     livro = load_workbook(caminho, read_only=True, data_only=True)
     try:
-        celulas = list(core.aba_de_dados(livro).iter_rows())  # nunca a aba "Lançados" (copia das integradas)
+        aba = core.aba_de_dados(livro)
+        nome_aba = aba.title
+        celulas = list(aba.iter_rows())  # nunca a aba "Lançados" (copia das integradas)
         tema = core.cores_do_tema(getattr(livro, "loaded_theme", None))
     finally:
         livro.close()
-    linhas = iter([tuple(c.value for c in linha) for linha in celulas])
+    valores = [tuple(c.value for c in linha) for linha in celulas]
+    # formula sem o valor guardado (planilha gravada sem o Excel calcular): as celulas viriam vazias e os erros
+    # ("CHAVE NF em branco"...) enganariam (24/11/2026)
+    faltam = core.formulas_sem_valor(caminho, nome_aba, valores)
+    if faltam:
+        exemplos = ", ".join(faltam[:4]) + (" ..." if len(faltam) > 4 else "")
+        raise ValueError(f"A planilha tem {core.qtd(len(faltam), 'célula', 'células')} com fórmula sem o valor calculado "
+                         f"({exemplos}). Abra a planilha no Excel, salve (Ctrl+S) e carregue de novo.")
+    linhas = iter(valores)
     cabecalho = next(linhas, None) or ()
     indices, repetidas = {}, []
     for posicao, titulo in enumerate(cabecalho):

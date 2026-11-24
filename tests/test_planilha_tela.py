@@ -3,6 +3,7 @@ import pathlib
 import tempfile
 import unittest
 from datetime import datetime
+from unittest import mock
 
 from openpyxl import Workbook
 from PIL import Image, ImageDraw
@@ -273,6 +274,56 @@ class AbaLancados(unittest.TestCase):
             livro = self.ler(caminho)
             self.assertTrue(core.fundo_verde(livro["Notas"]["A4"].fill))
             self.assertEqual(livro["Lançados"].max_row, 4)
+
+
+class Formulas(unittest.TestCase):
+    """Planilha com formula (24/11/2026): o openpyxl grava as formulas sem o valor calculado e a leitura do robo via as
+    celulas vazias. Pintar vai pelo Excel; formula sem valor ao carregar = mensagem clara."""
+
+    def criar(self):
+        from openpyxl import Workbook
+        livro = Workbook()
+        dados = livro.active
+        dados.title = "Notas"
+        dados.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
+                      "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "BASE CALC. ICMS", "ALIQUOTA"])
+        dados.append(["=base!A1", "30 46", "01/11/2026", 10, "CIF", 900135, 542, 1, 10, 0, 0, 0])
+        base = livro.create_sheet("base")
+        base["A1"] = "1" * 44  # ficticio
+        livro.active = 0
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "formula.xlsx"
+        livro.save(caminho)  # o openpyxl nao calcula: A2 fica sem valor guardado
+        return caminho
+
+    def test_formula_sem_valor_ao_carregar(self):
+        import snac0236
+        caminho = self.criar()
+        self.assertEqual(core.formulas_sem_valor(caminho, "Notas", [("CHAVE NF",), (None,)]), ["A2"])
+        self.assertEqual(core.formulas_sem_valor(caminho, "Notas", [("CHAVE NF",), ("1" * 44,)]), [])  # com valor: ok
+        with self.assertRaises(ValueError) as erro:
+            snac0236.ler_planilha(caminho)
+        self.assertIn("1 célula com fórmula sem o valor calculado (A2)", str(erro.exception))
+        self.assertIn("salve (Ctrl+S)", str(erro.exception))
+
+    def test_pintar_com_formula_vai_pelo_excel(self):
+        caminho = self.criar()
+        antes = caminho.read_bytes()
+        chamadas = []
+        with mock.patch.object(core, "_pintar_com_excel", lambda *a: chamadas.append(a) or "arquivo"):
+            self.assertEqual(core.pintar_linhas(caminho, [2], lancados={2: datetime(2026, 11, 24, 10, 0)}), "arquivo")
+            core.pintar_linhas(caminho, [], lancados={})  # criar a aba Lançados no Iniciar: tambem pelo Excel
+        self.assertEqual(caminho.read_bytes(), antes)  # o openpyxl nao regravou a planilha
+        self.assertEqual([(a[1], a[2], a[3]) for a in chamadas], [("Notas", [2], 12), ("Notas", [], 12)])
+
+    def test_sem_formula_continua_pelo_openpyxl(self):
+        from openpyxl import Workbook
+        livro = Workbook()
+        livro.active.append(["CHAVE NF", "ITEM"])
+        livro.active.append(["1" * 44, 900135])
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "sem.xlsx"
+        livro.save(caminho)
+        with mock.patch.object(core, "_pintar_com_excel", side_effect=AssertionError("nao deveria abrir o Excel")):
+            self.assertEqual(core.pintar_linhas(caminho, [2]), "arquivo")
 
 
 class FecharNoExcel(unittest.TestCase):

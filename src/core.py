@@ -652,6 +652,9 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None, lancad
     cria). Nota cuja CHAVE ja esta na "Lançados" nao e copiada de novo. Aba "Lançados" com outras colunas = nao copia e
     poe o motivo em `avisos` (lista), sem impedir a pintura.
     Planilha fechada: grava o arquivo (openpyxl; arquivo temporario e troca, para nao deixar a planilha pela metade).
+    Planilha com formula: o openpyxl gravaria as formulas sem o valor calculado (o robo e qualquer leitura sem o Excel
+    passariam a ver as celulas vazias; 24/11/2026). Entao abre num Excel proprio, escondido, faz o mesmo pelo COM, salva
+    e fecha (`_pintar_com_excel`).
     Aberta no Excel (o Excel trava o arquivo): faz o mesmo na janela do Excel aberta, sem salvar (o usuario salva).
     Devolve 'arquivo', 'excel' ou None (nada a fazer); falha = excecao (quem chama avisa e segue: pintar nunca para o
     robo)."""
@@ -675,6 +678,8 @@ def pintar_linhas(caminho, linhas, cor=VERDE_CONCLUIDA, comentarios=None, lancad
     aba = aba_de_dados(livro)
     colunas = max((c.column for c in aba[1] if c.value not in (None, "")), default=1)
     coluna_chave = next((c.column for c in aba[1] if str(c.value or "").strip().lower().startswith("chave")), 1)
+    if _tem_formula(livro):
+        return _pintar_com_excel(caminho, aba.title, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos)
     fundo = PatternFill("solid", fgColor=cor)
     for linha in linhas:
         for coluna in range(1, colunas + 1):
@@ -754,6 +759,30 @@ def _copiar_lancados(caminho, livro, aba, colunas, coluna_chave, lancados, aviso
         proxima += 1
 
 
+def _tem_formula(livro):
+    """Alguma celula com formula em alguma aba (pasta lida pelo openpyxl sem `data_only`)?"""
+    return any(celula.data_type == "f" for aba in livro.worksheets for linha in aba.iter_rows() for celula in linha)
+
+
+def formulas_sem_valor(caminho, nome_aba, valores):
+    """Celulas ("A2"...) da aba com formula e sem o valor calculado guardado no arquivo (`valores`: as linhas lidas com
+    `data_only`). Acontece quando a planilha e gravada por um programa que nao calcula (o robo ate a v1.16.2, ao pintar e
+    criar a aba Lançados com o openpyxl; 24/11/2026): o Excel recalcula ao abrir, mas o arquivo fica sem os valores."""
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+
+    livro = load_workbook(caminho, read_only=True)
+    try:
+        faltam = []
+        for n, linha in enumerate(livro[nome_aba].iter_rows(max_row=len(valores), values_only=True), start=1):
+            lidos = valores[n - 1]
+            faltam += [f"{get_column_letter(c + 1)}{n}" for c, formula in enumerate(linha)
+                       if isinstance(formula, str) and formula.startswith("=") and (c >= len(lidos) or lidos[c] is None)]
+        return faltam
+    finally:
+        livro.close()
+
+
 def _valores_calculados(caminho, nome_aba, linhas, colunas):
     """{(linha, coluna): valor} do ultimo calculo do Excel: a copia leva o valor, nao a formula (a formula apontaria
     para outras linhas na aba Lançados)."""
@@ -778,24 +807,66 @@ def _pintar_no_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, 
     """Pinta (e copia para a aba Lançados) pela planilha aberta no Excel (COM). So se ela estiver aberta: nunca abre o
     arquivo nem salva."""
     import pythoncom
-    from openpyxl.utils import get_column_letter
 
-    r, g, b = (int(cor[i:i + 2], 16) for i in (0, 2, 4))
     pythoncom.CoInitialize()
     try:
         livro = _pasta_aberta(caminho)
         if livro is None:
             raise RuntimeError("a planilha está travada por outro programa e não achei ela aberta no Excel")
-        aba = livro.Worksheets(nome_aba)
-        ultima = get_column_letter(colunas)
-        for linha in linhas:
-            aba.Range(f"A{linha}:{ultima}{linha}").Interior.Color = r + g * 256 + b * 65536
-        for linha, texto in (comentarios or {}).items():
-            celula = aba.Cells(linha, coluna_chave)
-            celula.ClearComments()
-            celula.AddComment(texto)
-        if lancados is not None:
-            _copiar_lancados_excel(livro, aba, colunas, coluna_chave, lancados, avisos)
+        _pintar_livro_excel(livro, nome_aba, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos)
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _pintar_livro_excel(livro, nome_aba, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos):
+    """Pintura, comentarios e copia para a aba Lançados numa pasta do Excel (objeto COM), sem salvar."""
+    from openpyxl.utils import get_column_letter
+
+    r, g, b = (int(cor[i:i + 2], 16) for i in (0, 2, 4))
+    aba = livro.Worksheets(nome_aba)
+    ultima = get_column_letter(colunas)
+    for linha in linhas:
+        aba.Range(f"A{linha}:{ultima}{linha}").Interior.Color = r + g * 256 + b * 65536
+    for linha, texto in (comentarios or {}).items():
+        celula = aba.Cells(linha, coluna_chave)
+        celula.ClearComments()
+        celula.AddComment(texto)
+    if lancados is not None:
+        _copiar_lancados_excel(livro, aba, colunas, coluna_chave, lancados, avisos)
+
+
+def _pintar_com_excel(caminho, nome_aba, linhas, colunas, cor, comentarios=None, coluna_chave=1, lancados=None,
+                      avisos=None):
+    """Planilha com formula: pinta pelo Excel, que grava as formulas com o valor calculado. Aberta no Excel do usuario =
+    na janela dele, sem salvar ('excel'); fechada = num Excel proprio e escondido (`DispatchEx`: nao mexe nas janelas
+    do usuario), que abre, faz, salva, fecha e sai ('arquivo')."""
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    try:
+        livro = _pasta_aberta(caminho)
+        if livro is not None:
+            _pintar_livro_excel(livro, nome_aba, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos)
+            return "excel"
+        try:
+            app = win32com.client.DispatchEx("Excel.Application")
+        except pythoncom.com_error as erro:
+            raise RuntimeError("a planilha tem fórmulas e não consegui abrir o Excel para gravar com os valores "
+                               f"calculados: {erro.strerror or erro}") from None
+        try:
+            app.Visible, app.DisplayAlerts, app.ScreenUpdating = False, False, False
+            livro = app.Workbooks.Open(str(Path(caminho).resolve()), UpdateLinks=0)
+            try:
+                if livro.ReadOnly:  # travada por outro programa: salvar abriria o "Salvar como"
+                    raise RuntimeError("a planilha está travada por outro programa (o Excel abriu como somente leitura)")
+                _pintar_livro_excel(livro, nome_aba, linhas, colunas, cor, comentarios, coluna_chave, lancados, avisos)
+                livro.Save()
+            finally:
+                livro.Close(SaveChanges=False)
+        finally:
+            app.Quit()
+        return "arquivo"
     finally:
         pythoncom.CoUninitialize()
 
