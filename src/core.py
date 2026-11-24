@@ -121,14 +121,23 @@ CORES = {
 FECHAR = ("selecao",)
 
 
+_TABELAS_COR = {}
+
+
+def _mascara_crua(imagem, cor):
+    """Mascara (L, 255 = pixel da cor) sem erosao. Uma tabela de 768 posicoes no `point` da imagem RGB inteira e o
+    menor (`darker`) das 3 bandas: ~10 ms em 1920x1080 contra ~15 ms das 3 bandas separadas (mesmo resultado, 24/11/2026)."""
+    tabela = _TABELAS_COR.get(cor)
+    if tabela is None:
+        tabela = _TABELAS_COR[cor] = [255 if teste(v) else 0 for teste in CORES[cor] for v in range(256)]
+    r, g, b = (imagem if imagem.mode == "RGB" else imagem.convert("RGB")).point(tabela).split()
+    return ImageChops.darker(ImageChops.darker(r, g), b)
+
+
 def _mascara_cor(imagem, cor="ciano"):
     """(mascara erodida, deslocamento x, y) so da area onde a cor aparece: o filtro de erosao na tela inteira custava
     ~50 ms por consulta; sem a cor na tela (o vermelho do aviso, quase sempre) devolve (None, 0, 0) na hora."""
-    r, g, b = imagem.convert("RGB").split()
-    tr, tg, tb = CORES[cor]
-    mascara = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if tr(v) else 0),
-                                                      g.point(lambda v: 255 if tg(v) else 0)),
-                                  b.point(lambda v: 255 if tb(v) else 0))
+    mascara = _mascara_crua(imagem, cor)
     caixa = mascara.getbbox()
     if not caixa:
         return None, 0, 0
@@ -196,6 +205,22 @@ def icone_aviso(imagem, fixos=()):
     `fixos` = blocos vermelhos que ja estavam na tela no inicio (`caixas_cor` da calibracao): o cabecalho do SRP tem
     uma faixa vermelha que o logo corta, e o pedaco da esquerda (~17x21 px, na borda) parecia um icone; na v1.8.0 isso
     fazia o robo pausar em todo campo. Tambem descarta blocos encostados na borda da janela."""
+    # A faixa vermelha do titulo do SRP faz a erosao cobrir quase a tela toda (~60 ms por consulta, 1920x1080). Se o
+    # vermelho da tela e o mesmo da ultima consulta (mesmos pixels, mesmos fixos), a resposta tambem e: ~12 ms.
+    crua = _mascara_crua(imagem, "vermelho")
+    ultima = _ULTIMO_AVISO[0]
+    if (ultima and ultima[0] == tuple(fixos) and ultima[1].size == crua.size
+            and not ImageChops.difference(ultima[1], crua).getbbox()):
+        return ultima[2]
+    resultado = _icone_aviso(imagem, fixos)
+    _ULTIMO_AVISO[0] = (tuple(fixos), crua, resultado)
+    return resultado
+
+
+_ULTIMO_AVISO = [None]  # (fixos, mascara crua do vermelho, resposta) da ultima consulta do icone_aviso
+
+
+def _icone_aviso(imagem, fixos):
     largura, altura = imagem.size
     caixas = caixas_cor(imagem, "vermelho")
     # faixa do titulo do SRP (bloco vermelho largo): os pedacos picotados pelo logo/letras ao lado dela nao sao icone.

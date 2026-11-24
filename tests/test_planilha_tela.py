@@ -6,7 +6,7 @@ from datetime import datetime
 from unittest import mock
 
 from openpyxl import Workbook
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from simulador import CENTROS, core
 
@@ -81,6 +81,38 @@ class Tela(unittest.TestCase):
         self.assertIsNone(core.icone_aviso(tela, fixos))     # ja estava na tela: nao e aviso
         d.ellipse((600, 380, 622, 402), fill=(255, 0, 0))    # aviso que aparece depois
         self.assertIsNotNone(core.icone_aviso(tela, fixos))
+
+    def test_mascara_igual_a_de_antes_e_aviso_lembrado(self):
+        """24/11/2026 (Enter mais rapido): a mascara por tabela de 768 posicoes da o mesmo que as 3 bandas separadas; o
+        icone_aviso so refaz a erosao quando o vermelho da tela ou os fixos mudam."""
+        import random
+        gerador = random.Random(7)
+        imagem = Image.new("RGB", (300, 200))
+        perto = (0, 1, 2, 60, 70, 100, 120, 141, 200, 250, 253, 254, 255)  # valores perto dos limites das cores
+        imagem.putdata([tuple(gerador.choice(perto) for _ in range(3)) for _ in range(300 * 200)])
+        for cor in ("ciano", "vermelho", "selecao"):
+            r, g, b = imagem.split()
+            tr, tg, tb = core.CORES[cor]
+            antes = ImageChops.multiply(ImageChops.multiply(r.point(lambda v, t=tr: 255 if t(v) else 0),
+                                                            g.point(lambda v, t=tg: 255 if t(v) else 0)),
+                                        b.point(lambda v, t=tb: 255 if t(v) else 0))
+            self.assertEqual(core._mascara_crua(imagem, cor).tobytes(), antes.tobytes(), cor)
+        tela = Image.new("RGB", (900, 500), (240, 240, 240))
+        ImageDraw.Draw(tela).ellipse((300, 100, 322, 122), fill=(255, 0, 0))
+        original, chamadas = core._icone_aviso, []
+
+        def contar(*a):
+            chamadas.append(1)
+            return original(*a)
+        with mock.patch.object(core, "_icone_aviso", contar):
+            primeiro = core.icone_aviso(tela)
+            self.assertEqual(core.icone_aviso(tela.copy()), primeiro)  # mesmo vermelho: sem refazer
+            self.assertEqual(len(chamadas), 1)
+            self.assertIsNone(core.icone_aviso(tela, [primeiro]))     # outros fixos: refaz
+            ImageDraw.Draw(tela).ellipse((600, 380, 622, 402), fill=(255, 0, 0))
+            self.assertIsNotNone(core.icone_aviso(tela, [primeiro]))  # vermelho novo: refaz
+        self.assertEqual(len(chamadas), 3)
+        self.assertIsNotNone(primeiro)
 
     def test_checagem_antes_de_comecar(self):
         tela = Image.new("RGB", (1366, 768), (240, 240, 240))
