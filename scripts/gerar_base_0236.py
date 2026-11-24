@@ -19,11 +19,11 @@ sys.path.insert(0, str(RAIZ / "src"))
 import snac0236  # noqa: E402
 
 DESTINO = RAIZ / "planilhas" / "BASE PADRAO SNAC0236.xlsx"
-ORDEM = ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "qtd", "unit", "icms", "icms_terceiro",
+ORDEM = ("chave", "filial", "data", "valor_total", "frete", "item", "oper", "nat_oper", "qtd", "unit", "icms", "icms_terceiro",
          "aliquota_icms")
 FORMATOS = {"chave": "@", "filial": "@", "data": "dd/mm/yyyy", "valor_total": "0.00", "frete": "@", "item": "@",
-            "oper": "@", "qtd": "0", "unit": "0.0000", "icms": "0.00", "icms_terceiro": "0.00", "aliquota_icms": "0"}
-LARGURAS = {"chave": 50, "filial": 14, "data": 14, "valor_total": 24, "frete": 9, "item": 11, "oper": 11, "qtd": 12,
+            "oper": "@", "nat_oper": "@", "qtd": "0", "unit": "0.0000", "icms": "0.00", "icms_terceiro": "0.00", "aliquota_icms": "0"}
+LARGURAS = {"chave": 50, "filial": 14, "data": 14, "valor_total": 24, "frete": 9, "item": 11, "oper": 11, "nat_oper": 11, "qtd": 12,
             "unit": 12, "icms": 15, "icms_terceiro": 17, "aliquota_icms": 11}
 LINHAS_FORMATADAS = 1000
 
@@ -31,11 +31,12 @@ FUNDO_CAB = PatternFill("solid", fgColor="1F4E78")
 FONTE_CAB = Font(bold=True, color="FFFFFF")
 FINA = Side(style="thin", color="BFBFBF")
 
-# exemplo FICTICIO: nota 1 com 1 item (com imposto); nota 2 com 2 itens (o 2o sem imposto, chave e cabecalho em branco)
+# exemplo FICTICIO: nota 1 com 1 item (com imposto, OPER SPM 542: Nat Oper 2949, a chave nao e de SC); nota 2 com
+# 2 itens (o 2o sem imposto, chave e cabecalho em branco)
 EXEMPLO = [
-    ("1" * 44, "10 20", date(2026, 1, 15), 10500.00, "CIF", "900135", "100", 1000, 10.5, 1260.00, 10500.00, 12),
-    ("2" * 44, "10 20", date(2026, 1, 16), 6900.00, "CIF", "900135", "100", 500, 10.5, 630.00, 5250.00, 12),
-    (None, None, None, None, None, "900266", "100", 200, 8.25, 0, 0, 0),
+    ("1" * 44, "10 20", date(2026, 1, 15), 10500.00, "CIF", "900135", "542", "2949", 1000, 10.5, 1260.00, 10500.00, 12),
+    ("2" * 44, "10 20", date(2026, 1, 16), 6900.00, "CIF", "900135", "100", None, 500, 10.5, 630.00, 5250.00, 12),
+    (None, None, None, None, None, "900266", "100", None, 200, 8.25, 0, 0, 0),
 ]
 
 REGRAS = [
@@ -53,13 +54,16 @@ REGRAS = [
     "Sem imposto: BASE CALC. ICMS e ALIQUOTA iguais a 0 (Rateio: Ident Tributo 0, Base 0 e Alíquota 0). "
     "Só uma das duas zerada é erro.",
     "ALIQUOTA como número (12), não como porcentagem do Excel (12% vira 0,12 e é recusado).",
+    "NAT OPER (opcional): o robô só preenche na OPER SPM 542, pela CHAVE NF: emitente de SC (chave começando com 42) "
+    "= 1949; de fora de SC = 2949. Nas outras operações o robô não mexe no Nat Oper do SRP. Preenchida, a coluna só "
+    "confere (valor diferente da chave é erro); pode ficar em branco ou ser tirada.",
     "Os dados do exemplo abaixo são fictícios.",
 ]
 
 
 def cabecalho(ws, linha=1):
     for coluna, campo in enumerate(ORDEM, start=1):
-        celula = ws.cell(row=linha, column=coluna, value=snac0236.TITULOS[campo])
+        celula = ws.cell(row=linha, column=coluna, value=snac0236.TITULOS.get(campo, snac0236.TITULO_NAT_OPER))
         celula.fill, celula.font = FUNDO_CAB, FONTE_CAB
         celula.alignment = Alignment(horizontal="center", vertical="center")
         celula.border = Border(top=FINA, bottom=FINA, left=FINA, right=FINA)

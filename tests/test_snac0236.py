@@ -100,7 +100,7 @@ class SRP0236:
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
         # conteudo que o SRP ja traz no campo (Ident do ICMS TERCEIROS = 1, 05/11/2026). Chegando pelo Enter o texto vem
         # selecionado (digitar substitui); pelo clique o cursor fica no fim (digitar acrescenta).
-        self.iniciais = {"t114ident": "1", "serie": "1"}
+        self.iniciais = {"t114ident": "1", "serie": "1", "natoper": "1102"}  # Nat Oper que o SRP traz (ficticio)
         # Tributos OK deixa o foco no Item da mesma linha (SRP real, 05/11/2026); seta para baixo vai a linha de baixo
         self.ok_desce = False  # True: o Tributos OK ja desce para o Item da linha de baixo
         self.ignora_seta = False  # seta para baixo que nao faz nada
@@ -563,6 +563,68 @@ class Planilha(unittest.TestCase):
             snac0236.ler_planilha(caminho)
 
 
+class NatOper(unittest.TestCase):
+    """Nat Oper pela UF do emitente (2 primeiros digitos da chave; 42 = SC): 1949 dentro, 2949 fora, so na OPER SPM 542.
+    A coluna NAT OPER da planilha e opcional e so confere."""
+    SC, SP = "42" + "1" * 42, "35" + "1" * 42  # chaves ficticias (so a UF importa)
+
+    def gravar(self, linhas, titulo="NAT OPER"):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM", titulo,
+                   "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "BASE CALC. ICMS", "ALIQUOTA"])
+        for linha in linhas:
+            ws.append(linha)
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
+        wb.save(caminho)
+        return caminho
+
+    def test_regra_pela_chave(self):
+        self.assertEqual(snac0236.nat_oper_da_chave(self.SC), "1949")
+        self.assertEqual(snac0236.nat_oper_da_chave(self.SP), "2949")
+        self.assertEqual(snac0236.nat_oper_da_chave(self.SC, "542"), "1949")
+        self.assertEqual(snac0236.nat_oper_da_chave(self.SP, "5101"), "")  # outra operacao: nao mexe
+        self.assertEqual(snac0236.nat_oper_da_chave("", "542"), "")
+        for titulo in ("NAT OPER", "Nat Oper", "NAT. OPER", "Natureza de Operação"):
+            self.assertEqual(snac0236.chave_coluna(titulo), "nat_oper", titulo)
+        self.assertIsNone(snac0236.chave_coluna("NAT"))
+
+    def test_planilha_confere_so_na_542(self):
+        caminho = self.gravar([
+            [self.SC, "30 46", "01/11/2026", 10, "CIF", 900135, 542, 1949, 1, 1, 0, 0, 0],
+            [None, None, None, None, None, 900266, 542, "2949", 1, 1, 0, 0, 0],  # chave da nota de cima (SC): errado
+            [self.SP, "30 46", "01/11/2026", 10, "CIF", 900135, "542", "2949", 1, 1, 0, 0, 0],
+            [self.SP, None, None, None, None, 900266, 542, None, 1, 1, 0, 0, 0],  # em branco: vale a chave
+            [self.SC[:-1] + "2", "30 46", "01/11/2026", 10, "CIF", 900135, 5101, 1102, 1, 1, 0, 0, 0],  # outra oper: ignora
+        ])
+        _, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual(len(erros), 1, erros)
+        self.assertIn("linha 3: NAT OPER 2949 não confere com a CHAVE NF (emitente de SC: 1949", erros[0])
+        self.assertEqual([[i["nat_oper"] for i in n["itens"]] for n in notas], [["1949", "1949"], ["2949", "2949"], [""]])
+
+    def test_planilha_sem_a_coluna(self):
+        caminho = Planilha.gravar(self, [[self.SP, "30 46", "01/11/2026", 10, "CIF", 900135, 542, 1, 1, 0, 0, 0]])
+        _, notas, erros = snac0236.carregar(caminho)
+        self.assertEqual(erros, [])
+        self.assertEqual(notas[0]["itens"][0]["nat_oper"], "2949")
+
+    def test_digita_no_srp_so_na_542(self):
+        srp = SRP0236()
+        notas = [nota(self.SC, [item("900135", oper="542"), item("900266", oper="5101")]),
+                 nota(self.SP, [item("900135", oper="542")])]
+        notas[1]["itens"][0]["linha"] = 4
+        self.assertIn("(Nat Oper sem mexer)", snac0236.descrever(notas[0]))
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, notas)
+        self.assertEqual(codigo, 0, avisos)
+        a, b = srp.integradas
+        self.assertEqual((a["oper0"], a["natoper0"], a["qtd0"]), ("542", "1949", "2"))  # o 1102 do SRP foi apagado
+        self.assertNotIn("natoper1", a)  # OPER 5101: o Nat Oper que o SRP trouxe fica
+        self.assertEqual((a["oper1"], a["qtd1"]), ("5101", "2"))
+        self.assertEqual((b["natoper0"], b["qtd0"]), ("2949", "2"))
+
+
 class Logs(unittest.TestCase):
     """Conferir a planilha com os logs (usuario, 09/11/2026); numeros ficticios."""
     LOG = ("10:00:01 +  0.1s OK Nota ...000001 (linha 2): 1 item(ns) em 40.0s; integrada com sucesso.\n"
@@ -700,7 +762,7 @@ class Tela(unittest.TestCase):
 
     def test_rotulos(self):
         rotulos = snac0236.localizar_rotulos(PALAVRAS)
-        self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar", "oper", "qtd", "unit"})
+        self.assertEqual(set(rotulos), {"chave", "filial", "data", "valor_total", "frete", "item", "integrar", "oper", "nat_oper", "qtd", "unit"})
         self.assertEqual(rotulos["item"][:2], (240, 400))  # cabecalho da coluna, nao o titulo "Item Documento Recebimento"
         self.assertEqual(rotulos["frete"][:2], (10, 220))  # rotulo, nao o botao "Coleta Frete"
         self.assertTrue(snac0236.posicao_ok("chave", CAIXAS["chave"], rotulos))

@@ -189,7 +189,7 @@ class Pagina0236(Pagina):
         self.cartao = self.app._cartao(pai)
         self.tabela = self._montar_tabela(self.cartao, (
             ("linha", "Linha", 56, "center"), ("nota", "Nota (chave)", 120, "w"), ("item", "Item", 100, "w"),
-            ("oper", "Oper SPM", 80, "w"), ("qtd", "Qtd", 80, "e"), ("unit", "Valor Unit", 100, "e"),
+            ("oper", "Oper SPM", 80, "w"), ("nat_oper", "Nat Oper", 70, "w"), ("qtd", "Qtd", 80, "e"), ("unit", "Valor Unit", 100, "e"),
             ("status", "Status", 170, "w")), estica=None)
         self.tabela.tag_configure("nota_par", background=COR["zebra"])
         self.tabela.tag_configure("nota_impar", background=COR["cartao"])
@@ -226,7 +226,7 @@ class Pagina0236(Pagina):
 
     def _valores(self, nota, r, posicao):
         chave = f"…{nota['chave'][-6:]}" if posicao == 0 else "  ↳"
-        return (r["linha"], chave, r["item"], r["oper"], r["qtd"], r["unit"], self._texto_estado(r["linha"]))
+        return (r["linha"], chave, r["item"], r["oper"], r.get("nat_oper", ""), r["qtd"], r["unit"], self._texto_estado(r["linha"]))
 
     def _texto_estado(self, linha):
         nome = self.estados.get(linha, "pendente")

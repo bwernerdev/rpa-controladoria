@@ -30,18 +30,26 @@ CABECALHO = ("chave", "filial", "data", "valor_total", "frete")  # campos da not
 OBRIGATORIOS = ("chave", "filial", "data", "valor_total", "item", "oper", "qtd", "unit")
 FRETES = ("CIF", "FOB")  # o campo Frete do SRP recebe o tipo de frete, nao valor
 VALORES = ("valor_total", "qtd", "unit", "icms", "icms_terceiro", "aliquota_icms")
+# Nat Oper do item pela UF do emitente (os 2 primeiros digitos da CHAVE NF = codigo IBGE da UF; 42 = SC):
+# dentro de SC 1949, fora 2949 (usuario, 24/11/2026). So na OPER SPM 542: nas outras o robo passa pelo campo sem mexer.
+# A coluna NAT OPER da planilha e opcional; preenchida num item da 542, so confere.
+UF_SC = "42"
+OPER_COM_NAT = "542"
+NAT_DENTRO, NAT_FORA = "1949", "2949"
+TITULO_NAT_OPER = "NAT OPER"
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 ENTERS_FRETE_ITEM = 10  # Enter previstos do Frete ao Item da grade (Marcas, Observacoes, Cond. Pagamento, lista sem cor...)
 SEQ_CABECALHO = (("chave", 5), ("filial1", 1), ("filial2", 2), ("data", 7), ("valor_total", 1), ("frete", 10))
-# depois do Oper SPM o 1o Enter cai no Nat Oper (ja preenchido; nao mexer) e o 2o no Qtd Fiscal (04/11/2026)
+# depois do Oper SPM o 1o Enter cai no Nat Oper (04/11/2026) e o 2o no Qtd Fiscal. O SRP ja traz um Nat Oper; desde
+# 24/11/2026, na OPER SPM 542, o robo apaga e digita o da chave (`nat_oper_da_chave`); nas outras so da o Enter
 # depois do Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio (`preencher_rateio`, sem contagem fixa)
-SEQ_ITEM = (("item", 1), ("oper", 2), ("qtd", 2), ("unit", 1), ("icms", 0))
+SEQ_ITEM = (("item", 1), ("oper", 1), ("nat_oper", 1), ("qtd", 2), ("unit", 1), ("icms", 0))
 # a FILIAL FISCAL da planilha vai nos campos "Filial Fisica" da tela: depois da Chave + 5 Enter o SRP preenche CNPJ,
 # Serie e Docto e o cursor cai na Filial Fisica (visto na tela real em 04/11/2026, monitor 4K)
 NOME = {"chave": "Chave Acesso NF-e", "filial1": "Filial Fisica (1a parte)", "filial2": "Filial Fisica (2a parte)",
         "data": "Data Emissao", "valor_total": "Valor Total Documento", "frete": "Frete", "item": "Item",
-        "oper": "Oper SPM", "qtd": "Qtd Fiscal", "unit": "Valor Unit", "icms": "Valor do ICMS",
+        "oper": "Oper SPM", "nat_oper": "Nat Oper", "qtd": "Qtd Fiscal", "unit": "Valor Unit", "icms": "Valor do ICMS",
         "icms_terceiro": "ICMS Terceiro", "rateio": "Rateio", "ident": "Ident Tributo (ICMS TERCEIROS)",
         "base": "Base Calculo (ICMS TERCEIROS)", "aliquota": "Aliquota (ICMS TERCEIROS)",
         "lancamento": "Lancamento (ICMS TERCEIROS)", "serie": "Serie"}
@@ -60,6 +68,8 @@ def chave_coluna(titulo):
     # "ICMS TERCEIROS (BASE DE CALCULO NF)"; o nome antigo continua aceito)
     if nome.startswith(("icms terceiro", "base calc")):
         return "icms_terceiro"
+    if re.fullmatch(r"nat\.? ?oper\.?|natureza (de )?operacao", nome):  # coluna opcional (24/11/2026)
+        return "nat_oper"
     if nome.startswith("aliquota"):  # "ALIQUOTA" (da linha ICMS TERCEIROS do Rateio; era BASE CALC. ICMS ate 05/11/2026)
         return "aliquota_icms"
     return COLUNAS.get(nome)
@@ -101,6 +111,14 @@ def formatar_data(valor):
         except ValueError:
             pass
     return "", f"data inválida: {valor!r} (use dd/mm/aaaa)"
+
+
+def nat_oper_da_chave(chave, oper=OPER_COM_NAT):
+    """Nat Oper do item: 1949 se o emitente da nota e de SC (chave comeca com 42), senao 2949. Sem chave ou com outra
+    OPER SPM que nao a 542: '' (o robo nao mexe no Nat Oper que o SRP trouxe)."""
+    if not chave or oper != OPER_COM_NAT:
+        return ""
+    return NAT_DENTRO if chave[:2] == UF_SC else NAT_FORA
 
 
 def formatar_chave(valor):
@@ -186,6 +204,7 @@ def ler_planilha(caminho):
         for campo in VALORES:
             r[campo], erro = formatar_valor(bruto[campo])
             problemas.append(f"{TITULOS[campo]}: {erro}" if erro else None)
+        r["nat_oper_planilha"] = core.texto(bruto.get("nat_oper"))
         for campo in ("item", "oper"):
             r[campo] = core.texto(bruto[campo])
             if r[campo] and not re.fullmatch(r"[0-9A-Za-z.\-]+", r[campo]):
@@ -224,6 +243,9 @@ def agrupar_notas(registros):
                 titulo = TITULOS["filial" if campo.startswith("filial") else campo]
                 erros.append(f"linha {r['linha']}: {titulo} diferente da 1a linha da mesma nota ({r[campo]} x {nota[campo]})")
         nota["itens"].append(r)
+    for nota in notas:  # o Nat Oper sai da chave da nota (item com a chave em branco = o da nota de cima)
+        for r in nota["itens"]:
+            r["nat_oper"] = nat_oper_da_chave(nota["chave"], r["oper"])
     return notas, erros
 
 
@@ -240,6 +262,11 @@ def validar(registros, notas):
             for campo in ("item", "oper", "qtd", "unit"):
                 if not r[campo]:
                     erros.append(f"linha {r['linha']}: {TITULOS[campo]} em branco")
+            planilha = r.get("nat_oper_planilha")
+            if planilha and r["nat_oper"] and planilha != r["nat_oper"]:  # so na OPER SPM 542
+                erros.append(f"linha {r['linha']}: {TITULO_NAT_OPER} {planilha} não confere com a CHAVE NF (emitente "
+                             f"{'de SC' if r['nat_oper'] == NAT_DENTRO else 'fora de SC'}: {r['nat_oper']}; dentro de SC "
+                             f"{NAT_DENTRO}, fora {NAT_FORA})")
             terceiro, aliquota = (Decimal(r.get(c) or "0") for c in ("icms_terceiro", "aliquota_icms"))
             if (terceiro != 0) != (aliquota != 0):
                 erros.append(f"linha {r['linha']}: {TITULOS['icms_terceiro']} e {TITULOS['aliquota_icms']} precisam ser os dois 0 "
@@ -267,7 +294,9 @@ def descrever(nota):
     """Sequencia de teclas da nota, para o Simular."""
     partes = [f"'{nota[c]}' {n}xENTER" for c, n in SEQ_CABECALHO]
     for r in nota["itens"]:
-        partes.append(f"| linha {r['linha']}: " + " ".join(f"'{r[c]}' {n}xENTER" for c, n in SEQ_ITEM)
+        teclas = [("(Nat Oper sem mexer)" if c == "nat_oper" and not r[c] else f"'{r[c]}'") + f" {n}xENTER"
+                  for c, n in SEQ_ITEM]
+        partes.append(f"| linha {r['linha']}: " + " ".join(teclas)
                       + " ENTER até ICMS TERCEIROS no Rateio: "
                       + " ".join(f"{NOME_RATEIO[c]}='{v}'" for c, v in valores_rateio(r).items()) + " | Tributos OK")
     return " ".join(partes) + " | clicar Integrar"
@@ -354,6 +383,7 @@ def localizar_rotulos(palavras):
     grade = {
         "item": lambda t: t in ("item", "tem", "ltem", "1tem"),
         "oper": lambda t: t == "spm" or t.endswith(" spm"),
+        "nat_oper": lambda t: t == "oper" or t.startswith("nat oper"),  # "Nat" em cima, "Oper" na linha de baixo
         "qtd": lambda t: "fiscal" in t and "td" in t and "unit" not in t,
         "unit": lambda t: "unitario" in t,
     }
@@ -361,6 +391,11 @@ def localizar_rotulos(palavras):
         caixa = next((c for texto, c in lista if pred(texto) and na_linha_da_grade(c)), None)
         if caixa:
             achados[campo] = caixa
+    # "Oper" sozinho so vale como Nat Oper entre o Oper Spm e o Qtd.Fiscal (outra palavra "Oper" na mesma altura nao
+    # pode virar o rotulo; sem ele o robo so conta os Enter, e o Qtd.Fiscal continua conferido)
+    nat, oper, qtd = (achados.get(c) for c in ("nat_oper", "oper", "qtd"))
+    if nat and ((oper and nat[0] <= oper[2]) or (qtd and nat[2] >= qtd[0])):
+        del achados["nat_oper"]
     return achados
 
 
@@ -521,7 +556,7 @@ def posicao_ok(campo, caixa, rotulos, anterior=None, lista=None):
         if not rotulo or not anterior:
             return None
         return abs((caixa[1] + caixa[3]) / 2 - (anterior[1] + anterior[3]) / 2) <= 6 and caixa[0] > anterior[2]
-    if campo in ("item", "oper", "qtd"):  # colunas da grade visiveis no inicio (depois do Valor Unit a grade rola)
+    if campo in ("item", "oper", "nat_oper", "qtd"):  # colunas da grade visiveis no inicio (depois do Valor Unit a grade rola)
         return na_coluna(caixa, rotulos[campo]) if campo in rotulos else None
     if campo in ("unit", "icms", "icms_terceiro"):  # grade ja rolada: posicao do inicio nao vale (titulo_acima confere)
         return None
@@ -1740,9 +1775,15 @@ class Execucao0236:
                                 self.registrar(f"  título acima do {NOME[campo]}: {titulo!r}", mostrar=False)
                                 if not any(t in titulo for t in TITULO_COLUNA[campo]):
                                     raise Travou(campo, f"o cursor não está na coluna {NOME[campo]} (título acima: '{titulo}')")
-                            self.digitar(r[campo], campo)
+                            if campo != "nat_oper":
+                                self.digitar(r[campo], campo)
+                            elif r[campo]:  # OPER SPM 542: o SRP ja traz um Nat Oper; apagar e digitar o da chave
+                                self.limpar_campo(campo)
+                                self.digitar(r[campo], campo)
+                            else:  # outra operacao: segue para o Qtd.Fiscal sem mexer no Nat Oper
+                                self.devagar(f"{NOME[campo]} fica como o SRP trouxe (OPER SPM {r['oper']})")
                             alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
-                            if alvo in ("oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
+                            if alvo in ("oper", "nat_oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                                 foco = self.ir_ate(campo, alvo, quantos, foco, anterior=foco)
                             elif alvo is None:  # Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio
                                 foco = self.preencher_rateio(r, foco)
