@@ -616,6 +616,22 @@ def mudou_acima(antes, agora, caixa):
 MAX_ATE_RATEIO = 20  # Enter depois do Valor do ICMS ate o Ident Tributo da linha ICMS TERCEIROS
 LER_RATEIO_DESDE = 8  # a partir deste Enter, le a tela procurando o Rateio (lido no 9o nos testes de 04/11; ~5 s cada)
 COLUNAS_RATEIO = ("ident", "base", "aliquota", "lancamento")  # na ordem da tela
+# linha da grade de tributos do Rateio em que o robo digita (`valores_rateio`): ICMS TERCEIROS (cod. 114). Na OPER SPM
+# 542 a grade so tem a linha ICMS S/ TRANSFERENCIA (cod. 101, Ident 2 e Base preenchidos pelo SRP; print do usuario,
+# 24/11/2026): os valores vao nela. Nos dois casos a chave do rotulo em `localizar_rateio` continua "terceiros".
+LINHA_RATEIO = {"terceiros": "ICMS TERCEIROS", "transferencia": "ICMS S/ TRANSFERENCIA"}
+TESTE_LINHA_RATEIO = {
+    # em 1366x768 o OCR leu "11s icms erceiros" e "is terceiros" (05/11/2026)
+    "terceiros": lambda t: "erceiro" in t or "icms tercei" in t,
+    "transferencia": lambda t: "ransfer" in t,
+}
+
+
+def linha_rateio(r):
+    """Linha do Rateio do item: "transferencia" na OPER SPM 542, senao "terceiros"."""
+    return "transferencia" if r.get("oper") == OPER_COM_NAT else "terceiros"
+
+
 NOME_RATEIO = {"ident": "Ident Tributo", "base": "Base Calculo", "aliquota": "Aliquota", "lancamento": "Lancamento"}
 
 
@@ -654,12 +670,12 @@ def valores_rateio(r):
     return {"ident": "0", "base": "0", "aliquota": "0"}
 
 
-def localizar_rateio(palavras):
-    """Rotulos do Rateio lidos no OCR: linha ICMS TERCEIROS, colunas da grade de tributos e botao Tributos OK."""
+def localizar_rateio(palavras, linha="terceiros"):
+    """Rotulos do Rateio lidos no OCR: a linha do item (chave "terceiros": ICMS TERCEIROS ou, com `linha`
+    "transferencia", ICMS S/ TRANSFERENCIA), colunas da grade de tributos e botao Tributos OK."""
     lista = frases(palavras)
     testes = {
-        # em 1366x768 o OCR leu "11s icms erceiros" e "is terceiros" (05/11/2026)
-        "terceiros": lambda t: "erceiro" in t or "icms tercei" in t,
+        "terceiros": TESTE_LINHA_RATEIO[linha],
         "ident": lambda t: t.startswith("ident"),
         "base": lambda t: t.startswith("base calc") or t == "base",
         "aliquota": lambda t: t.startswith("aliquota") and "zero" not in t,  # nao a linha "COFINS ALIQUOTA ZERO"
@@ -680,7 +696,7 @@ def localizar_rateio(palavras):
     return achados
 
 
-def ler_rateio(imagem, tesseract):
+def ler_rateio(imagem, tesseract, linha="terceiros"):
     """localizar_rateio na tela; leituras extras (binarizada: texto preto em botao cinza; em tela pequena, ampliada 4x)
     so para o que faltar. Em 1366x768 (05/11/2026) a leitura 2x nao achou Ident nem ICMS TERCEIROS e a 4x achou o Ident
     mas perdeu o ICMS TERCEIROS: junta as leituras."""
@@ -691,7 +707,7 @@ def ler_rateio(imagem, tesseract):
         for img in (imagem, binarizar(imagem)) + ((binarizar(imagem, 120),) if len(escalas) > 1 else ()):
             if all(c in achados for c in ("terceiros", "tributos_ok") + COLUNAS_RATEIO):
                 return achados
-            for chave, caixa in localizar_rateio(core.palavras_tela(img, tesseract, escala=escala)).items():
+            for chave, caixa in localizar_rateio(core.palavras_tela(img, tesseract, escala=escala), linha).items():
                 achados.setdefault(chave, caixa)
     return achados
 
@@ -1408,11 +1424,15 @@ class Execucao0236:
         digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
         if not self.tesseract:
             raise Travou("rateio", "sem o Tesseract não consigo achar a linha ICMS TERCEIROS no Rateio")
+        linha_alvo = linha_rateio(r)
+        nome_linha = LINHA_RATEIO[linha_alvo]
         rateio = None
         salvo = self.rateio_salvo  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
         clicou = False
+        if linha_alvo != "terceiros":  # outra grade (so a linha ICMS S/ TRANSFERENCIA): sem posicoes salvas nem clique
+            salvo, clicou = None, True
         for vez in range(MAX_ATE_RATEIO):
-            self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha ICMS TERCEIROS do Rateio)")
+            self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha {nome_linha} do Rateio)")
             foco = self.enter_rateio("icms", vez, foco)
             pos = rateio or salvo
             # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
@@ -1432,7 +1452,7 @@ class Execucao0236:
                 salvo = None  # nao bateu com as posicoes salvas: le a tela inteira
             if rateio is None and not salvo and vez + 1 >= LER_RATEIO_DESDE:
                 t_leitura = time.time()
-                lido = ler_rateio(core.capturar(self.janela), self.tesseract)
+                lido = ler_rateio(core.capturar(self.janela), self.tesseract, linha_alvo)
                 self.registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
@@ -1441,42 +1461,47 @@ class Execucao0236:
                               (c == "ident" and c not in rateio)]
                     if faltam:
                         raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
-                    self.rateio_salvo = rateio
-                    gravar_posicoes(self.tamanho, rateio)
+                    if linha_alvo == "terceiros":  # as posicoes salvas valem so para a grade do ICMS TERCEIROS
+                        self.rateio_salvo = rateio
+                        gravar_posicoes(self.tamanho, rateio)
             if rateio and na_linha(foco, rateio["terceiros"]) and celula_ident(foco, rateio):
-                self.registrar(f"  ICMS TERCEIROS: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
+                self.registrar(f"  {nome_linha}: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
             linha = (rateio or salvo or {}).get("terceiros")
             if linha and foco is not None and foco[1] > linha[3] + (foco[3] - foco[1]):
-                raise Travou("rateio", "passei da linha ICMS TERCEIROS no Rateio sem parar no Ident Tributo")
+                raise Travou("rateio", f"passei da linha {nome_linha} no Rateio sem parar no Ident Tributo")
         else:
-            raise Travou("rateio", f"não cheguei no Ident Tributo da linha ICMS TERCEIROS com {MAX_ATE_RATEIO} Enter depois "
+            raise Travou("rateio", f"não cheguei no Ident Tributo da linha {nome_linha} com {MAX_ATE_RATEIO} Enter depois "
                          "do Valor do ICMS" + ("" if rateio else " (não achei o Rateio na tela)"))
         valores = valores_rateio(r)
-        self.registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto: {valores}", mostrar=False)
+        self.registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto na {nome_linha}: {valores}",
+                       mostrar=False)
         pendentes = [c for c in COLUNAS_RATEIO if c in valores]
-        # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026). Chegando pelo clique, o cursor fica onde clicou e o
-        # texto nao e selecionado: digitar "1" virava "11" e dava erro. Pelo Enter o texto vem selecionado. Apaga antes.
+        # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026; o do ICMS S/ TRANSFERENCIA com 2, 24/11/2026).
+        # Chegando pelo clique, o cursor fica onde clicou e o texto nao e selecionado: digitar "1" virava "11" e dava
+        # erro. Pelo Enter o texto vem selecionado. Apaga antes.
         self.limpar_campo("ident")
         self.digitar(valores["ident"], "ident")
         pendentes.remove("ident")
         for vez in range(len(COLUNAS_RATEIO) + 2):
             if not pendentes:
                 break
-            self.devagar(f"Enter {vez + 1} na linha ICMS TERCEIROS (procurando {NOME_RATEIO[pendentes[0]]})")
+            self.devagar(f"Enter {vez + 1} na linha {nome_linha} (procurando {NOME_RATEIO[pendentes[0]]})")
             foco = self.enter_rateio("rateio", vez, foco)
             if not na_linha(foco, rateio["terceiros"]):
-                raise Travou("rateio", f"o cursor saiu da linha ICMS TERCEIROS antes do campo {NOME_RATEIO[pendentes[0]]}"
+                raise Travou("rateio", f"o cursor saiu da linha {nome_linha} antes do campo {NOME_RATEIO[pendentes[0]]}"
                                        f"{self.local(foco)}; confira os campos dessa linha")
             coluna = coluna_rateio(foco, rateio)
-            self.registrar(f"  Enter {vez + 1} na linha ICMS TERCEIROS: foco={foco} coluna={coluna}", mostrar=False)
+            self.registrar(f"  Enter {vez + 1} na linha {nome_linha}: foco={foco} coluna={coluna}", mostrar=False)
             if coluna in pendentes:
                 if coluna != pendentes[0]:
-                    raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
+                    raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
+                # o SRP pode trazer valor no campo (Base 250.00 e Aliquota .0000 no ICMS S/ TRANSFERENCIA, 24/11/2026)
+                self.limpar_campo(coluna, 20)
                 self.digitar(valores[coluna], coluna)
                 pendentes.remove(coluna)
         if pendentes:
-            raise Travou("rateio", f"não cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha ICMS TERCEIROS")
+            raise Travou("rateio", f"não cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
         botao = self.achar_botao("tributos_ok", rateio["tributos_ok"])
         if not botao:
             raise Travou("rateio", "não achei o botão Tributos OK na tela")

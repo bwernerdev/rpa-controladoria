@@ -58,6 +58,9 @@ NATUREZA = [("Natureza", 260, 410, 70, 12), ("de", 335, 410, 20, 12), ("OperaÃ§Ã
             ("1949", 260, 500, 40, 12), ("OUTRAS", 400, 500, 60, 12), ("ENTRADAS", 465, 500, 80, 12),
             ("Find", 600, 700, 35, 12), ("OK", 700, 700, 20, 12), ("Cancel", 760, 700, 50, 12)]
 BOTAO_OK_NAT = (700, 700, 720, 712)
+# Rateio da OPER SPM 542: so a linha 101 ICMS S/ TRANSFERENCIA (print de 24/11/2026), na altura da 1a linha (600)
+PALAVRAS_542 = [p for p in PALAVRAS if p[0] not in ("COFINS", "ALIQUOTA", "ZERO", "ICMS", "TERCEIROS")] + [
+    ("ICMS", 150, 600, 35, 12), ("S/", 190, 600, 15, 12), ("TRANSFERENCIA", 210, 600, 100, 12)]
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate(["Documento", "Integrado", "com", "Sucesso."])]
 BOTAO_AJUSTAR = (800, 700, 860, 712)
 JA_EXISTE = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
@@ -84,8 +87,10 @@ class SRP0236:
     """Formulario como lista de campos; Enter avanca um. Campos sem nome sao os que o robo pula com Enter."""
 
     def __init__(self, recusar=(), integrar_volta_para_chave=True, extras_filial=0, sem_cor=(), parado=(), extras_rateio=0,
-                 colunas_tributo=("ident", "base", "aliquota")):  # como no SRP real: o Lancamento nao para
+                 colunas_tributo=("ident", "base", "aliquota"), transferencia=False):  # o Lancamento nao para (SRP real)
         self.colunas_tributo = colunas_tributo  # campos de cada linha de tributo em que o Enter para
+        # transferencia: grade de tributos da OPER SPM 542, so a linha 101 ICMS S/ TRANSFERENCIA (24/11/2026)
+        self.linhas_tributo = {"101": 600} if transferencia else LINHAS_TRIBUTO
         self.extras_rateio = extras_rateio  # Enter a mais (alem dos 7) ate o Rateio abrir
         self.parado = set(parado)  # nomes de campo em que o Enter nao faz nada (nem aviso)
         self.sem_cor = set(sem_cor)  # indices do cabecalho cujo foco nao fica ciano (ex.: a lista Lemg)
@@ -106,7 +111,8 @@ class SRP0236:
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
         # conteudo que o SRP ja traz no campo (Ident do ICMS TERCEIROS = 1, 05/11/2026). Chegando pelo Enter o texto vem
         # selecionado (digitar substitui); pelo clique o cursor fica no fim (digitar acrescenta).
-        self.iniciais = {"t114ident": "1", "serie": "1", "natoper": "1102"}  # Nat Oper que o SRP traz (ficticio)
+        self.iniciais = {"t114ident": "1", "serie": "1", "natoper": "1102",  # Nat Oper que o SRP traz (ficticio)
+                         "t101ident": "2", "t101base": "250.00", "t101aliquota": ".0000"}  # ICMS S/ TRANSFERENCIA
         # Tributos OK deixa o foco no Item da mesma linha (SRP real, 05/11/2026); seta para baixo vai a linha de baixo
         self.ok_desce = False  # True: o Tributos OK ja desce para o Item da linha de baixo
         self.ignora_seta = False  # seta para baixo que nao faz nada
@@ -133,7 +139,7 @@ class SRP0236:
     def campos(self):
         cab = (["chave", None, None, "serie", None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
                + ["valor_total", "frete"] + [None] * 9)
-        tributos = [f"t{cod}{col}" for cod in LINHAS_TRIBUTO for col in self.colunas_tributo]
+        tributos = [f"t{cod}{col}" for cod in self.linhas_tributo for col in self.colunas_tributo]
         rateio = ["oper", "natoper", "qtd", "qtdfisica", "unit", "icms"] + [None] * (6 + self.extras_rateio) + tributos
         return cab, rateio
 
@@ -154,7 +160,7 @@ class SRP0236:
             x = colunas[nome]
             return f"{nome}{k}", (x, 430 + 20 * k, x + 60, 442 + 20 * k)
         if nome and nome.startswith("t1"):  # grade de tributos do Rateio
-            x, y = COLUNAS_TRIBUTO[nome[4:]], LINHAS_TRIBUTO[nome[1:4]]
+            x, y = COLUNAS_TRIBUTO[nome[4:]], self.linhas_tributo[nome[1:4]]
             return f"{nome}{k}", (x, y, x + 60, y + 12)
         if j > 5:  # depois do Valor Unit a grade rola: o foco fica parado na borda direita (como no SRP real em 4K)
             return (f"{nome}{k}" if nome else None), (1400, 500, 1460, 510)
@@ -332,7 +338,7 @@ class SRP0236:
             if self.rateio_aberto():
                 for nome in rateio:
                     if nome and nome.startswith("t1"):
-                        cx, cy = COLUNAS_TRIBUTO[nome[4:]], LINHAS_TRIBUTO[nome[1:4]]
+                        cx, cy = COLUNAS_TRIBUTO[nome[4:]], self.linhas_tributo[nome[1:4]]
                         if cx <= x <= cx + 60 and cy <= y <= cy + 12:
                             self.cliques_ident += 1
                             if not self.ignora_cliques:
@@ -633,62 +639,97 @@ class NatOper(unittest.TestCase):
         self.assertEqual(erros, [])
         self.assertEqual(notas[0]["itens"][0]["nat_oper"], "2949")
 
+    def srp_542(self):
+        """SRP com a grade de tributos da 542 (so ICMS S/ TRANSFERENCIA); usar com `ambiente(srp, palavras=PALAVRAS_542)`."""
+        return SRP0236(transferencia=True, extras_rateio=3)  # no SRP real o Ident veio no 11o Enter (log de 24/11/2026)
+
     def test_digita_no_srp_so_na_542(self):
-        srp = SRP0236()
-        notas = [nota(self.SC, [item("900135", oper="542"), item("900266", oper="5101")]),
+        srp = self.srp_542()
+        notas = [nota(self.SC, [item("900135", oper="542"), item("900266", oper="542")]),
                  nota(self.SP, [item("900135", oper="542")])]
         notas[1]["itens"][0]["linha"] = 4
-        self.assertIn("(Nat Oper sem mexer)", snac0236.descrever(notas[0]))
-        with ambiente(srp):
+        with ambiente(srp, palavras=PALAVRAS_542):
             codigo, avisos, _ = rodar(srp, notas)
         self.assertEqual(codigo, 0, avisos)
         a, b = srp.integradas
         self.assertEqual((a["oper0"], a["natoper0"], a["qtd0"]), ("542", "1949", "2"))  # o 1102 do SRP foi apagado
-        self.assertNotIn("natoper1", a)  # OPER 5101: o Nat Oper que o SRP trouxe fica
-        self.assertEqual((a["oper1"], a["qtd1"]), ("5101", "2"))
+        self.assertEqual((a["natoper1"], a["qtd1"]), ("1949", "2"))
         self.assertEqual((b["natoper0"], b["qtd0"]), ("2949", "2"))
+
+    def test_outra_operacao_nao_mexe_no_nat_oper(self):
+        srp = SRP0236()
+        srp.lov_natoper = True  # so abriria com um Nat Oper digitado
+        notas = [nota(self.SC, [item("900135", oper="5101"), item("900266", oper="5101")])]
+        self.assertIn("(Nat Oper sem mexer)", snac0236.descrever(notas[0]))
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, notas)
+        self.assertEqual(codigo, 0, avisos)
+        a = srp.integradas[0]
+        self.assertEqual((a["qtd0"], a["qtd1"], srp.oks_natureza), ("2", "2", 0))
+        self.assertFalse([n for n in a if n.startswith("natoper")])  # o Nat Oper que o SRP trouxe fica
+        self.assertEqual(a["t114ident0"], "0")  # linha ICMS TERCEIROS, como antes
 
     def test_janela_natureza_de_operacao_clica_ok(self):
         """Enter depois do 1949 abre a lista "Natureza de Operacao" com o cursor parado no Nat Oper (print de 24/11/2026):
-        OK clicado, Enter ate o Qtd.Fiscal. Item de outra operacao nao abre a janela."""
-        srp = SRP0236()
+        OK clicado, Enter ate o Qtd.Fiscal."""
+        srp = self.srp_542()
         srp.lov_natoper = True
-        with ambiente(srp) as pasta:
-            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542"), item("900266", oper="5101")])])
+        with ambiente(srp, palavras=PALAVRAS_542) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542"), item("900266", oper="542")])])
             log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
-        self.assertEqual(codigo, 0, avisos)
-        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (1, 0), avisos)
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (2, 0), avisos)
         self.assertIn("Natureza de Operacao: cliquei em OK", log)
-        self.assertEqual(len(srp.integradas), 1, avisos)
         a = srp.integradas[0]
-        self.assertEqual((a["natoper0"], a["qtd0"], a["qtd1"]), ("1949", "2", "2"))
-        self.assertNotIn("natoper1", a)
+        self.assertEqual((a["natoper0"], a["qtd0"], a["natoper1"], a["qtd1"]), ("1949", "2", "1949", "2"))
 
     def test_janela_natureza_ok_ja_desce_para_o_qtd(self):
-        srp = SRP0236()
+        srp = self.srp_542()
         srp.lov_natoper, srp.lov_desce = True, True
-        with ambiente(srp):
+        with ambiente(srp, palavras=PALAVRAS_542):
             codigo, avisos, _ = rodar(srp, [nota(self.SP, [item("900135", oper="542")])])
-        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
         self.assertEqual(srp.oks_natureza, 1)
         self.assertEqual((srp.integradas[0]["natoper0"], srp.integradas[0]["qtd0"]), ("2949", "2"))
 
     def test_janela_natureza_sem_o_ok_lido_fecha_com_enter(self):
-        srp = SRP0236()
+        srp = self.srp_542()
         srp.lov_natoper, srp.sem_ok_nat = True, True
-        with ambiente(srp):
+        with ambiente(srp, palavras=PALAVRAS_542):
             codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
-        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
         self.assertEqual((srp.oks_natureza, srp.enters_natureza), (0, 1))
         self.assertEqual(srp.integradas[0]["qtd0"], "2")
 
     def test_outra_janela_depois_do_nat_oper_pausa(self):
-        srp = SRP0236()
+        srp = self.srp_542()
         srp.janela_no_enter = {"natoper": [("Erro", 300, 450, 40, 12), ("qualquer", 345, 450, 70, 12)]}
-        with ambiente(srp):
+        with ambiente(srp, palavras=PALAVRAS_542):
             codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])], com_continuar=False)
         self.assertEqual(codigo, 1)
         self.assertTrue(any("apareceu uma janela do SRP depois do Nat Oper ('erro qualquer')" in a for a in avisos), avisos)
+        self.assertEqual(srp.integradas, [])
+
+    def test_rateio_da_542_zera_a_linha_icms_s_transferencia(self):
+        """OPER SPM 542: a grade de tributos so tem a linha ICMS S/ TRANSFERENCIA (cod. 101; Ident 2, Base 250.00 e
+        Aliquota .0000 vindos do SRP; print de 24/11/2026). Sem imposto na planilha: Ident 0, Base 0 e Aliquota 0 nela."""
+        srp = self.srp_542()
+        with ambiente(srp, palavras=PALAVRAS_542) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        nota_srp = srp.integradas[0]
+        self.assertEqual({n: v for n, v in nota_srp.items() if n.startswith("t")},
+                         {"t101ident0": "0", "t101base0": "0", "t101aliquota0": "0"})
+        self.assertIn("ICMS S/ TRANSFERENCIA: cheguei no Ident Tributo", log)
+        self.assertFalse((pasta / "posicoes_0236.json").exists())  # posicoes dessa grade nao valem para as outras notas
+
+    def test_rateio_da_542_sem_a_linha_pausa(self):
+        srp = self.srp_542()
+        with ambiente(srp):  # tela com a linha ICMS TERCEIROS: nao e a da 542
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("linha ICMS S/ TRANSFERENCIA" in a for a in avisos), avisos)
         self.assertEqual(srp.integradas, [])
 
     def test_rotulo_nat_oper_junto_do_dm(self):
