@@ -650,21 +650,37 @@ def arquivo_posicoes():
     return core.pasta_base() / "posicoes_0236.json"
 
 
+def _chave_posicoes(linha):
+    """Chave no arquivo: "rateio" (grade do ICMS TERCEIROS, o nome de antes) ou "rateio_<linha>" (ex.: a da 542)."""
+    return "rateio" if linha == "terceiros" else f"rateio_{linha}"
+
+
 def ler_posicoes(tamanho):
-    """Posicoes do Rateio salvas para uma janela do Citrix deste tamanho (outro tamanho/monitor = None)."""
+    """Posicoes do Rateio salvas para uma janela do Citrix deste tamanho, por linha da grade de tributos
+    ({"terceiros": {...}, "transferencia": {...}}); outro tamanho/monitor ou nada salvo = {}."""
     try:
         dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
         if tuple(dados.get("janela", ())) == tuple(tamanho):
-            return {chave: tuple(caixa) for chave, caixa in dados["rateio"].items()}
+            return {linha: {chave: tuple(caixa) for chave, caixa in dados[_chave_posicoes(linha)].items()}
+                    for linha in LINHA_RATEIO if _chave_posicoes(linha) in dados}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
-    return None
+    return {}
 
 
-def gravar_posicoes(tamanho, rateio):
+def gravar_posicoes(tamanho, rateio, linha="terceiros"):
+    """Grava as posicoes da grade da `linha`, mantendo as das outras linhas salvas para a mesma janela."""
     try:
-        core.gravar_json(arquivo_posicoes(), {"janela": list(tamanho), "rateio": {c: list(v) for c, v in rateio.items()}})
-    except OSError:
+        try:
+            dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
+            if tuple(dados.get("janela", ())) != tuple(tamanho):
+                dados = {}
+        except (OSError, ValueError):
+            dados = {}
+        dados["janela"] = list(tamanho)
+        dados[_chave_posicoes(linha)] = {c: list(v) for c, v in rateio.items()}
+        core.gravar_json(arquivo_posicoes(), dados)
+    except (OSError, AttributeError, TypeError):
         pass
 
 
@@ -1206,7 +1222,7 @@ class Execucao0236:
         else:
             self.devagar("Enter na 'Natureza de Operação' (não li o botão OK)")
             core.send_keys("{ENTER}", pause=0.03)
-            self.registrar("  Natureza de Operação: não li o botão OK; dei Enter", mostrar=False)
+            self.registrar(f"  Natureza de Operação: não li o botão OK ({texto[:90]!r}); dei Enter", mostrar=False)
         prazo = time.time() + self.render
         while barras_dialogo(core.capturar(self.janela)):
             self.checar_parada()
@@ -1394,7 +1410,7 @@ class Execucao0236:
         caixa = localizar_rateio(core.palavras_tela(binarizar(recorte), self.tesseract)).get(chave)
         return (caixa[0] + esq, caixa[1] + topo, caixa[2] + esq, caixa[3] + topo) if caixa else None
 
-    def confirma_terceiros(self, rateio):
+    def confirma_terceiros(self, rateio, linha="terceiros"):
         """Le so o recorte em volta do rotulo ICMS TERCEIROS (~0,5 s, contra ~5 s da tela inteira)."""
         c = rateio["terceiros"]
         h = c[3] - c[1]
@@ -1404,9 +1420,9 @@ class Execucao0236:
         escala = 2 if h >= 20 else 4  # em 1366x768 o rotulo tem ~8 px
         for img in (recorte, binarizar(recorte)) + ((binarizar(recorte, 120),) if escala > 2 else ()):
             texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, self.tesseract, escala=escala)))
-            if "tercei" in texto or "erceiro" in texto:
+            if TESTE_LINHA_RATEIO[linha](texto):
                 return True
-        self.registrar(f"  recorte do ICMS TERCEIROS não confere: {texto!r}", mostrar=False)
+        self.registrar(f"  recorte do {LINHA_RATEIO[linha]} não confere: {texto!r}", mostrar=False)
         return False
 
     def clicar_ident_terceiros(self, pos, foco, vez):
@@ -1437,10 +1453,10 @@ class Execucao0236:
         linha_alvo = linha_rateio(r)
         nome_linha = LINHA_RATEIO[linha_alvo]
         rateio = None
-        salvo = self.rateio_salvo  # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar)
-        clicou = False
-        if linha_alvo != "terceiros":  # outra grade (so a linha ICMS S/ TRANSFERENCIA): sem posicoes salvas nem clique
-            salvo, clicou = None, True
+        # posicoes lidas numa nota anterior (a janela do Rateio abre sempre no mesmo lugar), separadas por grade: a da 542
+        # so tem a linha ICMS S/ TRANSFERENCIA, na altura da 1a linha (24/11/2026)
+        salvo = self.rateio_salvo.get(linha_alvo)
+        clicou = linha_alvo != "terceiros"  # o clique pula as linhas de cima da grade do ICMS TERCEIROS; na 542 nao ha
         for vez in range(MAX_ATE_RATEIO):
             self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha {nome_linha} do Rateio)")
             foco = self.enter_rateio("icms", vez, foco)
@@ -1452,17 +1468,23 @@ class Execucao0236:
                 clicou = True
                 foco = self.clicar_ident_terceiros(pos, foco, vez)
             if rateio is None and salvo and na_linha(foco, salvo["terceiros"]) and celula_ident(foco, salvo):
-                if self.confirma_terceiros(salvo):
+                if self.confirma_terceiros(salvo, linha_alvo):
                     rateio = salvo
-                    self.registrar(f"  Rateio: posições da nota anterior; ICMS TERCEIROS conferido no recorte (Enter {vez + 1})",
+                    self.registrar(f"  Rateio: posições da nota anterior; {nome_linha} conferido no recorte (Enter {vez + 1})",
                               mostrar=False)
                 else:
                     salvo = None  # le a tela inteira de novo
             if salvo and rateio is None and vez + 1 >= LER_RATEIO_DESDE + 10:
                 salvo = None  # nao bateu com as posicoes salvas: le a tela inteira
             if rateio is None and not salvo and vez + 1 >= LER_RATEIO_DESDE:
+                imagem = core.capturar(self.janela)
+                # sem a barra azul da janela "Rateios" o Rateio ainda nao abriu: nada de ler a tela inteira (no SRP real,
+                # 24/11/2026, as leituras do 8o e 9o Enter levaram 8,7 s cada e nao acharam nada; a do 10o, 1,9 s)
+                if not barras_dialogo(imagem) and vez + 1 < LER_RATEIO_DESDE + 3:
+                    self.registrar(f"  Enter {vez + 1}: sem a janela do Rateio na tela; não leio ainda", mostrar=False)
+                    continue
                 t_leitura = time.time()
-                lido = ler_rateio(core.capturar(self.janela), self.tesseract, linha_alvo)
+                lido = ler_rateio(imagem, self.tesseract, linha_alvo)
                 self.registrar(f"  leitura da tela procurando o Rateio: {time.time() - t_leitura:.1f}s", mostrar=False)
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
@@ -1471,9 +1493,8 @@ class Execucao0236:
                               (c == "ident" and c not in rateio)]
                     if faltam:
                         raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
-                    if linha_alvo == "terceiros":  # as posicoes salvas valem so para a grade do ICMS TERCEIROS
-                        self.rateio_salvo = rateio
-                        gravar_posicoes(self.tamanho, rateio)
+                    self.rateio_salvo[linha_alvo] = rateio
+                    gravar_posicoes(self.tamanho, rateio, linha_alvo)
             if rateio and na_linha(foco, rateio["terceiros"]) and celula_ident(foco, rateio):
                 self.registrar(f"  {nome_linha}: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
@@ -1782,7 +1803,7 @@ class Execucao0236:
         self.log = open(caminho_log, "w", encoding="utf-8")  # noqa: SIM115 (aberto a execucao inteira; fechado no fim)
         with _TRAVA_LOG:
             _LOG.update(caminho=caminho_log, arquivo=self.log, ultimo=time.time())
-        self.rateio_salvo = None  # posicoes do Rateio da nota anterior (ou da execucao anterior)
+        self.rateio_salvo = {}  # posicoes do Rateio da nota anterior (ou da execucao anterior), por linha da grade
         self.confia_barra = True  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
         self.atual = []  # linhas marcadas 'executando'
         self.serie_com_ponto_feita = False  # nesta nota o robo ja pos "." na Serie (janela "ja existe")

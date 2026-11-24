@@ -1,5 +1,6 @@
 """SNAC0236: planilha (formatos, agrupamento por chave) e preenchimento com um SRP simulado (Enter entre campos)."""
 import contextlib
+import json
 import pathlib
 import re
 import tempfile
@@ -135,6 +136,7 @@ class SRP0236:
         # tras; OK (ou Enter) fecha. `lov_desce`: o OK ja leva ao Qtd.Fiscal; `sem_ok_nat`: o OCR nao le o OK
         self.lov_natoper, self.natureza, self.lov_desce, self.sem_ok_nat = False, False, False, False
         self.oks_natureza, self.enters_natureza, self.lov_vista = 0, 0, set()
+        self.rateio_sem_barra = False  # a barra da janela Rateios nao e achada (o robo le a tela mesmo assim, mais tarde)
 
     def campos(self):
         cab = (["chave", None, None, "serie", None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -170,7 +172,8 @@ class SRP0236:
         """Titulo da coluna acima do campo em foco (o robo le antes de digitar Valor Unit e ICMS)."""
         nome = (self.onde()[0] or "").rstrip("0123456789")
         return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10),
-                 "t114ident": ("ICMS TERCEIROS", 0, 0, 60, 10)}.get(  # recorte do rotulo da linha (nota seguinte)
+                 # recorte do rotulo da linha do Rateio (nota seguinte, posicoes salvas)
+                 "t114ident": ("ICMS TERCEIROS", 0, 0, 60, 10), "t101ident": ("ICMS S/ TRANSFERENCIA", 0, 0, 90, 10)}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
@@ -201,7 +204,9 @@ class SRP0236:
 
     def barras(self, imagem):
         self.leituras += 1
-        return [BARRA] if self.janela_por_cima() and not self.sem_barra and imagem.size == (1600, 900) else []
+        # a janela Rateios tambem tem barra azul (24/11/2026): o robo so le a tela procurando o Rateio com ela
+        aberta = self.janela_por_cima() or (self.rateio_aberto() and not self.rateio_sem_barra)
+        return [BARRA] if aberta and not self.sem_barra and imagem.size == (1600, 900) else []
 
     def recorte(self):
         """Palavras das janelas no recorte AREA (coordenadas do recorte)."""
@@ -722,7 +727,35 @@ class NatOper(unittest.TestCase):
         self.assertEqual({n: v for n, v in nota_srp.items() if n.startswith("t")},
                          {"t101ident0": "0", "t101base0": "0", "t101aliquota0": "0"})
         self.assertIn("ICMS S/ TRANSFERENCIA: cheguei no Ident Tributo", log)
-        self.assertFalse((pasta / "posicoes_0236.json").exists())  # posicoes dessa grade nao valem para as outras notas
+        self.assertNotIn("rateio", json.loads((pasta / "posicoes_0236.json").read_text()))  # so a "rateio_transferencia"
+
+    def test_rateio_da_542_posicoes_salvas_e_sem_ler_antes_da_janela(self):
+        """Velocidade (24/11/2026: ~19 s por nota lendo a tela inteira): antes da barra da janela Rateios nao le a tela;
+        a 2a nota da 542 usa as posicoes da 1a (conferidas num recorte); as da grade do ICMS TERCEIROS ficam no arquivo."""
+        srp = self.srp_542()
+        notas = [nota(self.SC, [item("900135", oper="542")]), nota(self.SP, [item("900135", oper="542")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp, palavras=PALAVRAS_542) as pasta:
+            (pasta / "posicoes_0236.json").write_text(json.dumps({"janela": [1366, 768], "rateio": {"terceiros": [1, 2, 3, 4]}}))
+            codigo, avisos, _ = rodar(srp, notas)
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+            salvo = json.loads((pasta / "posicoes_0236.json").read_text())
+        self.assertEqual((codigo, len(srp.integradas)), (0, 2), avisos)
+        self.assertEqual(log.count("Rateio lido no Enter"), 1)  # so na 1a nota
+        self.assertIn("ICMS S/ TRANSFERENCIA conferido no recorte", log)
+        self.assertIn("Enter 8: sem a janela do Rateio na tela; nao leio ainda", log)
+        self.assertEqual(log.count("leitura da tela procurando o Rateio"), 1)
+        self.assertEqual(salvo["rateio"], {"terceiros": [1, 2, 3, 4]})  # a grade das outras operacoes continua salva
+        self.assertIn("terceiros", salvo["rateio_transferencia"])
+        self.assertEqual([n["t101ident0"] for n in srp.integradas], ["0", "0"])
+
+    def test_rateio_sem_a_barra_le_a_tela_mais_tarde(self):
+        srp = self.srp_542()
+        srp.extras_rateio, srp.rateio_sem_barra = 6, True  # barra nao achada: le do 11o Enter em diante
+        with ambiente(srp, palavras=PALAVRAS_542):
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        self.assertEqual(srp.integradas[0]["t101ident0"], "0")
 
     def test_rateio_da_542_sem_a_linha_pausa(self):
         srp = self.srp_542()
