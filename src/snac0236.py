@@ -771,6 +771,11 @@ AVISO_FRETE_CIF = ("icms pago", "alterado o frete", "frete para cif")
 LEITURAS_AVISO = 3  # leituras seguidas esperando uma janela ja tratada fechar
 PIXELS_JANELA = 2000  # mudanca minima na tela para contar como janela abrindo/fechando (cursor piscando: ~60 px)
 MAX_PASSOS_INTEGRAR = 30  # leituras da tela no maximo depois do 1o Integrar
+# Espera pela 1a janela depois do 1o Integrar antes do 1o Enter as cegas (usuario, 24/11/2026: "a tela que aparece quando
+# clica em Integrar nao esta dando tempo de aparecer"; nas notas da 542 o robo leu a tela 1,7 s depois do clique, nao viu
+# janela e deu ~6 Enter em 8 s). Nos logs de novembro so 5 de 242 notas precisaram do 2o Integrar: quase sempre uma janela
+# aparece, entao a espera acaba assim que a barra azul surge e so custa o tempo todo quando nada aparece.
+ESPERA_JANELA_INTEGRAR = 20
 
 
 def aviso_frete_cif(texto):
@@ -1628,6 +1633,25 @@ class Execucao0236:
         time.sleep(0.3)
         return True
 
+    def esperar_janela(self, antes, limite):
+        """Depois do 1o Integrar sem janela na tela: espera ate `limite` s uma barra azul de janela (`barras_dialogo`,
+        ~0,07 s por consulta) ou a tela mudar e parar de mudar. True = apareceu algo para ler; False = nada no prazo."""
+        inicio = time.time()
+        while time.time() - inicio < limite:
+            self.checar_parada()
+            agora = core.capturar(self.janela)
+            if barras_dialogo(agora):
+                self.registrar(f"  janela apareceu {time.time() - inicio:.1f}s depois da leitura do Integrar", mostrar=False)
+                return True
+            if tela_mudou(antes, agora, PIXELS_JANELA):
+                self.esperar_tela(antes, self.render)
+                self.registrar(f"  a tela mudou {time.time() - inicio:.1f}s depois da leitura do Integrar (sem barra azul)",
+                               mostrar=False)
+                return True
+            time.sleep(0.2)
+        self.registrar(f"  nenhuma janela em {limite}s depois do Integrar: sigo com os Enter", mostrar=False)
+        return False
+
     def esperar_tela(self, antes, limite):
         """Espera a tela mudar em relacao a `antes` e parar de mudar (janela terminou de abrir/fechar), no maximo
         `limite` s. Evita ler a tela de novo (~2,5 s em 4K) antes de ela mudar."""
@@ -1674,7 +1698,8 @@ class Execucao0236:
         aviso do frete alterado para CIF -> Enter (OK); "Resumo dos Tributos do Documento" -> Enter (Confirmar);
         janela "Centro de Custo e Conta Contabil para Frete LTCC" -> CLIQUE em "Frete LTCC" (Enter ali roda sem fim);
         "Valor Calculado para Documento" com despesa acessoria de ate 0,05 -> CLIQUE em Ajustar (acima: pausa);
-        "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Sem nenhuma dessas janelas: Enter, ate
+        "Documento Integrado com Sucesso." -> Enter (OK) e acaba. Sem nenhuma dessas janelas: espera ate
+        ESPERA_JANELA_INTEGRAR s a 1a janela aparecer (`esperar_janela`, 24/11/2026) e so entao Enter, ate
         ENTERS_DEPOIS_INTEGRAR, e depois Integrar de novo. Janela ja tratada que continua aberta: espera, sem Enter.
         Devolve 0 (nao achei o Integrar), 1 (nao achei o 2o Integrar), 2 (sem "Integrado com Sucesso") ou 3 (sucesso)."""
         if not self.clicar_integrar(nota, 1):
@@ -1683,6 +1708,7 @@ class Execucao0236:
             return 1
         etiqueta = f"nota ...{nota['chave'][-6:]}"
         feitos, enters, cliques, esperas, desde_clique = [], 0, 1, 0, 0
+        esperou_janela = False
         for _ in range(MAX_PASSOS_INTEGRAR):
             self.checar_parada()
             imagem = core.capturar(self.janela)
@@ -1756,6 +1782,12 @@ class Execucao0236:
                     break
                 self.esperar_tela(imagem, self.render)
                 continue
+            if cliques == 1 and enters == 0 and not esperou_janela:
+                # o SRP pode demorar para abrir a 1a janela (Resumo, Referencia...): Enter antes dela cai no formulario
+                esperou_janela = True
+                if self.esperar_janela(imagem, ESPERA_JANELA_INTEGRAR):
+                    desde_clique = 0  # a proxima leitura e da tela inteira, com ou sem barra azul
+                    continue
             if enters < ENTERS_DEPOIS_INTEGRAR:
                 enters += 1
                 self.devagar(f"Enter {enters} de {ENTERS_DEPOIS_INTEGRAR} depois do Integrar")

@@ -107,6 +107,8 @@ class SRP0236:
         self.sem_barra, self.recorte_vazio = False, False  # barra azul nao achada / recorte sem as palavras da janela
         self.leituras, self.recortes = 0, 0
         self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
+        # janelas do 1o Integrar escondidas nas primeiras `atraso_janela` consultas da barra (SRP lento, 24/11/2026)
+        self.atraso_janela, self.escondida, self.enters_escondida = 0, 0, 0
         self.ignora_cliques = False  # cliques no Item e no Ident Tributo que nao mudam o foco
         self.clique_item_passa = False  # o foco passa por outro campo antes de chegar no Item (SRP real, 04/11 19:20)
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
@@ -191,10 +193,14 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
+        if self.escondida:
+            return False
         return (self.janela_extra or self.natureza or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo
                 or self.ltcc or self.sucesso)
 
     def palavras_janelas(self):
+        if self.escondida:
+            return []
         return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else [])
                 + ([p for p in NATUREZA if not (self.sem_ok_nat and p[0] == "OK")] if self.natureza else [])
                 + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
@@ -204,6 +210,9 @@ class SRP0236:
 
     def barras(self, imagem):
         self.leituras += 1
+        if self.escondida:
+            self.escondida -= 1
+            return []
         # a janela Rateios tambem tem barra azul (24/11/2026): o robo so le a tela procurando o Rateio com ela
         aberta = self.janela_por_cima() or (self.rateio_aberto() and not self.rateio_sem_barra)
         return [BARRA] if aberta and not self.sem_barra and imagem.size == (1600, 900) else []
@@ -217,6 +226,8 @@ class SRP0236:
 
     def teclas(self, texto, pause=0):
         with self.lock:
+            if texto == "{ENTER}" and self.escondida:
+                self.enters_escondida += 1
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
             if texto == "{ENTER}" and self.natureza:  # Enter na lista = OK na linha selecionada
@@ -361,6 +372,7 @@ class SRP0236:
                 self.referencia = self.com_referencia
                 self.acessoria = self.com_acessoria
                 self.aviso_frete = self.avisos_no_1o  # janelas logo depois do 1o Integrar (sem o 2o)
+                self.escondida = self.atraso_janela
                 self.atual = {}
                 if self.volta:
                     self.indice, self.alerta = 0, False
@@ -391,6 +403,8 @@ def ambiente(srp, palavras=PALAVRAS):
         pilha.enter_context(mock.patch.object(snac0236, "barras_dialogo", srp.barras))
         pilha.enter_context(mock.patch.object(snac0236, "foco_tela", srp.caixa))
         pilha.enter_context(mock.patch.object(snac0236, "arquivo_posicoes", lambda: pasta / "posicoes_0236.json"))
+        # sem janela depois do 1o Integrar o robo espera ESPERA_JANELA_INTEGRAR (20 s) antes dos Enter: aqui, quase nada
+        pilha.enter_context(mock.patch.object(snac0236, "ESPERA_JANELA_INTEGRAR", 0.2))
         yield pasta
 
 
@@ -1323,6 +1337,23 @@ class Fluxo(unittest.TestCase):
         self.assertEqual((srp.fechou_aviso, srp.confirmou, srp.sucessos, srp.reintegrou, srp.enter_no_ltcc), (2, 2, 2, 0, 0))
         self.assertEqual(srp.cliques_chave, 2)  # depois de cada nota integrada, tambem a ultima
         self.assertFalse([a for a in avisos if "PAUSADO" in a], avisos)
+
+    def test_janela_que_demora_depois_do_1o_integrar(self):
+        """Usuario, 24/11/2026: a janela do Integrar nao dava tempo de aparecer e o robo ja dava Enter (notas da 542)."""
+        srp = SRP0236()
+        srp.avisos_no_1o, srp.atraso_janela = True, 40  # janelas so na 40a consulta da barra depois do clique
+        with ambiente(srp), mock.patch.object(snac0236, "ESPERA_JANELA_INTEGRAR", 5):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.enters_escondida, srp.reintegrou, srp.sucessos), (0, 0, 1))  # nenhum Enter antes da janela
+
+    def test_sem_janela_depois_do_1o_integrar_espera_e_segue_com_os_enter(self):
+        srp = SRP0236()  # nenhuma janela depois do 1o Integrar: espera o prazo, 7 Enter e Integrar de novo
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual((codigo, srp.reintegrou), (0, 1), avisos)
+        self.assertIn("nenhuma janela em", log)
 
     def test_rateio_sem_imposto(self):
         srp = SRP0236(extras_rateio=3)  # mais Enter ate o Rateio que os 7 contados
