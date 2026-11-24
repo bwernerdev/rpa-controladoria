@@ -16,7 +16,9 @@ $raiz = $PWD.Path
 $excluir = "PIL._avif", "PIL.AvifImagePlugin", "PIL._webp", "PIL.WebPImagePlugin", "PIL._imagingft", "PIL._imagingcms",
            "PIL.ImageCms", "setuptools", "pydoc_data", "pydoc", "unittest", "doctest", "pefile", "lib2to3", "xmlrpc", "darkdetect" |
            ForEach-Object { "--exclude-module"; $_ }
-& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src @excluir --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
+# win32timezone: o pywin32 importa na hora de ler uma data pelo COM (DATA EMISSAO na copia para a "Lancados") e o
+# PyInstaller nao o acha sozinho; sem ele o exe nao pintava a planilha com formula (24/11/2026, "No module named").
+& "$raiz\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --windowed --name RPA-SRP --paths src @excluir --hidden-import win32timezone --splash "$raiz\build\splash.png" --icon "$raiz\assets\icone.ico" --version-file "$raiz\build\version.txt" --distpath "$raiz\build\dist" --workpath build --specpath build src\gui.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou" }
 $ErrorActionPreference = "Stop"  # so depois do PyInstaller: no PowerShell 5.1 o INFO dele no stderr vira erro
 

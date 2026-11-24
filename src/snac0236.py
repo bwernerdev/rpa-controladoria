@@ -668,8 +668,8 @@ def ler_posicoes(tamanho):
     return {}
 
 
-def gravar_posicoes(tamanho, rateio, linha="terceiros"):
-    """Grava as posicoes da grade da `linha`, mantendo as das outras linhas salvas para a mesma janela."""
+def _gravar_no_arquivo_posicoes(tamanho, chave, valor):
+    """Grava `chave` no `posicoes_0236.json`, mantendo o resto salvo para a mesma janela (outro tamanho = comeca de novo)."""
     try:
         try:
             dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
@@ -678,10 +678,30 @@ def gravar_posicoes(tamanho, rateio, linha="terceiros"):
         except (OSError, ValueError):
             dados = {}
         dados["janela"] = list(tamanho)
-        dados[_chave_posicoes(linha)] = {c: list(v) for c, v in rateio.items()}
+        dados[chave] = valor
         core.gravar_json(arquivo_posicoes(), dados)
     except (OSError, AttributeError, TypeError):
         pass
+
+
+def gravar_posicoes(tamanho, rateio, linha="terceiros"):
+    """Grava as posicoes da grade da `linha`, mantendo as das outras linhas salvas para a mesma janela."""
+    _gravar_no_arquivo_posicoes(tamanho, _chave_posicoes(linha), {c: list(v) for c, v in rateio.items()})
+
+
+def ler_sem_cor(tamanho):
+    """(campo, Enter) em que o foco ficou sem cor nas execucoes anteriores, com a janela do Citrix deste tamanho."""
+    try:
+        dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
+        if tuple(dados.get("janela", ())) == tuple(tamanho):
+            return {(str(campo), int(vez)) for campo, vez in dados.get("sem_cor", [])}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return set()
+
+
+def gravar_sem_cor(tamanho, vistos):
+    _gravar_no_arquivo_posicoes(tamanho, "sem_cor", sorted([campo, vez] for campo, vez in vistos))
 
 
 def tem_imposto(r):
@@ -776,6 +796,7 @@ MAX_PASSOS_INTEGRAR = 30  # leituras da tela no maximo depois do 1o Integrar
 # janela e deu ~6 Enter em 8 s). Nos logs de novembro so 5 de 242 notas precisaram do 2o Integrar: quase sempre uma janela
 # aparece, entao a espera acaba assim que a barra azul surge e so custa o tempo todo quando nada aparece.
 ESPERA_JANELA_INTEGRAR = 20
+LER_JANELA_A_CADA = 3  # nessa espera, sem barra azul, le a tela inteira (~1,3 s em 1366x768) a cada 3 s
 
 
 def aviso_frete_cif(texto):
@@ -1112,6 +1133,9 @@ class Execucao0236:
             raise Travou(campo, f"{motivo} no Enter {vez + 1} depois do {NOME[campo]}{self.diagnostico(campo)}")
         if novo == "sem_cor" and not curto:
             self.sem_cor_visto.add((campo, vez))
+            # lembrado tambem para a proxima execucao (24/11/2026: com 1 nota por execucao, os 4 campos sem cor da nota
+            # (Enter 3 e 5 depois da Data, 9 e 10 depois do Valor do ICMS) custavam 1,2 s cada em vez de 0,4 s)
+            gravar_sem_cor(self.tamanho, self.sem_cor_visto)
         novo = None if novo == "sem_cor" else novo
         self.registrar(f"  Enter {vez + 1} depois do {NOME[campo]}: foco={novo} perto de {onde_esta(novo, self.lidas)!r}",
                   mostrar=False)
@@ -1210,24 +1234,18 @@ class Execucao0236:
         return novo
 
     def fechar_natureza(self, imagem, area):
-        """Janela "Natureza de Operacao" depois do Nat Oper: confere o texto (outra janela = pausa) e clica em OK; sem o
-        botao lido, Enter (na lista de valores o Enter escolhe a linha selecionada, como o OK). Espera a janela fechar."""
+        """Janela "Natureza de Operacao" depois do Nat Oper: confere o texto (outra janela = pausa) e da Enter (na lista
+        de valores o Enter escolhe a linha selecionada, como o OK). Espera a janela fechar. Ate a v1.16.5 procurava o
+        botao OK pelo OCR (~1 s) para clicar; no SRP real (24/11/2026) o OK nunca foi lido e o Enter sempre fechou."""
         if not self.tesseract:
             raise Travou("nat_oper", "abriu uma janela depois do Nat Oper e sem o OCR não sei qual é")
         texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), self.tesseract)))
         if not natureza_operacao(texto):
             raise Travou("nat_oper", f"apareceu uma janela do SRP depois do Nat Oper ('{texto[:80]}')"
                          + self.diagnostico("nat_oper"))
-        botao = botao_referencia(imagem, area, self.tesseract)
-        if botao:
-            self.devagar("clicar em OK na 'Natureza de Operação'")
-            ret = self.janela.rectangle()
-            clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
-            self.registrar("  Natureza de Operação: cliquei em OK", mostrar=False)
-        else:
-            self.devagar("Enter na 'Natureza de Operação' (não li o botão OK)")
-            core.send_keys("{ENTER}", pause=0.03)
-            self.registrar(f"  Natureza de Operação: não li o botão OK ({texto[:90]!r}); dei Enter", mostrar=False)
+        self.devagar("Enter na 'Natureza de Operação' (OK)")
+        core.send_keys("{ENTER}", pause=0.03)
+        self.registrar(f"  Natureza de Operação: dei Enter ({texto[:60]!r})", mostrar=False)
         prazo = time.time() + self.render
         while barras_dialogo(core.capturar(self.janela)):
             self.checar_parada()
@@ -1516,7 +1534,7 @@ class Execucao0236:
         # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026; o do ICMS S/ TRANSFERENCIA com 2, 24/11/2026).
         # Chegando pelo clique, o cursor fica onde clicou e o texto nao e selecionado: digitar "1" virava "11" e dava
         # erro. Pelo Enter o texto vem selecionado. Apaga antes.
-        self.limpar_campo("ident")
+        self.limpar_campo("ident", 4)  # o SRP traz 1 digito (1 ou 2)
         self.digitar(valores["ident"], "ident")
         pendentes.remove("ident")
         for vez in range(len(COLUNAS_RATEIO) + 2):
@@ -1533,7 +1551,7 @@ class Execucao0236:
                 if coluna != pendentes[0]:
                     raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
                 # o SRP pode trazer valor no campo (Base 250.00 e Aliquota .0000 no ICMS S/ TRANSFERENCIA, 24/11/2026)
-                self.limpar_campo(coluna, 20)
+                self.limpar_campo(coluna, 12)  # 20 Backspace a 0,03 s = 0,6 s por campo; 12 cobre 1234567.89
                 self.digitar(valores[coluna], coluna)
                 pendentes.remove(coluna)
         if pendentes:
@@ -1544,11 +1562,20 @@ class Execucao0236:
         ret = self.janela.rectangle()
         self.checar_parada()
         self.devagar("clicar em Tributos OK")
+        # com a barra azul da janela Rateios na tela, o fechamento e conferido por ela (~0,07 s por consulta) em vez de
+        # procurar o botao pelo OCR a cada 0,3 s (24/11/2026: ~1,2 s depois do clique)
+        com_barra = bool(barras_dialogo(core.capturar(self.janela)))
         clicar(ret.left + (botao[0] + botao[2]) / 2, ret.top + (botao[1] + botao[3]) / 2)
         self.registrar(f"  linha {r['linha']}: clique em Tributos OK", mostrar=False)
         prazo = time.time() + 2 * self.render
         while time.time() < prazo:
             self.checar_parada()
+            if com_barra:
+                time.sleep(0.1)
+                if not barras_dialogo(core.capturar(self.janela)):
+                    time.sleep(0.1)
+                    return foco_tela(self.janela)
+                continue
             time.sleep(0.3)
             if not self.achar_botao("tributos_ok", rateio["tributos_ok"]):
                 time.sleep(0.3)
@@ -1635,22 +1662,29 @@ class Execucao0236:
 
     def esperar_janela(self, antes, limite):
         """Depois do 1o Integrar sem janela na tela: espera ate `limite` s uma barra azul de janela (`barras_dialogo`,
-        ~0,07 s por consulta) ou a tela mudar e parar de mudar. True = apareceu algo para ler; False = nada no prazo."""
-        inicio = time.time()
-        while time.time() - inicio < limite:
+        ~0,07 s por consulta) ou a tela mudar e parar de mudar; a cada `LER_JANELA_A_CADA` s (e no fim do prazo) le a
+        tela inteira, para a janela sem barra azul (outra resolucao). True = apareceu algo para ler; False = nada."""
+        inicio = ultima = time.time()
+        while True:
             self.checar_parada()
             agora = core.capturar(self.janela)
+            passou = time.time() - inicio
             if barras_dialogo(agora):
-                self.registrar(f"  janela apareceu {time.time() - inicio:.1f}s depois da leitura do Integrar", mostrar=False)
+                self.registrar(f"  janela apareceu {passou:.1f}s depois do clique no Integrar", mostrar=False)
                 return True
             if tela_mudou(antes, agora, PIXELS_JANELA):
                 self.esperar_tela(antes, self.render)
-                self.registrar(f"  a tela mudou {time.time() - inicio:.1f}s depois da leitura do Integrar (sem barra azul)",
-                               mostrar=False)
+                self.registrar(f"  a tela mudou {passou:.1f}s depois do clique no Integrar (sem barra azul)", mostrar=False)
                 return True
+            if time.time() - ultima >= min(LER_JANELA_A_CADA, limite) or passou >= limite:
+                ultima = time.time()
+                if janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(agora, self.tesseract)))):
+                    self.registrar(f"  janela lida na tela inteira {passou:.1f}s depois do clique (sem barra azul)", mostrar=False)
+                    return True
+            if passou >= limite:
+                self.registrar(f"  nenhuma janela em {limite}s depois do Integrar: sigo com os Enter", mostrar=False)
+                return False
             time.sleep(0.2)
-        self.registrar(f"  nenhuma janela em {limite}s depois do Integrar: sigo com os Enter", mostrar=False)
-        return False
 
     def esperar_tela(self, antes, limite):
         """Espera a tela mudar em relacao a `antes` e parar de mudar (janela terminou de abrir/fechar), no maximo
@@ -1723,7 +1757,10 @@ class Execucao0236:
             if barras:
                 area = area_dialogo(imagem, barras)
                 janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), self.tesseract))))
-            if not janelas and (barras or not self.confia_barra or desde_clique == 0 or esperas >= LEITURAS_AVISO - 1):
+            # logo depois do 1o clique, sem barra: nada de ler a tela inteira ja (1,3 s; a janela costuma vir depois):
+            # `esperar_janela` olha a barra e le a tela inteira de vez em quando
+            primeira = desde_clique == 0 and (cliques > 1 or esperou_janela)
+            if not janelas and (barras or not self.confia_barra or primeira or esperas >= LEITURAS_AVISO - 1):
                 area = (0, 0, imagem.width, imagem.height)
                 janelas = janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(imagem, self.tesseract))))
                 if janelas and not barras and self.confia_barra:
@@ -1839,7 +1876,7 @@ class Execucao0236:
         self.confia_barra = True  # a barra azul achou todas as janelas ate agora (senao le sempre a tela inteira)
         self.atual = []  # linhas marcadas 'executando'
         self.serie_com_ponto_feita = False  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
-        self.sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor nesta execucao: ali a espera e curta
+        self.sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor (tambem nas anteriores): espera curta
 
 
         try:
@@ -1851,6 +1888,9 @@ class Execucao0236:
             self.rateio_salvo = ler_posicoes(self.tamanho)  # da execucao anterior: a 1a nota tambem nao le a tela inteira
             if self.rateio_salvo:
                 self.registrar("  posições do Rateio da execução anterior (mesmo tamanho de janela)", mostrar=False)
+            self.sem_cor_visto = ler_sem_cor(self.tamanho)
+            if self.sem_cor_visto:
+                self.registrar(f"  campos sem cor das execuções anteriores: {sorted(self.sem_cor_visto)}", mostrar=False)
             self.aviso(f"Clique no campo Chave Acesso NF-e. Iniciando em {self.espera}s (mouse no canto superior esquerdo aborta).")
             inicio = time.time()
             tela = core.capturar(self.janela)

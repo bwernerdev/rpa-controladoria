@@ -688,17 +688,17 @@ class NatOper(unittest.TestCase):
         self.assertFalse([n for n in a if n.startswith("natoper")])  # o Nat Oper que o SRP trouxe fica
         self.assertEqual(a["t114ident0"], "0")  # linha ICMS TERCEIROS, como antes
 
-    def test_janela_natureza_de_operacao_clica_ok(self):
+    def test_janela_natureza_de_operacao_fecha_com_enter(self):
         """Enter depois do 1949 abre a lista "Natureza de Operacao" com o cursor parado no Nat Oper (print de 24/11/2026):
-        OK clicado, Enter ate o Qtd.Fiscal."""
+        Enter na lista (= OK; no SRP real o OK nunca foi lido pelo OCR), Enter ate o Qtd.Fiscal."""
         srp = self.srp_542()
         srp.lov_natoper = True
         with ambiente(srp, palavras=PALAVRAS_542) as pasta:
             codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542"), item("900266", oper="542")])])
             log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
-        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (2, 0), avisos)
-        self.assertIn("Natureza de Operacao: cliquei em OK", log)
+        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (0, 2), avisos)
+        self.assertIn("Natureza de Operacao: dei Enter", log)
         a = srp.integradas[0]
         self.assertEqual((a["natoper0"], a["qtd0"], a["natoper1"], a["qtd1"]), ("1949", "2", "1949", "2"))
 
@@ -708,7 +708,7 @@ class NatOper(unittest.TestCase):
         with ambiente(srp, palavras=PALAVRAS_542):
             codigo, avisos, _ = rodar(srp, [nota(self.SP, [item("900135", oper="542")])])
         self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
-        self.assertEqual(srp.oks_natureza, 1)
+        self.assertEqual(srp.enters_natureza, 1)
         self.assertEqual((srp.integradas[0]["natoper0"], srp.integradas[0]["qtd0"]), ("2949", "2"))
 
     def test_janela_natureza_sem_o_ok_lido_fecha_com_enter(self):
@@ -1113,6 +1113,27 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(len(srp.integradas), 2)
         self.assertEqual(esperas.count(snac0236.SEM_COR_CONHECIDO), 2)  # so na 2a nota, nos 2 campos sem cor
 
+    def test_campo_sem_cor_lembrado_na_execucao_seguinte(self):
+        """24/11/2026: com 1 nota por execucao os campos sem cor custavam 1,2 s cada; o 2o Enter ja espera pouco."""
+        esperas, original = [], snac0236.aguardar
+
+        def aguardar(*a, **k):
+            esperas.append(k.get("sem_cor", snac0236.SEM_COR))
+            return original(*a, **k)
+        srp = SRP0236(sem_cor={10, 11})
+        with ambiente(srp) as pasta, mock.patch.object(snac0236, "aguardar", aguardar):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            self.assertEqual(codigo, 0, avisos)
+            self.assertEqual(esperas.count(snac0236.SEM_COR_CONHECIDO), 0)
+            self.assertEqual(len(json.loads((pasta / "posicoes_0236.json").read_text())["sem_cor"]), 2)
+            salvo = (pasta / "posicoes_0236.json").read_text()
+        srp2 = SRP0236(sem_cor={10, 11})  # outra execucao com o mesmo posicoes_0236.json
+        with ambiente(srp2) as pasta2, mock.patch.object(snac0236, "aguardar", aguardar):
+            (pasta2 / "posicoes_0236.json").write_text(salvo)
+            codigo, avisos, _ = rodar(srp2, [nota(CHAVE_B, [item("900266")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(esperas.count(snac0236.SEM_COR_CONHECIDO), 2)  # os 2 campos sem cor da 1a execucao
+
     def test_srp_lento_no_enter_espera_mais_antes_de_pausar(self):
         srp = SRP0236()
         srp.lento = {"icms": 0.45}  # mais que o render (0,3 s nos testes), menos que 2 vezes
@@ -1184,7 +1205,9 @@ class Fluxo(unittest.TestCase):
             log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual(codigo, 0, avisos)
         self.assertEqual(srp.reintegrou, 1)
-        self.assertEqual(log.count("tela inteira, janelas=[]"), 1)  # so a 1a leitura depois do 1o clique
+        # logo depois do 1o clique nao le a tela inteira: espera a janela (que le a tela inteira so no fim do prazo)
+        self.assertEqual(log.count("tela inteira, janelas=[]"), 0)
+        self.assertIn("nenhuma janela em", log)
         self.assertGreaterEqual(log.count("nao li (nenhuma barra de janela)"), 7)
 
     def test_cliques_que_nao_andam_seguem_com_enter(self):
