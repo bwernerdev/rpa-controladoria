@@ -700,6 +700,21 @@ def ler_sem_cor(tamanho):
     return set()
 
 
+def ler_ok_referencia(tamanho):
+    """{area da janela NF de referencia: botao OK (coordenadas da area)} salvos para a janela do Citrix deste tamanho."""
+    try:
+        dados = json.loads(arquivo_posicoes().read_text(encoding="utf-8"))
+        if tuple(dados.get("janela", ())) == tuple(tamanho):
+            return {tuple(int(v) for v in x[:4]): tuple(int(v) for v in x[4:8]) for x in dados.get("ok_referencia", [])}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return {}
+
+
+def gravar_ok_referencia(tamanho, salvos):
+    _gravar_no_arquivo_posicoes(tamanho, "ok_referencia", [list(area) + list(botao) for area, botao in salvos.items()])
+
+
 def gravar_sem_cor(tamanho, vistos):
     _gravar_no_arquivo_posicoes(tamanho, "sem_cor", sorted([campo, vez] for campo, vez in vistos))
 
@@ -1255,13 +1270,31 @@ class Execucao0236:
 
     def fechar_referencia(self, imagem, area):
         """Janela "Nota fiscal de referencia do faturamento": so OK, sem ler a nota (usuario, 05/11/2026). Clique no
-        botao OK; sem o botao lido, Enter ate a janela fechar (o Enter atravessa a grade e chega no OK), no maximo 8."""
+        botao OK; sem o botao lido, Enter ate a janela fechar (o Enter atravessa a grade e chega no OK), no maximo 8.
+        A posicao do OK fica guardada pela area da janela (`ok_referencia`, tambem no `posicoes_0236.json`): na mesma
+        area clica sem o OCR do botao (~1 s, 24/11/2026) e confere que a janela fechou; nao fechou = le o botao."""
+        ret = self.janela.rectangle()
+        salvo = self.ok_referencia.get(tuple(area))
+        if salvo:
+            self.devagar("clicar em OK na 'Nota Fiscal de Referência'")
+            clicar(ret.left + area[0] + (salvo[0] + salvo[2]) / 2, ret.top + area[1] + (salvo[1] + salvo[3]) / 2)
+            prazo = time.time() + self.render
+            while time.time() < prazo:
+                self.checar_parada()
+                agora = core.capturar(self.janela)
+                if not barras_dialogo(agora) or tela_mudou(imagem, agora, PIXELS_JANELA):
+                    self.registrar("  NF de referência: cliquei em OK (posição guardada)", mostrar=False)
+                    return
+                time.sleep(0.05)
+            self.registrar("  NF de referência: o clique na posição guardada não fechou a janela; leio o botão", mostrar=False)
+            imagem = core.capturar(self.janela)
         botao = botao_referencia(imagem, area, self.tesseract)
         if botao:
             self.devagar("clicar em OK na 'Nota Fiscal de Referência'")
-            ret = self.janela.rectangle()
             clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
             self.registrar("  NF de referência: cliquei em OK", mostrar=False)
+            self.ok_referencia[tuple(area)] = tuple(botao)
+            gravar_ok_referencia(self.tamanho, self.ok_referencia)
             return
         self.registrar("  NF de referência: não li o botão OK; Enter até a janela fechar", mostrar=False)
         for vez in range(8):
@@ -1642,8 +1675,12 @@ class Execucao0236:
         return achado
 
     def clicar_integrar(self, nota, vez):
-        """Clica em Integrar se o botao estiver a vista (confere de novo pelo OCR antes de clicar). True = clicou."""
-        botao = self.localizar_integrar()
+        """Clica em Integrar. Com o botao lido no inicio e nenhuma janela por cima (barra azul), clica ali sem novo OCR
+        (~0,7 s): nos logs de novembro, 242 cliques, o botao achado de novo sempre estava no mesmo lugar do inicio.
+        Senao confere pelo OCR antes de clicar. True = clicou."""
+        botao = self.rotulos.get("integrar")
+        if not botao or barras_dialogo(core.capturar(self.janela)):
+            botao = self.localizar_integrar()
         if not botao:
             return False
         ret = self.janela.rectangle()
@@ -1662,8 +1699,10 @@ class Execucao0236:
 
     def esperar_janela(self, antes, limite):
         """Depois do 1o Integrar sem janela na tela: espera ate `limite` s uma barra azul de janela (`barras_dialogo`,
-        ~0,07 s por consulta) ou a tela mudar e parar de mudar; a cada `LER_JANELA_A_CADA` s (e no fim do prazo) le a
-        tela inteira, para a janela sem barra azul (outra resolucao). True = apareceu algo para ler; False = nada."""
+        ~0,07 s por consulta) ou uma janela conhecida lida na tela inteira (sem barra azul, outra resolucao): a cada
+        `LER_JANELA_A_CADA` s, logo que a tela muda e no fim do prazo. A tela mudar sem janela nao basta (24/11/2026
+        15:14: mudou 1,3 s depois do clique, sem janela; o robo voltou aos 7 Enter e nao viu o "Integrado com Sucesso").
+        True = janela para ler; False = nada no prazo."""
         inicio = ultima = time.time()
         while True:
             self.checar_parada()
@@ -1672,11 +1711,11 @@ class Execucao0236:
             if barras_dialogo(agora):
                 self.registrar(f"  janela apareceu {passou:.1f}s depois do clique no Integrar", mostrar=False)
                 return True
-            if tela_mudou(antes, agora, PIXELS_JANELA):
-                self.esperar_tela(antes, self.render)
-                self.registrar(f"  a tela mudou {passou:.1f}s depois do clique no Integrar (sem barra azul)", mostrar=False)
-                return True
-            if time.time() - ultima >= min(LER_JANELA_A_CADA, limite) or passou >= limite:
+            mudou = tela_mudou(antes, agora, PIXELS_JANELA)
+            if mudou:
+                antes = agora  # a proxima leitura so quando mudar de novo (ou no tempo)
+                self.registrar(f"  a tela mudou {passou:.1f}s depois do clique no Integrar, sem barra azul: leio", mostrar=False)
+            if mudou or time.time() - ultima >= min(LER_JANELA_A_CADA, limite) or passou >= limite:
                 ultima = time.time()
                 if janelas_no_texto(normalizar(" ".join(p[0] for p in core.palavras_tela(agora, self.tesseract)))):
                     self.registrar(f"  janela lida na tela inteira {passou:.1f}s depois do clique (sem barra azul)", mostrar=False)
@@ -1877,6 +1916,7 @@ class Execucao0236:
         self.atual = []  # linhas marcadas 'executando'
         self.serie_com_ponto_feita = False  # nesta nota o robo ja pos "." na Serie (janela "ja existe")
         self.sem_cor_visto = set()  # (campo, Enter) em que o foco ficou sem cor (tambem nas anteriores): espera curta
+        self.ok_referencia = {}  # area da janela NF de referencia -> botao OK (lido uma vez)
 
 
         try:
@@ -1889,6 +1929,7 @@ class Execucao0236:
             if self.rateio_salvo:
                 self.registrar("  posições do Rateio da execução anterior (mesmo tamanho de janela)", mostrar=False)
             self.sem_cor_visto = ler_sem_cor(self.tamanho)
+            self.ok_referencia = ler_ok_referencia(self.tamanho)
             if self.sem_cor_visto:
                 self.registrar(f"  campos sem cor das execuções anteriores: {sorted(self.sem_cor_visto)}", mostrar=False)
             self.aviso(f"Clique no campo Chave Acesso NF-e. Iniciando em {self.espera}s (mouse no canto superior esquerdo aborta).")

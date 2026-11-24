@@ -109,6 +109,7 @@ class SRP0236:
         self.cliques_chave, self.avisos_no_1o, self.enter_no_ltcc = 0, False, 0
         # janelas do 1o Integrar escondidas nas primeiras `atraso_janela` consultas da barra (SRP lento, 24/11/2026)
         self.atraso_janela, self.escondida, self.enters_escondida = 0, 0, 0
+        self.muda_sem_janela, self.cor_extra = False, 0  # a tela muda sem janela antes dela aparecer (24/11/2026 15:14)
         self.ignora_cliques = False  # cliques no Item e no Ident Tributo que nao mudam o foco
         self.clique_item_passa = False  # o foco passa por outro campo antes de chegar no Item (SRP real, 04/11 19:20)
         self.cliques_item, self.cliques_ident, self.enters = 0, 0, 0
@@ -187,7 +188,7 @@ class SRP0236:
 
     def captura(self, _janela=None):
         """Tela muda a cada campo (no SRP real a grade rola ao entrar no Valor Unit)."""
-        return Image.new("RGB", (1600, 900), ((self.indice * 97) % 256,) * 3)
+        return Image.new("RGB", (1600, 900), ((self.indice * 97 + self.cor_extra) % 256,) * 3)
 
     def tela(self, _janela=None, _fixos=(), _imagem=None):
         return self.caixa(), self.alerta
@@ -212,6 +213,8 @@ class SRP0236:
         self.leituras += 1
         if self.escondida:
             self.escondida -= 1
+            if self.muda_sem_janela and self.escondida == self.atraso_janela - 3:
+                self.cor_extra = 50
             return []
         # a janela Rateios tambem tem barra azul (24/11/2026): o robo so le a tela procurando o Rateio com ela
         aberta = self.janela_por_cima() or (self.rateio_aberto() and not self.rateio_sem_barra)
@@ -1187,6 +1190,32 @@ class Fluxo(unittest.TestCase):
         self.assertEqual((srp.ok_referencia, srp.enters_referencia), (1, 0))  # OK clicado, nenhum Enter na grade dela
         self.assertIn("NF de referencia: cliquei em OK", log)
         self.assertEqual(srp.integradas[0]["item0"], "900135")
+
+    def test_tela_muda_sem_janela_depois_do_integrar_continua_esperando(self):
+        """24/11/2026 15:14: a tela mudou 1,3 s depois do clique sem janela; o robo voltou aos 7 Enter e nao viu o
+        sucesso. A tela mudar so faz ler a tela inteira; a espera continua ate a janela."""
+        srp = SRP0236()
+        srp.avisos_no_1o, srp.atraso_janela, srp.muda_sem_janela = True, 40, True
+        with ambiente(srp) as pasta, mock.patch.object(snac0236, "ESPERA_JANELA_INTEGRAR", 5):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual(codigo, 0, avisos)
+        self.assertIn("a tela mudou", log)
+        self.assertEqual((srp.enters_escondida, srp.reintegrou, srp.sucessos), (0, 0, 1))
+
+    def test_ok_da_nf_referencia_na_posicao_guardada(self):
+        srp = SRP0236()
+        srp.ref_no_caminho = 4
+        notas = [nota(CHAVE_A, [item("900135")]), nota(CHAVE_B, [item("900266")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, notas)
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+            salvo = json.loads((pasta / "posicoes_0236.json").read_text())
+        self.assertEqual((codigo, len(srp.integradas)), (0, 2), avisos)
+        self.assertEqual((srp.ok_referencia, srp.enters_referencia), (2, 0))
+        self.assertEqual(log.count("NF de referencia: cliquei em OK (posicao guardada)"), 1)  # a 2a nota, sem o OCR
+        self.assertEqual(len(salvo["ok_referencia"]), 1)
 
     def test_nf_referencia_no_caminho_sem_o_ok_lido(self):
         srp = SRP0236()
