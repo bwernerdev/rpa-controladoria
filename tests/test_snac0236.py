@@ -52,6 +52,12 @@ REFERENCIA = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
     ("030", 400, 520, 30, 12), ("00765", 450, 520, 50, 12), ("0000087445", 520, 520, 90, 12), ("1", 630, 520, 10, 12),
     ("99999", 660, 520, 50, 12), ("1", 730, 520, 10, 12), ("OK", 700, 760, 20, 12)]
 BOTAO_OK_REF = (700, 760, 720, 772)
+# lista "Natureza de Operacao" que o SRP abre depois do Nat Oper digitado (print de 24/11/2026)
+NATUREZA = [("Natureza", 260, 410, 70, 12), ("de", 335, 410, 20, 12), ("Operação", 360, 410, 70, 12),
+            ("Find", 260, 450, 35, 12), ("1949%", 300, 450, 50, 12), ("Cód.", 260, 480, 35, 12), ("Descrição", 400, 480, 70, 12),
+            ("1949", 260, 500, 40, 12), ("OUTRAS", 400, 500, 60, 12), ("ENTRADAS", 465, 500, 80, 12),
+            ("Find", 600, 700, 35, 12), ("OK", 700, 700, 20, 12), ("Cancel", 760, 700, 50, 12)]
+BOTAO_OK_NAT = (700, 700, 720, 712)
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate(["Documento", "Integrado", "com", "Sucesso."])]
 BOTAO_AJUSTAR = (800, 700, 860, 712)
 JA_EXISTE = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
@@ -119,6 +125,10 @@ class SRP0236:
         # campo em que o SRP so processa o Enter depois de `lento[campo]` s; campo em que o Enter abre uma janela
         # qualquer (palavras) e o foco fica parado (09/11/2026: Enter depois do ICMS parado 4,5 s)
         self.lento, self.janela_no_enter, self.janela_extra = {}, {}, None
+        # lista "Natureza de Operacao" no Enter depois do Nat Oper digitado (24/11/2026): o foco fica no Nat Oper por
+        # tras; OK (ou Enter) fecha. `lov_desce`: o OK ja leva ao Qtd.Fiscal; `sem_ok_nat`: o OCR nao le o OK
+        self.lov_natoper, self.natureza, self.lov_desce, self.sem_ok_nat = False, False, False, False
+        self.oks_natureza, self.enters_natureza, self.lov_vista = 0, 0, set()
 
     def campos(self):
         cab = (["chave", None, None, "serie", None, "filial1", "filial2", None] + [None] * self.extras_filial + ["data"] + [None] * 6
@@ -172,11 +182,12 @@ class SRP0236:
         return self.caixa(), self.alerta
 
     def janela_por_cima(self):
-        return (self.janela_extra or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo
+        return (self.janela_extra or self.natureza or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo
                 or self.ltcc or self.sucesso)
 
     def palavras_janelas(self):
         return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else [])
+                + ([p for p in NATUREZA if not (self.sem_ok_nat and p[0] == "OK")] if self.natureza else [])
                 + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
                 + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else [])
                 + (RESUMO if self.resumo else []) + (LTCC if self.ltcc else [])
@@ -197,6 +208,15 @@ class SRP0236:
         with self.lock:
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
+            if texto == "{ENTER}" and self.natureza:  # Enter na lista = OK na linha selecionada
+                self.natureza, self.enters_natureza = False, self.enters_natureza + 1
+                self.indice += 1 if self.lov_desce else 0
+                return
+            if texto == "{ENTER}" and base == "natoper" and self.lov_natoper and nome in self.atual and nome not in self.lov_vista:
+                self.enters += 1
+                self.natureza = True  # o cursor fica no Nat Oper; depois do OK o valor vale e o Enter segue
+                self.lov_vista.add(nome)
+                return
             if texto == "{ENTER}" and self.ja_existe:  # OK: o foco fica na Chave
                 self.ja_existe, self.ok_existe = False, self.ok_existe + 1
                 return
@@ -277,6 +297,10 @@ class SRP0236:
             chave = CAIXAS["chave"]
             if chave[0] <= x <= chave[2] and chave[1] <= y <= chave[3]:  # clique no campo Chave Acesso NF-e
                 self.indice, self.cliques_chave = 0, self.cliques_chave + 1
+                return
+            if self.natureza and BOTAO_OK_NAT[0] <= x <= BOTAO_OK_NAT[2] and BOTAO_OK_NAT[1] <= y <= BOTAO_OK_NAT[3]:
+                self.natureza, self.oks_natureza = False, self.oks_natureza + 1
+                self.indice += 1 if self.lov_desce else 0
                 return
             if self.referencia and BOTAO_OK_REF[0] <= x <= BOTAO_OK_REF[2] and BOTAO_OK_REF[1] <= y <= BOTAO_OK_REF[3]:
                 self.referencia, self.ok_referencia = False, self.ok_referencia + 1
@@ -623,6 +647,56 @@ class NatOper(unittest.TestCase):
         self.assertNotIn("natoper1", a)  # OPER 5101: o Nat Oper que o SRP trouxe fica
         self.assertEqual((a["oper1"], a["qtd1"]), ("5101", "2"))
         self.assertEqual((b["natoper0"], b["qtd0"]), ("2949", "2"))
+
+    def test_janela_natureza_de_operacao_clica_ok(self):
+        """Enter depois do 1949 abre a lista "Natureza de Operacao" com o cursor parado no Nat Oper (print de 24/11/2026):
+        OK clicado, Enter ate o Qtd.Fiscal. Item de outra operacao nao abre a janela."""
+        srp = SRP0236()
+        srp.lov_natoper = True
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542"), item("900266", oper="5101")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (1, 0), avisos)
+        self.assertIn("Natureza de Operacao: cliquei em OK", log)
+        self.assertEqual(len(srp.integradas), 1, avisos)
+        a = srp.integradas[0]
+        self.assertEqual((a["natoper0"], a["qtd0"], a["qtd1"]), ("1949", "2", "2"))
+        self.assertNotIn("natoper1", a)
+
+    def test_janela_natureza_ok_ja_desce_para_o_qtd(self):
+        srp = SRP0236()
+        srp.lov_natoper, srp.lov_desce = True, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(self.SP, [item("900135", oper="542")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(srp.oks_natureza, 1)
+        self.assertEqual((srp.integradas[0]["natoper0"], srp.integradas[0]["qtd0"]), ("2949", "2"))
+
+    def test_janela_natureza_sem_o_ok_lido_fecha_com_enter(self):
+        srp = SRP0236()
+        srp.lov_natoper, srp.sem_ok_nat = True, True
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual((srp.oks_natureza, srp.enters_natureza), (0, 1))
+        self.assertEqual(srp.integradas[0]["qtd0"], "2")
+
+    def test_outra_janela_depois_do_nat_oper_pausa(self):
+        srp = SRP0236()
+        srp.janela_no_enter = {"natoper": [("Erro", 300, 450, 40, 12), ("qualquer", 345, 450, 70, 12)]}
+        with ambiente(srp):
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])], com_continuar=False)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("apareceu uma janela do SRP depois do Nat Oper ('erro qualquer')" in a for a in avisos), avisos)
+        self.assertEqual(srp.integradas, [])
+
+    def test_rotulo_nat_oper_junto_do_dm(self):
+        palavras = [p for p in PALAVRAS if p[0] != "Oper"] + [("Oper", 990, 400, 30, 12), ("DM", 1022, 400, 12, 12)]
+        rotulos = snac0236.localizar_rotulos(palavras)
+        self.assertEqual(rotulos["nat_oper"][:3], (990, 400, 1034))
+        self.assertTrue(snac0236.posicao_ok("nat_oper", (975, 430, 1035, 442), rotulos))
+        self.assertTrue(snac0236.natureza_operacao(snac0236.normalizar("Natureza de Operação Find 1949% Cód. Descrição")))
 
 
 class Logs(unittest.TestCase):

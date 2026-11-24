@@ -383,7 +383,8 @@ def localizar_rotulos(palavras):
     grade = {
         "item": lambda t: t in ("item", "tem", "ltem", "1tem"),
         "oper": lambda t: t == "spm" or t.endswith(" spm"),
-        "nat_oper": lambda t: t == "oper" or t.startswith("nat oper"),  # "Nat" em cima, "Oper" na linha de baixo
+        # "Nat" em cima, "Oper" na linha de baixo; o "DM" ao lado pode vir junto ("oper dm"; print de 24/11/2026)
+        "nat_oper": lambda t: (t.split()[:1] == ["oper"] and "spm" not in t) or t.startswith("nat oper"),
         "qtd": lambda t: "fiscal" in t and "td" in t and "unit" not in t,
         "unit": lambda t: "unitario" in t,
     }
@@ -779,6 +780,13 @@ def botao_referencia(imagem, area, tesseract):
     return botao_ok_referencia(frases(core.palavras_tela(binarizar(imagem.crop(area)), tesseract)))
 
 
+def natureza_operacao(texto):
+    """Janela "Natureza de Operacao" (lista de valores do SRP: Find "1949%", Cod./Descricao, [Find] [OK] [Cancel]) que
+    abre no Enter depois do Nat Oper digitado, com o cursor parado no Nat Oper por tras (print de 24/11/2026: dois 1949
+    "OUTRAS ENTRADAS NAO ESPECIFICADAS"). O robo clica em OK (fica a linha ja selecionada) e segue (usuario, 24/11/2026)."""
+    return "natureza" in texto or "outras entradas" in texto or ("find" in texto and "descri" in texto and "cancel" in texto)
+
+
 def integrado_com_sucesso(texto):
     """Aviso final "Documento Integrado com Sucesso. [OK]": o robo da Enter."""
     return "integrado com sucesso" in texto
@@ -1112,6 +1120,73 @@ class Execucao0236:
                     self.registrar(f"  {NOME[alvo]}: cheguei com {vez + 1} Enter (previstos {quantos})", mostrar=False)
                 return foco
         raise Travou(alvo, f"não cheguei no campo {NOME[alvo]} com {limite} Enter depois do {NOME[campo]}{self.local(foco)}")
+
+    def sair_do_nat_oper(self, foco, quantos):
+        """Enter depois do Nat Oper digitado (so na OPER SPM 542). O SRP pode abrir a janela "Natureza de Operacao" (lista
+        de valores) e o ciano fica parado no Nat Oper por tras dela: por isso aqui se olha a barra azul de janela a cada
+        captura, em vez do `aguardar` (que so esperaria o foco andar). Janela: `fechar_natureza` (OK). Depois, se o foco
+        ficou no Nat Oper, Enter ate o Qtd.Fiscal (`ir_ate`); se andou, o laco dos itens confere a coluna."""
+        self.checar_parada()
+        self.devagar(f"Enter depois do {NOME['nat_oper']} (pode abrir a janela 'Natureza de Operação')")
+        core.send_keys("{ENTER}", pause=0.03)
+        prazo = time.time() + self.render
+        while True:
+            self.checar_parada()
+            imagem = core.capturar(self.janela)
+            barras = barras_dialogo(imagem)
+            if barras:
+                time.sleep(0.3)  # a janela termina de desenhar antes do OCR
+                imagem = core.capturar(self.janela)
+                self.fechar_natureza(imagem, area_dialogo(imagem, barras_dialogo(imagem) or barras))
+                break
+            atual, aviso = ler_estado(self.janela, self.fixos, imagem)
+            if aviso:
+                raise Travou("nat_oper", f"apareceu um aviso do SRP no Enter depois do Nat Oper{self.diagnostico('nat_oper')}")
+            if atual and (abs(atual[0] - foco[0]) > 5 or abs(atual[1] - foco[1]) > 5):
+                self.registrar(f"  Enter depois do Nat Oper: sem janela, foco={atual}", mostrar=False)
+                return atual
+            if time.time() >= prazo:
+                raise Travou("nat_oper", "o cursor não saiu do Nat Oper e nenhuma janela abriu depois do Enter"
+                             + self.diagnostico("nat_oper"))
+            time.sleep(0.05)
+        novo, prazo = None, time.time() + self.render  # janela fechada: onde o foco ficou
+        while novo is None and time.time() < prazo:
+            self.checar_parada()
+            novo = ler_estado(self.janela, self.fixos)[0]
+            if novo is None:
+                time.sleep(0.05)
+        if novo is None:
+            raise Travou("nat_oper", "depois do OK na 'Natureza de Operação' o cursor ficou num campo sem cor")
+        if abs(novo[0] - foco[0]) <= 5 and abs(novo[1] - foco[1]) <= 5:  # ainda no Nat Oper
+            return self.ir_ate("nat_oper", "qtd", quantos, novo, anterior=novo)
+        self.registrar(f"  depois do OK na 'Natureza de Operação' o foco andou: {novo}", mostrar=False)
+        return novo
+
+    def fechar_natureza(self, imagem, area):
+        """Janela "Natureza de Operacao" depois do Nat Oper: confere o texto (outra janela = pausa) e clica em OK; sem o
+        botao lido, Enter (na lista de valores o Enter escolhe a linha selecionada, como o OK). Espera a janela fechar."""
+        if not self.tesseract:
+            raise Travou("nat_oper", "abriu uma janela depois do Nat Oper e sem o OCR não sei qual é")
+        texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area), self.tesseract)))
+        if not natureza_operacao(texto):
+            raise Travou("nat_oper", f"apareceu uma janela do SRP depois do Nat Oper ('{texto[:80]}')"
+                         + self.diagnostico("nat_oper"))
+        botao = botao_referencia(imagem, area, self.tesseract)
+        if botao:
+            self.devagar("clicar em OK na 'Natureza de Operação'")
+            ret = self.janela.rectangle()
+            clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
+            self.registrar("  Natureza de Operação: cliquei em OK", mostrar=False)
+        else:
+            self.devagar("Enter na 'Natureza de Operação' (não li o botão OK)")
+            core.send_keys("{ENTER}", pause=0.03)
+            self.registrar("  Natureza de Operação: não li o botão OK; dei Enter", mostrar=False)
+        prazo = time.time() + self.render
+        while barras_dialogo(core.capturar(self.janela)):
+            self.checar_parada()
+            if time.time() >= prazo:
+                raise Travou("nat_oper", "a janela 'Natureza de Operação' não fechou depois do OK" + self.diagnostico("nat_oper"))
+            time.sleep(0.05)
 
     def fechar_referencia(self, imagem, area):
         """Janela "Nota fiscal de referencia do faturamento": so OK, sem ler a nota (usuario, 05/11/2026). Clique no
@@ -1783,7 +1858,9 @@ class Execucao0236:
                             else:  # outra operacao: segue para o Qtd.Fiscal sem mexer no Nat Oper
                                 self.devagar(f"{NOME[campo]} fica como o SRP trouxe (OPER SPM {r['oper']})")
                             alvo = SEQ_ITEM[posicao + 1][0] if posicao + 1 < len(SEQ_ITEM) else None
-                            if alvo in ("oper", "nat_oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
+                            if campo == "nat_oper" and r[campo]:  # digitado: pode abrir a janela "Natureza de Operacao"
+                                foco = self.sair_do_nat_oper(foco, quantos)
+                            elif alvo in ("oper", "nat_oper", "qtd"):  # colunas visiveis no inicio: Enter ate a coluna certa
                                 foco = self.ir_ate(campo, alvo, quantos, foco, anterior=foco)
                             elif alvo is None:  # Valor do ICMS: Enter ate a linha ICMS TERCEIROS do Rateio
                                 foco = self.preencher_rateio(r, foco)
