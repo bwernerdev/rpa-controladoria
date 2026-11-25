@@ -133,6 +133,13 @@ class Tela(unittest.TestCase):
         self.assertEqual(core.qual_coluna((656, 503, 740, 514), CENTROS), "quantidade")
         self.assertIsNone(core.qual_coluna((1200, 503, 1250, 514), CENTROS))
 
+    def test_item_sem_cabecalho_lido(self):
+        sem_item = {"quantidade": 698.5, "custo": 445.0, "conta": 496.0}  # log de 25/11/2026: OCR nao leu "Item"
+        self.assertEqual(core.qual_coluna((44, 522, 118, 533), sem_item), "item")
+        self.assertEqual(core.proximo_campo("quantidade", (656, 503, 740, 514), (44, 522, 118, 533), sem_item), "fim")
+        self.assertEqual(core.qual_coluna((424, 503, 466, 514), sem_item), "custo")
+        self.assertIsNone(core.qual_coluna((1200, 503, 1250, 514), sem_item))
+
     def test_conta_pelo_vao(self):
         custo = (424, 503, 466, 514)
         self.assertTrue(core.conta_editavel(custo, (475, 503, 499, 514)))

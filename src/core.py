@@ -466,8 +466,14 @@ def localizar_colunas(imagem, tesseract):
 def qual_coluna(caixa, colunas):
     """Nome da coluna cujo centro do cabecalho fica mais perto do centro da caixa em foco (None se nenhuma servir)."""
     centro = (caixa[0] + caixa[2]) / 2
+    tolerancia = max(40, caixa[2] - caixa[0])
     nome, x = min(colunas.items(), key=lambda item: abs(item[1] - centro))
-    return nome if abs(x - centro) <= max(40, caixa[2] - caixa[0]) else None
+    if abs(x - centro) <= tolerancia:
+        return nome
+    # "Item" nem sempre sai no OCR (25/11/2026); e a 1a coluna da grade, entao foco bem a esquerda do C/Custo e o Item
+    if "item" not in colunas and "custo" in colunas and centro < colunas["custo"] - tolerancia:
+        return "item"
+    return None
 
 
 def conta_editavel(antes, depois):
