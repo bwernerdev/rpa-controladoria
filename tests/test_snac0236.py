@@ -1217,6 +1217,27 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(log.count("NF de referencia: cliquei em OK (posicao guardada)"), 1)  # a 2a nota, sem o OCR
         self.assertEqual(len(salvo["ok_referencia"]), 1)
 
+    def test_ok_da_nf_referencia_guardado_errado_le_o_botao(self):
+        """Posicao guardada que nao fecha a janela (o SRP mudou o botao de lugar): le o botao pelo OCR e corrige."""
+        srp = SRP0236()
+        srp.ref_no_caminho = 4
+        with ambiente(srp) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+            salvo = json.loads((pasta / "posicoes_0236.json").read_text())
+        self.assertEqual(codigo, 0, avisos)
+        certo = salvo["ok_referencia"][0][4:8]
+        salvo["ok_referencia"][0][4:8] = [0, 0, 2, 2]  # fora do OK
+        srp2 = SRP0236()
+        srp2.ref_no_caminho = 4
+        with ambiente(srp2) as pasta2:
+            (pasta2 / "posicoes_0236.json").write_text(json.dumps(salvo))
+            codigo, avisos, _ = rodar(srp2, [nota(CHAVE_B, [item("900266")])])
+            log = core.sem_acentos(next(pasta2.glob("*snac0236.log")).read_text(encoding="utf-8"))
+            corrigido = json.loads((pasta2 / "posicoes_0236.json").read_text())
+        self.assertEqual((codigo, len(srp2.integradas), srp2.ok_referencia), (0, 1, 1), avisos)
+        self.assertIn("o clique na posicao guardada nao fechou a janela; leio o botao", log)
+        self.assertEqual(corrigido["ok_referencia"][0][4:8], certo)
+
     def test_nf_referencia_no_caminho_sem_o_ok_lido(self):
         srp = SRP0236()
         srp.ref_no_caminho, srp.sem_ok_ref = 4, True
@@ -1401,10 +1422,13 @@ class Fluxo(unittest.TestCase):
 
     def test_sem_janela_depois_do_1o_integrar_espera_e_segue_com_os_enter(self):
         srp = SRP0236()  # nenhuma janela depois do 1o Integrar: espera o prazo, 7 Enter e Integrar de novo
-        with ambiente(srp) as pasta:
+        lidos = mock.patch.object(snac0236.Execucao0236, "localizar_integrar", autospec=True,
+                                  side_effect=snac0236.Execucao0236.localizar_integrar)
+        with ambiente(srp) as pasta, lidos as localizar:
             codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
             log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
         self.assertEqual((codigo, srp.reintegrou), (0, 1), avisos)
+        self.assertEqual(localizar.call_count, 1)  # so o 2o Integrar le o botao; o 1o usa o lido no inicio
         self.assertIn("nenhuma janela em", log)
 
     def test_rateio_sem_imposto(self):

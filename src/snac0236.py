@@ -1675,11 +1675,12 @@ class Execucao0236:
         return achado
 
     def clicar_integrar(self, nota, vez):
-        """Clica em Integrar. Com o botao lido no inicio e nenhuma janela por cima (barra azul), clica ali sem novo OCR
-        (~0,7 s): nos logs de novembro, 242 cliques, o botao achado de novo sempre estava no mesmo lugar do inicio.
-        Senao confere pelo OCR antes de clicar. True = clicou."""
+        """Clica em Integrar. No 1o clique, com o botao lido no inicio e nenhuma janela por cima (barra azul), clica ali
+        sem novo OCR (~0,7 s): nos logs de novembro, 242 cliques, o botao achado de novo sempre estava no mesmo lugar do
+        inicio. O 2o clique (depois dos 7 Enter) sempre confere pelo OCR: uma janela sem barra azul lida (outra
+        resolucao) pode ter ficado aberta, e o clique cego cairia nela. True = clicou."""
         botao = self.rotulos.get("integrar")
-        if not botao or barras_dialogo(core.capturar(self.janela)):
+        if vez > 1 or not botao or barras_dialogo(core.capturar(self.janela)):
             botao = self.localizar_integrar()
         if not botao:
             return False
