@@ -37,6 +37,9 @@ UF_SC = "42"
 OPER_COM_NAT = "542"
 NAT_DENTRO, NAT_FORA = "1949", "2949"
 TITULO_NAT_OPER = "NAT OPER"
+# coluna CD EMPRESA (opcional; usuario, 26/11/2026): preenchida, a OPER SPM sai dela e a coluna OPER SPM e ignorada
+TITULO_CD_EMPRESA = "CD EMPRESA"
+OPER_POR_EMPRESA = {"30": "542", "36": "536"}
 
 # (campo, quantos Enter depois de digitar). "filial1"/"filial2" = as duas partes da FILIAL FISCAL.
 ENTERS_FRETE_ITEM = 10  # Enter previstos do Frete ao Item da grade (Marcas, Observacoes, Cond. Pagamento, lista sem cor...)
@@ -70,6 +73,8 @@ def chave_coluna(titulo):
         return "icms_terceiro"
     if re.fullmatch(r"nat\.? ?oper\.?|natureza (de )?operacao", nome):  # coluna opcional (24/11/2026)
         return "nat_oper"
+    if nome == "cd empresa":  # coluna opcional (26/11/2026)
+        return "cd_empresa"
     if nome.startswith("aliquota"):  # "ALIQUOTA" (da linha ICMS TERCEIROS do Rateio; era BASE CALC. ICMS ate 05/11/2026)
         return "aliquota_icms"
     return COLUNAS.get(nome)
@@ -219,6 +224,11 @@ def ler_planilha(caminho):
             r[campo] = core.texto(bruto[campo])
             if r[campo] and not re.fullmatch(r"[0-9A-Za-z.\-]+", r[campo]):
                 problemas.append(f"{TITULOS[campo]} com caracteres invalidos: {r[campo]!r}")
+        empresa = core.texto(bruto.get("cd_empresa"))
+        if empresa:  # CD EMPRESA preenchido manda na OPER SPM (a da planilha e ignorada)
+            r["oper"] = OPER_POR_EMPRESA.get(empresa, "")
+            if not r["oper"]:
+                problemas.append(f"{TITULO_CD_EMPRESA} {empresa!r} sem OPER SPM definida (30 = 542, 36 = 536)")
         erros += [f"linha {numero}: {p}" for p in problemas if p]
         registros.append(r)
     return registros, erros

@@ -615,6 +615,34 @@ class Planilha(unittest.TestCase):
             snac0236.ler_planilha(caminho)
 
 
+class CdEmpresa(unittest.TestCase):
+    """CD EMPRESA preenchido manda na OPER SPM (30 = 542, 36 = 536); a coluna OPER SPM e ignorada (26/11/2026)."""
+
+    def carregar(self, oper, empresa):
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.active.append(["CHAVE NF", "FILIAL FISCAL", "DATA EMISSÃO", "VALOR TOTAL DOCUMENTO", "FRETE", "ITEM", "OPER SPM",
+                          "QTD FISCAL", "VALOR UNIT", "VALOR DO ICMS", "BASE CALC. ICMS", "ALIQUOTA", "CD EMPRESA"])
+        wb.active.append([CHAVE_A, "30 46", "01/11/2026", 10, "CIF", 900135, oper, 1, 10, 0, 0, 0, empresa])
+        caminho = pathlib.Path(tempfile.mkdtemp()) / "nota.xlsx"
+        wb.save(caminho)
+        return snac0236.carregar(caminho)
+
+    def test_coluna(self):
+        for titulo in ("CD EMPRESA", "Cd Empresa", "cd empresa"):
+            self.assertEqual(snac0236.chave_coluna(titulo), "cd_empresa", titulo)
+
+    def test_empresa_define_a_oper(self):
+        for oper, empresa, esperado in ((None, 30, "542"), (None, "36", "536"), (5101, 30, "542"), (542, 36, "536"),
+                                        (5101, None, "5101")):
+            registros, _notas, erros = self.carregar(oper, empresa)
+            self.assertEqual((erros, registros[0]["oper"]), ([], esperado), (oper, empresa))
+
+    def test_empresa_desconhecida(self):
+        _registros, _notas, erros = self.carregar(542, 31)
+        self.assertTrue(any("CD EMPRESA '31'" in e for e in erros), erros)
+
+
 class NatOper(unittest.TestCase):
     """Nat Oper pela UF do emitente (2 primeiros digitos da chave; 42 = SC): 1949 dentro, 2949 fora, so na OPER SPM 542.
     A coluna NAT OPER da planilha e opcional e so confere."""
