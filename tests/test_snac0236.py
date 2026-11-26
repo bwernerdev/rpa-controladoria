@@ -1121,6 +1121,26 @@ class Fluxo(unittest.TestCase):
         self.assertEqual(estados[-1], (4, "ok"))
         self.assertTrue(any("PAUSADO: confira a integracao" in a for a in avisos))
 
+    def test_fora_do_citrix(self):
+        """SNAC0236 aberta fora do Citrix: usa a janela em primeiro plano e confere o foco pelo titulo dela."""
+        janela = simulador.Janela()
+        janela.window_text = lambda: "SNAC0236 - Oracle"
+
+        def sem_citrix(trecho):
+            raise LookupError(trecho)
+        srp = SRP0236()
+        with ambiente(srp), mock.patch.object(core, "janela_citrix", sem_citrix), \
+                mock.patch.object(core, "janela_ativa", lambda: janela), \
+                mock.patch.object(core, "titulo_janela_ativa", lambda: "SNAC0236 - Oracle"):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 0, avisos)
+        self.assertEqual(len(srp.integradas), 1)
+        with ambiente(srp), mock.patch.object(core, "janela_citrix", sem_citrix), \
+                mock.patch.object(core, "janela_ativa", lambda: None):
+            codigo, avisos, _ = rodar(srp, [nota(CHAVE_A, [item("900135")])])
+        self.assertEqual(codigo, 1)
+        self.assertTrue(any("nao achei a janela da SNAC0236" in a for a in avisos), avisos)
+
     def test_f9_pausa_entre_as_notas(self):
         """F9 (pausar) durante a 1a nota: ela termina, o robo pausa com o cursor ja na Chave da 2a e, no Continuar,
         segue com a 2a nota. A pausa atende o pedido (o evento volta a ficar limpo)."""

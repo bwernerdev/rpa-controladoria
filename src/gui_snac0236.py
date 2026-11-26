@@ -18,7 +18,6 @@ from core import (
     VK_F8,
     VK_F9,
     atalhos_globais,
-    citrix_aberto,
     fechar_no_excel,
     pasta_logs,
     pintar_linhas,
@@ -464,10 +463,6 @@ class Pagina0236(Pagina):
         if not notas:
             return
         faltam = len(self._pendentes())
-        if not citrix_aberto():
-            self.app.avisar("Citrix não encontrado", "Não achei a janela do Citrix (Desktop Viewer). Abra a SNAC0236 e "
-                            "tente de novo.", tipo="aviso")
-            return
         itens = sum(len(n["itens"]) for n in notas)
         resto = (f" Das {faltam} pendentes, ficam {faltam - len(notas)} para depois (NFs a lançar: {len(notas)})."
                  if len(notas) < faltam else "")

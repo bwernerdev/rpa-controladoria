@@ -1981,8 +1981,27 @@ class Execucao0236:
 
         try:
             self.tesseract = core.caminho_tesseract()
-            self.janela = core.janela_citrix(self.janela_trecho)
-            self.janela.set_focus()
+            try:
+                self.janela = core.janela_citrix(self.janela_trecho)
+                self.janela.set_focus()
+            except LookupError:
+                # SNAC0236 aberta fora do Citrix: usa a janela em que o usuario clicar durante a contagem
+                self.aviso(f"Citrix não aberto: clique no campo Chave Acesso NF-e da SNAC0236. Iniciando em {self.espera}s "
+                           "(mouse no canto superior esquerdo aborta).")
+                inicio = time.time()
+                while time.time() - inicio < self.espera:
+                    if self.parar.is_set():
+                        self.registrar("Interrompido antes de iniciar.")
+                        return 1
+                    time.sleep(0.1)
+                self.janela = core.janela_ativa()
+                if self.janela is None:
+                    self.registrar("Não iniciei: não achei a janela da SNAC0236 em primeiro plano. Clique no campo Chave Acesso "
+                                   "NF-e e inicie de novo. Nada foi digitado.")
+                    return 1
+                self.janela_trecho = self.janela.window_text()
+                self.espera = 0  # a contagem ja passou
+                self.registrar(f"  janela fora do Citrix: '{self.janela_trecho}'", mostrar=False)
             ret0 = self.janela.rectangle()
             self.tamanho = (ret0.right - ret0.left, ret0.bottom - ret0.top)
             self.rateio_salvo = ler_posicoes(self.tamanho)  # da execucao anterior: a 1a nota tambem nao le a tela inteira

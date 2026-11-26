@@ -538,6 +538,24 @@ def janela_citrix(trecho):
     raise LookupError(f"Janela com '{trecho}' no título não encontrada.")
 
 
+def janela_ativa():
+    """Janela em primeiro plano (SNAC0236 aberta fora do Citrix; usuario, 26/11/2026). None se for o proprio robo."""
+    from pywinauto import Desktop
+
+    user32 = ctypes.windll.user32
+    alvo = user32.GetForegroundWindow()
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(alvo, ctypes.byref(pid))
+    if not alvo or pid.value == os.getpid():
+        return None
+    for backend in ("uia", "win32"):
+        try:
+            return Desktop(backend=backend).window(handle=alvo).wrapper_object()
+        except Exception:
+            continue
+    return None
+
+
 def pasta_base():
     """Pasta do .exe quando empacotado; raiz do projeto no codigo-fonte."""
     return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
