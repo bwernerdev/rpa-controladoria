@@ -1047,6 +1047,20 @@ class TituloAcima(unittest.TestCase):
         self.assertEqual(self.recorte((710, 457, 800, 467), topo_linha1=421), (110, 74))  # 3o: desde 4 alturas acima da 1a
 
 
+class BordaLidaComoTexto(unittest.TestCase):
+    def test_sublinhado_entre_rotulo_e_chave_nao_barra(self):
+        # fora do Citrix (26/11/2026): a borda do campo virou '_' no OCR, entre o rotulo e a Chave
+        original, lidas = snac0236.core.palavras_tela, []
+        snac0236.core.palavras_tela = lambda img, _t, **_k: [("Chave", 10, 100, 40, 12), ("Acesso", 55, 100, 50, 12),
+                                                              ("_", 150, 102, 8, 10)]
+        try:
+            from PIL import Image
+            rotulos = snac0236.ler_rotulos(Image.new("RGB", (500, 200)), "tess", lidas)
+        finally:
+            snac0236.core.palavras_tela = original
+        self.assertTrue(snac0236.posicao_ok("chave", (165, 99, 400, 113), rotulos, None, lidas))
+
+
 class TempoPrevisto(unittest.TestCase):
     def notas(self, *itens):
         return [{"itens": [{}] * n} for n in itens]

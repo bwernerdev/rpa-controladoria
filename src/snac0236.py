@@ -430,12 +430,16 @@ def ler_rotulos(imagem, tesseract, guardar=None):
     `guardar` (lista, opcional) recebe as frases lidas, para dizer onde o cursor esta quando algo nao confere."""
     palavras = core.palavras_tela(imagem, tesseract)
     rotulos = localizar_rotulos(palavras)
+    # sem letra nem numero = borda do campo lida como texto: fora do Citrix (26/11/2026) um '_' entre o rotulo e o
+    # campo virou o "vizinho" da Chave e o robo pausou com o cursor certo
+    def uteis(lista):
+        return [f for f in lista if any(ch.isalnum() for ch in f[0])]
     if guardar is not None:
-        guardar.extend(frases(palavras))
+        guardar.extend(uteis(frases(palavras)))
     if any(c not in rotulos for c in ("chave", "filial", "data", "valor_total", "frete", "item", "integrar")):
         palavras = core.palavras_tela(binarizar(imagem), tesseract)
         if guardar is not None:
-            guardar.extend(frases(palavras))
+            guardar.extend(uteis(frases(palavras)))
         for campo, caixa in localizar_rotulos(palavras).items():
             rotulos.setdefault(campo, caixa)
     return rotulos
@@ -2047,17 +2051,11 @@ class Execucao0236:
                           "Nada foi digitado.")
                 return 1
             if posicao_ok("chave", foco, self.rotulos, None, self.lidas) is False:
-                rotulo = self.rotulos["chave"]
-                self.registrar(f"  foco {foco}, rótulo chave {rotulo}, vizinho {vizinho_esquerda(foco, self.lidas)}, "
-                               f"janela {self.janela.rectangle()}", mostrar=False)
-                # fora do Citrix (26/11/2026) a fonte/escala muda e a frase vizinha ou a distancia nao batem: basta o
-                # foco na linha do rotulo, a direita, sem outro rotulo entre os dois
-                entre = [r for k, r in self.rotulos.items() if k != "chave" and rotulo[2] - 5 <= r[0] < foco[0]
-                         and abs((r[1] + r[3]) / 2 - (foco[1] + foco[3]) / 2) <= max(8, (foco[3] - foco[1]) / 2 + 4)]
-                if entre or not ao_lado(foco, rotulo, None, distancia=10 ** 6):
-                    self.registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique dentro dele (não basta "
-                                   "passar o mouse) e inicie de novo. Nada foi digitado.")
-                    return 1
+                self.registrar(f"  foco {foco}, rótulo chave {self.rotulos['chave']}, vizinho "
+                               f"{vizinho_esquerda(foco, self.lidas)}, janela {self.janela.rectangle()}", mostrar=False)
+                self.registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique dentro dele (não basta "
+                               "passar o mouse) e inicie de novo. Nada foi digitado.")
+                return 1
 
             for numero, nota in enumerate(self.notas, start=1):
                 linhas = [r["linha"] for r in nota["itens"]]
