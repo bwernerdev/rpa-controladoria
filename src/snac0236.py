@@ -1511,6 +1511,71 @@ class Execucao0236:
         self.registrar(f"  cliquei no Ident Tributo do ICMS TERCEIROS, mas o foco não andou ({novo}): sigo com Enter", mostrar=False)
         return None if novo == "sem_cor" else foco
 
+    def linha_dif(self, pos, foco):
+        """Foco numa celula de uma linha acima da linha alvo: e a DIF. ALIQUOTAS? Le o recorte do rotulo da linha (a
+        esquerda do Ident), so na altura do foco para nao pegar o rotulo das linhas vizinhas."""
+        h = foco[3] - foco[1]
+        imagem = core.capturar(self.janela)
+        recorte = imagem.crop((max(pos["terceiros"][0] - 2 * h, 0), max(foco[1] - h // 4, 0), pos["ident"][0],
+                               min(foco[3] + h // 4, imagem.height)))
+        escala = 2 if h >= 20 else 4
+        texto = ""
+        for img in (recorte, binarizar(recorte)):
+            texto = normalizar(" ".join(p[0] for p in core.palavras_tela(img, self.tesseract, escala=escala)))
+            if "dif" in texto or "aliquotas" in texto:
+                return True
+        self.registrar(f"  linha acima da alvo no Rateio não é a DIF. ALIQUOTAS: {texto!r}", mostrar=False)
+        return False
+
+    def zerar_dif(self, r, pos, foco, vistas):
+        """Sem imposto na planilha, a linha 108 DIF. ALIQUOTAS (acima da linha alvo, Ident 2, Base 300.00, Aliquota 5.0000
+        vindos do SRP; usuario, 26/11/2026) precisa de Ident, Base e Aliquota 0. Devolve o novo foco ou False."""
+        if tem_imposto(r) or not pos or foco is None or not (pos["ident"][3] < foco[1] and foco[3] < pos["terceiros"][1]):
+            return False
+        coluna = coluna_rateio(foco, pos)
+        if coluna not in ("ident", "base", "aliquota") or foco[2] - foco[0] > 2 * (pos[coluna][2] - pos[coluna][0]):
+            return False  # na grade principal o campo nessa altura e largo
+        if foco[1] in vistas:
+            return False
+        vistas.add(foco[1])
+        if not self.linha_dif(pos, foco):
+            return False
+        self.registrar(f"  linha {r['linha']}: DIF. ALIQUOTAS no Rateio (foco em {NOME_RATEIO[coluna]}): zero a linha",
+                       mostrar=False)
+        return self.preencher_linha(foco, pos, foco, valores_rateio(r), "DIF. ALIQUOTAS", coluna)
+
+    def preencher_linha(self, foco, rateio, rotulo, valores, nome_linha, primeira="ident"):
+        """Digita `valores` na linha do Rateio na altura de `rotulo`, do campo em foco (`primeira`) em diante, com Enter
+        entre os campos. Devolve o foco no ultimo campo digitado."""
+        pendentes = [c for c in COLUNAS_RATEIO if c in valores]
+        pendentes = pendentes[pendentes.index(primeira):]
+        # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026; o do ICMS S/ TRANSFERENCIA com 2, 24/11/2026).
+        # Chegando pelo clique, o cursor fica onde clicou e o texto nao e selecionado: digitar "1" virava "11" e dava
+        # erro. Pelo Enter o texto vem selecionado. Apaga antes.
+        # o SRP pode trazer valor no campo (Base 250.00 e Aliquota .0000 no ICMS S/ TRANSFERENCIA, 24/11/2026)
+        self.limpar_campo(primeira, 4 if primeira == "ident" else 12)  # Ident: 1 digito; 12 cobre 1234567.89
+        self.digitar(valores[primeira], primeira)
+        pendentes.remove(primeira)
+        for vez in range(len(COLUNAS_RATEIO) + 2):
+            if not pendentes:
+                break
+            self.devagar(f"Enter {vez + 1} na linha {nome_linha} (procurando {NOME_RATEIO[pendentes[0]]})")
+            foco = self.enter_rateio("rateio", vez, foco)
+            if not na_linha(foco, rotulo):
+                raise Travou("rateio", f"o cursor saiu da linha {nome_linha} antes do campo {NOME_RATEIO[pendentes[0]]}"
+                                       f"{self.local(foco)}; confira os campos dessa linha")
+            coluna = coluna_rateio(foco, rateio)
+            self.registrar(f"  Enter {vez + 1} na linha {nome_linha}: foco={foco} coluna={coluna}", mostrar=False)
+            if coluna in pendentes:
+                if coluna != pendentes[0]:
+                    raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
+                self.limpar_campo(coluna, 12)  # 20 Backspace a 0,03 s = 0,6 s por campo
+                self.digitar(valores[coluna], coluna)
+                pendentes.remove(coluna)
+        if pendentes:
+            raise Travou("rateio", f"não cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
+        return foco
+
     def preencher_rateio(self, r, foco):
         """Depois do Valor do ICMS: Enter ate o Ident Tributo da linha ICMS TERCEIROS (lida no OCR quando o Rateio abre),
         digita os valores da linha (`valores_rateio`), clica em Tributos OK e espera o Rateio fechar."""
@@ -1523,10 +1588,15 @@ class Execucao0236:
         # so tem a linha ICMS S/ TRANSFERENCIA, na altura da 1a linha (24/11/2026)
         salvo = self.rateio_salvo.get(linha_alvo)
         clicou = linha_alvo != "terceiros"  # o clique pula as linhas de cima da grade do ICMS TERCEIROS; na 542 nao ha
+        vistas = set()  # linhas acima da alvo ja conferidas (DIF. ALIQUOTAS?)
         for vez in range(MAX_ATE_RATEIO):
             self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha {nome_linha} do Rateio)")
             foco = self.enter_rateio("icms", vez, foco)
             pos = rateio or salvo
+            novo = self.zerar_dif(r, pos, foco, vistas)
+            if novo is not False:
+                foco = novo
+                continue
             # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
             # de cima (na grade principal o campo nessa altura e largo: 635 px contra 107 px da celula Ident, 4K)
             if (pos and not clicou and celula_ident(foco, pos)
@@ -1561,6 +1631,10 @@ class Execucao0236:
                         raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
                     self.rateio_salvo[linha_alvo] = rateio
                     gravar_posicoes(self.tamanho, rateio, linha_alvo)
+                    novo = self.zerar_dif(r, rateio, foco, vistas)  # Rateio lido com o foco ja na DIF. ALIQUOTAS
+                    if novo is not False:
+                        foco = novo
+                        continue
             if rateio and na_linha(foco, rateio["terceiros"]) and celula_ident(foco, rateio):
                 self.registrar(f"  {nome_linha}: cheguei no Ident Tributo com {vez + 1} Enter depois do Valor do ICMS", mostrar=False)
                 break
@@ -1573,32 +1647,7 @@ class Execucao0236:
         valores = valores_rateio(r)
         self.registrar(f"  linha {r['linha']}: {'com' if tem_imposto(r) else 'sem'} imposto na {nome_linha}: {valores}",
                        mostrar=False)
-        pendentes = [c for c in COLUNAS_RATEIO if c in valores]
-        # O Ident do ICMS TERCEIROS ja vem com 1 no SRP (05/11/2026; o do ICMS S/ TRANSFERENCIA com 2, 24/11/2026).
-        # Chegando pelo clique, o cursor fica onde clicou e o texto nao e selecionado: digitar "1" virava "11" e dava
-        # erro. Pelo Enter o texto vem selecionado. Apaga antes.
-        self.limpar_campo("ident", 4)  # o SRP traz 1 digito (1 ou 2)
-        self.digitar(valores["ident"], "ident")
-        pendentes.remove("ident")
-        for vez in range(len(COLUNAS_RATEIO) + 2):
-            if not pendentes:
-                break
-            self.devagar(f"Enter {vez + 1} na linha {nome_linha} (procurando {NOME_RATEIO[pendentes[0]]})")
-            foco = self.enter_rateio("rateio", vez, foco)
-            if not na_linha(foco, rateio["terceiros"]):
-                raise Travou("rateio", f"o cursor saiu da linha {nome_linha} antes do campo {NOME_RATEIO[pendentes[0]]}"
-                                       f"{self.local(foco)}; confira os campos dessa linha")
-            coluna = coluna_rateio(foco, rateio)
-            self.registrar(f"  Enter {vez + 1} na linha {nome_linha}: foco={foco} coluna={coluna}", mostrar=False)
-            if coluna in pendentes:
-                if coluna != pendentes[0]:
-                    raise Travou("rateio", f"o cursor pulou o campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
-                # o SRP pode trazer valor no campo (Base 250.00 e Aliquota .0000 no ICMS S/ TRANSFERENCIA, 24/11/2026)
-                self.limpar_campo(coluna, 12)  # 20 Backspace a 0,03 s = 0,6 s por campo; 12 cobre 1234567.89
-                self.digitar(valores[coluna], coluna)
-                pendentes.remove(coluna)
-        if pendentes:
-            raise Travou("rateio", f"não cheguei no campo {NOME_RATEIO[pendentes[0]]} da linha {nome_linha}")
+        self.preencher_linha(foco, rateio, rateio["terceiros"], valores, nome_linha)
         botao = self.achar_botao("tributos_ok", rateio["tributos_ok"])
         if not botao:
             raise Travou("rateio", "não achei o botão Tributos OK na tela")

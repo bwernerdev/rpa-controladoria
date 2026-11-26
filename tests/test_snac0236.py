@@ -62,6 +62,10 @@ BOTAO_OK_NAT = (700, 700, 720, 712)
 # Rateio da OPER SPM 542: so a linha 101 ICMS S/ TRANSFERENCIA (print de 24/11/2026), na altura da 1a linha (600)
 PALAVRAS_542 = [p for p in PALAVRAS if p[0] not in ("COFINS", "ALIQUOTA", "ZERO", "ICMS", "TERCEIROS")] + [
     ("ICMS", 150, 600, 35, 12), ("S/", 190, 600, 15, 12), ("TRANSFERENCIA", 210, 600, 100, 12)]
+# Rateio da 542 com a linha 108 DIF. ALIQUOTAS antes da 101 (print de 26/11/2026)
+PALAVRAS_DIF = [p for p in PALAVRAS_542 if p[2] != 600] + [
+    ("108", 110, 600, 25, 12), ("DIF.", 150, 600, 30, 12), ("ALIQUOTAS", 185, 600, 75, 12),
+    ("ICMS", 150, 630, 35, 12), ("S/", 190, 630, 15, 12), ("TRANSFERENCIA", 210, 630, 100, 12)]
 SUCESSO = [(p, 300 + 80 * i, 450, 75, 12) for i, p in enumerate(["Documento", "Integrado", "com", "Sucesso."])]
 BOTAO_AJUSTAR = (800, 700, 860, 712)
 JA_EXISTE = [(p, 300 + 70 * i, 450, 65, 12) for i, p in enumerate(
@@ -176,7 +180,9 @@ class SRP0236:
         nome = (self.onde()[0] or "").rstrip("0123456789")
         return [{"icms": ("Vir oms tem doc forn", 0, 0, 50, 10),
                  # recorte do rotulo da linha do Rateio (nota seguinte, posicoes salvas)
-                 "t114ident": ("ICMS TERCEIROS", 0, 0, 60, 10), "t101ident": ("ICMS S/ TRANSFERENCIA", 0, 0, 90, 10)}.get(
+                 "t114ident": ("ICMS TERCEIROS", 0, 0, 60, 10), "t101ident": ("ICMS S/ TRANSFERENCIA", 0, 0, 90, 10),
+                 # recorte do rotulo de uma linha acima da linha alvo (DIF. ALIQUOTAS, 26/11/2026)
+                 **{f"t108{c}": ("108 DIF. ALIQUOTAS", 0, 0, 90, 10) for c in COLUNAS_TRIBUTO}}.get(
             nome, ("Outra", 0, 0, 30, 10))]
 
     def caixa(self, _janela=None):
@@ -793,6 +799,34 @@ class NatOper(unittest.TestCase):
         self.assertEqual(salvo["rateio"], {"terceiros": [1, 2, 3, 4]})  # a grade das outras operacoes continua salva
         self.assertIn("terceiros", salvo["rateio_transferencia"])
         self.assertEqual([n["t101ident0"] for n in srp.integradas], ["0", "0"])
+
+    def test_rateio_da_542_zera_a_dif_aliquotas_sem_imposto(self):
+        """Linha 108 DIF. ALIQUOTAS antes da ICMS S/ TRANSFERENCIA (Ident 2, Base 300.00, Aliquota 5.0000 do SRP; print de
+        26/11/2026): sem imposto na planilha, Ident, Base e Aliquota 0 nas duas linhas; a 2a nota usa as posicoes salvas."""
+        srp = self.srp_542()
+        srp.linhas_tributo = {"108": 600, "101": 630}
+        srp.iniciais.update({"t108ident": "2", "t108base": "300.00", "t108aliquota": "5.0000"})
+        notas = [nota(self.SC, [item("900135", oper="542")]), nota(self.SP, [item("900135", oper="542")])]
+        notas[1]["itens"][0]["linha"] = 3
+        with ambiente(srp, palavras=PALAVRAS_DIF) as pasta:
+            codigo, avisos, _ = rodar(srp, notas)
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual((codigo, len(srp.integradas)), (0, 2), avisos)
+        for nota_srp in srp.integradas:
+            self.assertEqual({n: v for n, v in nota_srp.items() if n.startswith("t")},
+                             {f"t{cod}{c}0": "0" for cod in ("108", "101") for c in ("ident", "base", "aliquota")})
+        self.assertEqual(log.count("DIF. ALIQUOTAS no Rateio"), 2, log)
+
+    def test_rateio_da_542_com_imposto_nao_mexe_na_dif_aliquotas(self):
+        srp = self.srp_542()
+        srp.linhas_tributo = {"108": 600, "101": 630}
+        with ambiente(srp, palavras=PALAVRAS_DIF):
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542", icms_t="300.00",
+                                                                  aliq="5")])])
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        tributos = {n: v for n, v in srp.integradas[0].items() if n.startswith("t")}
+        self.assertFalse([n for n in tributos if n.startswith("t108")], tributos)
+        self.assertEqual(tributos["t101ident0"], "1")
 
     def test_rateio_sem_a_barra_le_a_tela_mais_tarde(self):
         srp = self.srp_542()
