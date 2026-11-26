@@ -2047,8 +2047,17 @@ class Execucao0236:
                           "Nada foi digitado.")
                 return 1
             if posicao_ok("chave", foco, self.rotulos, None, self.lidas) is False:
-                self.registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique nele e inicie de novo. Nada foi digitado.")
-                return 1
+                rotulo = self.rotulos["chave"]
+                self.registrar(f"  foco {foco}, rótulo chave {rotulo}, vizinho {vizinho_esquerda(foco, self.lidas)}, "
+                               f"janela {self.janela.rectangle()}", mostrar=False)
+                # fora do Citrix (26/11/2026) a fonte/escala muda e a frase vizinha ou a distancia nao batem: basta o
+                # foco na linha do rotulo, a direita, sem outro rotulo entre os dois
+                entre = [r for k, r in self.rotulos.items() if k != "chave" and rotulo[2] - 5 <= r[0] < foco[0]
+                         and abs((r[1] + r[3]) / 2 - (foco[1] + foco[3]) / 2) <= max(8, (foco[3] - foco[1]) / 2 + 4)]
+                if entre or not ao_lado(foco, rotulo, None, distancia=10 ** 6):
+                    self.registrar("Não iniciei: o cursor não está no campo Chave Acesso NF-e. Clique dentro dele (não basta "
+                                   "passar o mouse) e inicie de novo. Nada foi digitado.")
+                    return 1
 
             for numero, nota in enumerate(self.notas, start=1):
                 linhas = [r["linha"] for r in nota["itens"]]
