@@ -780,6 +780,37 @@ class NatOper(unittest.TestCase):
         self.assertIn("ICMS S/ TRANSFERENCIA: cheguei no Ident Tributo", log)
         self.assertNotIn("rateio", json.loads((pasta / "posicoes_0236.json").read_text()))  # so a "rateio_transferencia"
 
+    def test_rateio_da_542_posicoes_salvas_de_outra_tela(self):
+        """26/11/2026, outra maquina: posicoes salvas de uma tela diferente; o foco chegou no Ident fora delas e os Enter
+        passaram por Ident, Base e Aliquota sem digitar. Agora descarta as salvas, le a tela e zera."""
+        srp = self.srp_542()
+        with ambiente(srp, palavras=PALAVRAS_542) as pasta:
+            rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+            salvo = json.loads((pasta / "posicoes_0236.json").read_text())
+        velho = {k: [v[0], v[1] + 45, v[2], v[3] + 45] if isinstance(v, list) and len(v) == 4 else v
+                 for k, v in salvo["rateio_transferencia"].items()}
+        srp = self.srp_542()
+        with ambiente(srp, palavras=PALAVRAS_542) as pasta:
+            (pasta / "posicoes_0236.json").write_text(json.dumps({**salvo, "rateio_transferencia": velho}))
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
+                         {"t101ident0": "0", "t101base0": "0", "t101aliquota0": "0"})
+        self.assertIn("posicoes salvas nao batem", log)
+
+    def test_rateio_da_542_sem_os_titulos_base_e_aliquota(self):
+        """26/11/2026, tela pequena: o OCR nao leu Base/Aliquota; o campo vai pela ordem do Enter (Ident, Base, Aliquota)."""
+        srp = self.srp_542()
+        palavras = [p for p in PALAVRAS_542 if not (p[2] == 575 and p[0] in ("Base", "Calculo", "Aliquota"))]
+        with ambiente(srp, palavras=palavras) as pasta:
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+            log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+        self.assertEqual((codigo, len(srp.integradas)), (0, 1), avisos)
+        self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
+                         {"t101ident0": "0", "t101base0": "0", "t101aliquota0": "0"})
+        self.assertIn("campo pela ordem do Enter", log)
+
     def test_rateio_da_542_posicoes_salvas_e_sem_ler_antes_da_janela(self):
         """Velocidade (24/11/2026: ~19 s por nota lendo a tela inteira): antes da barra da janela Rateios nao le a tela;
         a 2a nota da 542 usa as posicoes da 1a (conferidas num recorte); as da grade do ICMS TERCEIROS ficam no arquivo."""

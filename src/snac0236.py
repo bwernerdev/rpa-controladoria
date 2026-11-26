@@ -805,6 +805,14 @@ def na_linha(caixa, rotulo):
     return caixa is not None and abs((caixa[1] + caixa[3]) / 2 - (rotulo[1] + rotulo[3]) / 2) <= max(8, (caixa[3] - caixa[1]) / 2 + 4)
 
 
+def celula_tributo(caixa, rateio):
+    """Coluna (Ident, Base ou Aliquota) da celula estreita do Rateio em foco; campo largo da grade principal = None."""
+    coluna = coluna_rateio(caixa, rateio)
+    if coluna in ("ident", "base", "aliquota") and caixa[2] - caixa[0] <= 2 * (rateio[coluna][2] - rateio[coluna][0]):
+        return coluna
+    return None
+
+
 def celula_ident(caixa, rateio):
     """Foco na celula Ident Tributo do Rateio: coluna Ident e estreito. Na grade principal, campo largo na mesma altura
     (ex.: a Descricao do 3o item em 1366x768, 207 px contra 27 px da celula Ident) nao conta (06/11/2026)."""
@@ -1536,8 +1544,8 @@ class Execucao0236:
         vindos do SRP; usuario, 26/11/2026) precisa de Ident, Base e Aliquota 0. Devolve o novo foco ou False."""
         if tem_imposto(r) or not pos or foco is None or not (pos["ident"][3] < foco[1] and foco[3] < pos["terceiros"][1]):
             return False
-        coluna = coluna_rateio(foco, pos)
-        if coluna not in ("ident", "base", "aliquota") or foco[2] - foco[0] > 2 * (pos[coluna][2] - pos[coluna][0]):
+        coluna = celula_tributo(foco, pos)
+        if coluna is None:
             return False  # na grade principal o campo nessa altura e largo
         if foco[1] in vistas:
             return False
@@ -1564,11 +1572,17 @@ class Execucao0236:
             if not pendentes:
                 break
             self.devagar(f"Enter {vez + 1} na linha {nome_linha} (procurando {NOME_RATEIO[pendentes[0]]})")
+            anterior = foco
             foco = self.enter_rateio("rateio", vez, foco)
             if not na_linha(foco, rotulo):
                 raise Travou("rateio", f"o cursor saiu da linha {nome_linha} antes do campo {NOME_RATEIO[pendentes[0]]}"
                                        f"{self.local(foco)}; confira os campos dessa linha")
             coluna = coluna_rateio(foco, rateio)
+            if coluna is None and pendentes[0] not in rateio and anterior is not None and foco[0] > anterior[0]:
+                # titulo da coluna nao lido no OCR (log de 26/11/2026: Base e Aliquota): no SRP o Enter so para em
+                # Ident, Base e Aliquota, entao o campo a direita na mesma linha e o proximo da ordem
+                coluna = pendentes[0]
+                self.registrar(f"  titulo {NOME_RATEIO[coluna]} não lido; campo pela ordem do Enter", mostrar=False)
             self.registrar(f"  Enter {vez + 1} na linha {nome_linha}: foco={foco} coluna={coluna}", mostrar=False)
             if coluna in pendentes:
                 if coluna != pendentes[0]:
@@ -1593,6 +1607,7 @@ class Execucao0236:
         salvo = self.rateio_salvo.get(linha_alvo)
         clicou = linha_alvo != "terceiros"  # o clique pula as linhas de cima da grade do ICMS TERCEIROS; na 542 nao ha
         vistas = set()  # linhas acima da alvo ja conferidas (DIF. ALIQUOTAS?)
+        ler_ja = False
         for vez in range(MAX_ATE_RATEIO):
             self.devagar(f"Enter {vez + 1} depois do Valor do ICMS (procurando a linha {nome_linha} do Rateio)")
             foco = self.enter_rateio("icms", vez, foco)
@@ -1601,6 +1616,14 @@ class Execucao0236:
             if novo is not False:
                 foco = novo
                 continue
+            # 542 com posicoes salvas de outra tela (log de 26/11/2026, outra maquina): o foco ja estava no Ident da
+            # ICMS S/ TRANSFERENCIA, fora da altura salva, e os Enter passaram por Base e Aliquota sem digitar
+            if (rateio is None and salvo and linha_alvo == "transferencia" and not ler_ja and celula_tributo(foco, salvo)
+                    and not na_linha(foco, salvo["terceiros"]) and barras_dialogo(core.capturar(self.janela))):
+                self.registrar(f"  Enter {vez + 1}: foco numa célula do Rateio fora das posições salvas; posições salvas "
+                               "não batem; leio a tela", mostrar=False)
+                salvo, ler_ja = None, True
+                vistas.clear()
             # foco estreito na coluna Ident, abaixo do titulo e acima da linha ICMS TERCEIROS = Rateio aberto numa linha
             # de cima (na grade principal o campo nessa altura e largo: 635 px contra 107 px da celula Ident, 4K)
             if (pos and not clicou and celula_ident(foco, pos)
@@ -1616,11 +1639,11 @@ class Execucao0236:
                     salvo = None  # le a tela inteira de novo
             if salvo and rateio is None and vez + 1 >= LER_RATEIO_DESDE + 10:
                 salvo = None  # nao bateu com as posicoes salvas: le a tela inteira
-            if rateio is None and not salvo and vez + 1 >= LER_RATEIO_DESDE:
+            if rateio is None and not salvo and (vez + 1 >= LER_RATEIO_DESDE or ler_ja):
                 imagem = core.capturar(self.janela)
                 # sem a barra azul da janela "Rateios" o Rateio ainda nao abriu: nada de ler a tela inteira (no SRP real,
                 # 24/11/2026, as leituras do 8o e 9o Enter levaram 8,7 s cada e nao acharam nada; a do 10o, 1,9 s)
-                if not barras_dialogo(imagem) and vez + 1 < LER_RATEIO_DESDE + 3:
+                if not ler_ja and not barras_dialogo(imagem) and vez + 1 < LER_RATEIO_DESDE + 3:
                     self.registrar(f"  Enter {vez + 1}: sem a janela do Rateio na tela; não leio ainda", mostrar=False)
                     continue
                 t_leitura = time.time()
@@ -1629,10 +1652,9 @@ class Execucao0236:
                 if "terceiros" in lido and "tributos_ok" in lido:
                     rateio = lido
                     self.registrar(f"  Rateio lido no Enter {vez + 1}: {rateio}", mostrar=False)
-                    faltam = [NOME_RATEIO[c] for c in COLUNAS_RATEIO if (c not in rateio and c in valores_rateio(r)) or
-                              (c == "ident" and c not in rateio)]
-                    if faltam:
-                        raise Travou("rateio", f"não li no Rateio a(s) coluna(s) {', '.join(faltam)}")
+                    # so o Ident e obrigatorio: Base e Aliquota nao lidas vao pela ordem do Enter (`preencher_linha`)
+                    if "ident" not in rateio:
+                        raise Travou("rateio", "não li no Rateio a coluna Ident Tributo")
                     self.rateio_salvo[linha_alvo] = rateio
                     gravar_posicoes(self.tamanho, rateio, linha_alvo)
                     novo = self.zerar_dif(r, rateio, foco, vistas)  # Rateio lido com o foco ja na DIF. ALIQUOTAS
