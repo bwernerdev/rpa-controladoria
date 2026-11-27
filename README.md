@@ -1,114 +1,75 @@
 # Robô SRP
-
-Preenche o formulário **Item Requisição Suprimento Snac** do SRP (que roda dentro do Citrix) com as linhas de uma planilha Excel: Item, C/Custo, Conta e Quantidade, linha a linha, como se fosse digitado à mão. Na aba **SNAC0236**, lança e integra notas na **Digitação Documento Recebimento** (ver abaixo).
-
-O robô só digita e confere. Ele nunca faz login nem corrige dado sozinho: quando o SRP recusa algo ou a quantidade na tela não bate com a planilha, ele **pausa** e espera você resolver.
+Preenche o formulário **Item Requisição Suprimento Snac** do SRP (dentro do Citrix) com as linhas de uma planilha Excel (Item, C/Custo, Conta, Quantidade), como se fosse digitado à mão. Na aba **SNAC0236**, lança e integra notas na **Digitação Documento Recebimento**.
+Só digita e confere: nunca faz login nem corrige dado sozinho. Se o SRP recusa algo ou a quantidade não bate, **pausa** e espera você.
 
 ## Instalar
+1. Em [Releases](../../releases), baixe o `RPA-SRP-vX.Y.Z.zip` mais recente e extraia.
+2. Duplo clique em **`instalar.cmd`**: copia para `%LOCALAPPDATA%\Programs\RPA-SRP` (sem administrador) e cria o atalho **Robô SRP** (desktop e menu Iniciar). A pasta extraída pode ser apagada.
+3. Sem instalar: `RPA-SRP.exe` roda da pasta extraída, com `tesseract\` ao lado.
 
-1. Em [Releases](../../releases), baixe o `RPA-SRP-vX.Y.Z.zip` mais recente.
-2. Extraia o zip (botão direito → Extrair tudo).
-3. Dê duplo clique em **`instalar.cmd`**. Ele copia o app para `%LOCALAPPDATA%\Programs\RPA-SRP` (sem precisar de administrador) e cria o atalho **Robô SRP** na área de trabalho e no menu Iniciar.
-4. Abra pelo atalho. A pasta extraída pode ser apagada.
-
-**Atualizações** (a partir da v1.9.0): ao abrir, o app confere se há versão nova aqui no GitHub e pergunta se quer atualizar. Ele baixa o pacote, confere a integridade (SHA-256), fecha, troca os arquivos e abre de novo sozinho. Configurações, contas aprendidas, andamento e logs são mantidos. Durante um preenchimento ele só pergunta ao terminar. Sem internet, nada acontece.
-
-Com o app aberto, ele confere de novo a cada hora. Para conferir na hora, clique na versão no rodapé ("Verificar atualizações"; com versão nova achada, vira "Atualizar para vX"). O resultado de cada consulta fica nos Detalhes e em `logs\atualizacao.log`. A partir da v1.12.19, se a consulta direta falhar (rede da empresa com proxy automático), o app tenta pelo proxy do Windows. Versões até a v1.12.18 não fazem isso: numa rede assim elas não acham a versão nova e precisam ser atualizadas à mão uma vez.
-
-Para atualizar à mão, faça o mesmo que na instalação com o zip novo (feche o app antes).
-
-Sem instalar: o `RPA-SRP.exe` também roda direto da pasta extraída, desde que a pasta `tesseract\` (leitura da tela) fique ao lado dele.
-
-Na primeira vez o Windows pode levar alguns segundos a mais para abrir (verificação do antivírus).
+**Atualização** (desde a v1.9.0): ao abrir e a cada hora, o app confere o GitHub e pergunta se quer atualizar (baixa, confere SHA-256, troca os arquivos e reabre). Mantém config, contas aprendidas, andamento e logs. Durante um preenchimento, só pergunta ao terminar. Conferir na hora: clique na versão no rodapé. Resultado em Detalhes e `logs\atualizacao.log`. Até a v1.12.18 não há fallback de proxy: em rede com proxy automático, atualizar à mão uma vez (instalar com o zip novo, app fechado).
 
 ## Preparar a planilha
-
-Use `planilhas\BASE PADRAO.xlsx` como modelo. A linha 1 tem que ter exatamente:
-
-| Item | C/Custo | Conta | Quantidade |
-|------|---------|-------|------------|
-
+Modelo: `planilhas\BASE PADRAO.xlsx`. Linha 1 exata: `Item | C/Custo | Conta | Quantidade`.
 - Uma linha por item; linhas vazias são ignoradas.
-- **Conta** pode ficar em branco quando o SRP a preenche sozinho (campo travado).
-- Item, C/Custo e Conta já estão como texto no modelo, então zeros à esquerda não somem.
+- **Conta** pode ficar em branco quando o SRP a preenche (campo travado).
+- Item, C/Custo e Conta são texto no modelo: zeros à esquerda ficam.
 
 ## Usar
-
 1. Abra o SRP no Citrix, na tela de itens da requisição.
-2. No Robô SRP, arraste a planilha para a janela (ou clique para escolher). Ele valida tudo antes e avisa:
-   - erros na planilha;
-   - itens repetidos (o SRP soma as quantidades de itens iguais);
-   - contas que o SRP já recusou antes para o mesmo item e C/Custo.
-3. **Simular** mostra o que seria digitado, sem enviar nada.
-4. **Iniciar**: depois do OK você tem 5 segundos para clicar no campo **Item** da primeira linha livre do SRP.
-5. Atalhos enquanto o robô roda, mesmo com o foco no Citrix:
-   - **F9** pausa ao terminar a linha atual. Com ele pausado, F9 de novo continua, igual ao botão **Continuar**.
-   - **F8** para.
-   - Também param: o botão **Parar**, ou levar o mouse ao canto superior esquerdo da tela.
+2. Arraste a planilha para o Robô SRP. Ele valida tudo e avisa: erros, itens repetidos (o SRP soma) e contas já recusadas para o mesmo item e C/Custo.
+3. **Simular** mostra o que seria digitado, sem enviar.
+4. **Iniciar**: depois do OK, 5 s para clicar no campo **Item** da primeira linha livre.
+5. Atalhos (valem com o foco no Citrix): **F9** pausa ao fim da linha (de novo, continua); **F8** ou **Parar** ou mouse no canto superior esquerdo: para.
 
-### Quando ele pausa
+**Quando pausa:**
+- *Aviso do SRP* (ex.: "Conta Contábil inválida… Conta correta=8712"): corrija no SRP, Tab, **Continuar**. Ele guarda a conta correta e avisa nas próximas planilhas.
+- *Quantidade diferente*: confira a linha no SRP, **Continuar**.
 
-- **Aviso do SRP** (ex.: "Conta Contábil inválida… Conta correta=8712"): corrija o campo no SRP, dê Tab e clique em **Continuar**. Ele lê o aviso, guarda a conta correta e avisa nas próximas planilhas.
-- **Quantidade diferente na tela**: confira a linha no SRP e clique em **Continuar**.
-
-### Se fechar no meio
-
-O app guarda as linhas já concluídas. Ao abrir de novo a mesma planilha (sem mudanças), ele oferece **Continuar da linha N**. Antes de continuar, confira no SRP se a última linha ficou pela metade.
+**Se fechar no meio:** ao reabrir a mesma planilha (sem mudanças), oferece **Continuar da linha N**. Confira antes se a última linha ficou pela metade.
 
 ## Aba SNAC0236 (Digitação Documento Recebimento)
+Modelo: `planilhas\BASE PADRAO SNAC0236.xlsx` (aba **Notas** com colunas formatadas; aba **Instrucoes** com regras e exemplo fictício). Salve com a aba Notas selecionada: o robô lê a aba aberta.
 
-Use `planilhas\BASE PADRAO SNAC0236.xlsx` como modelo: a aba **Notas** tem o cabeçalho e as colunas já formatadas (CHAVE NF como texto, data, valores, lista CIF/FOB), e a aba **Instrucoes** tem as regras e um exemplo fictício. Salve com a aba Notas selecionada: o robô lê a aba aberta.
+Colunas: CHAVE NF, FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE (CIF/FOB), ITEM, OPER SPM, QTD FISCAL, VALOR UNIT, VALOR DO ICMS, BASE CALC. ICMS (o nome antigo `ICMS TERCEIROS (BASE DE CALCULO NF)` também serve), ALIQUOTA; NAT OPER opcional.
+- **CHAVE NF** em texto (44 dígitos). Linhas seguidas com a mesma chave = itens da mesma nota; nos itens seguintes, chave e cabeçalho podem ficar em branco (chave em branco com cabeçalho preenchido é erro).
+- Valores com ponto decimal (`47407.28`). ALIQUOTA como número (12), não como % do Excel (12% vira 0,12 e é recusado).
+- BASE CALC. ICMS e ALIQUOTA: ambas 0 = **sem imposto** (Ident Tributo 0, Base 0, Alíquota 0); ambas diferentes de 0 = **com imposto** (Ident Tributo 1). Só uma zerada é erro.
+- **Nat Oper:** só na OPER SPM 542 o robô apaga o campo e digita 1949 (emitente de SC: chave começando com 42) ou 2949 (fora de SC). Nas outras operações não mexe. A janela "Natureza de Operação" recebe OK; outra janela pausa. Se a planilha traz NAT OPER num item da 542, tem que bater com a chave (senão, erro ao carregar). No Rateio da 542 ele preenche a linha ICMS S/ TRANSFERENCIA (não a ICMS TERCEIROS).
 
-Lança notas de recebimento a partir de uma planilha com as colunas: CHAVE NF, FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE (CIF ou FOB), ITEM, OPER SPM, QTD FISCAL, VALOR UNIT, VALOR DO ICMS, BASE CALC. ICMS (base de cálculo da linha ICMS TERCEIROS; o nome antigo ICMS TERCEIROS (BASE DE CALCULO NF) também serve) e ALIQUOTA. A coluna NAT OPER é opcional.
+**Uso:** cursor no campo **Chave Acesso NF-e** e Iniciar. O robô:
+1. Preenche cabeçalho e grade. Se o SRP disser "Documento Recebimento … já existe", dá OK, apaga a Chave e põe um ponto no fim da Série (`1` vira `1.`); recusando de novo, pausa.
+2. Preenche a linha ICMS TERCEIROS do Rateio e clica em Tributos OK.
+3. Integra e trata as janelas: despesa acessória até 0,05 (Ajustar; acima, pausa), frete alterado para CIF, Resumo dos Tributos, Frete LTCC, Integrado com Sucesso.
+4. Volta à Chave da próxima nota.
 
-- **Nat Oper:** só na OPER SPM 542 o robô apaga o Nat Oper do SRP e digita 1949 (emitente de SC: CHAVE NF começando com 42) ou 2949 (fora de SC). Nas outras operações ele não mexe no campo. Se o SRP abrir a janela "Natureza de Operação" depois do Nat Oper, o robô clica em OK e continua; outra janela nesse ponto pausa o robô. No Rateio da 542 o robô preenche a linha ICMS S/ TRANSFERENCIA (em vez da ICMS TERCEIROS) com os valores da planilha: sem imposto, Ident Tributo 0, Base 0 e Alíquota 0. Se a planilha tiver a coluna NAT OPER preenchida num item da 542, o valor precisa bater com a chave; diferente é erro ao carregar.
-- **CHAVE NF** como texto (44 dígitos). Linhas seguidas com a mesma chave são itens da mesma nota. Nos itens seguintes da nota, a chave e o cabeçalho (FILIAL FISCAL, DATA EMISSÃO, VALOR TOTAL DOCUMENTO, FRETE) podem ficar em branco; chave em branco com o cabeçalho preenchido é erro.
-- Valores com ponto decimal (ex.: `47407.28`).
-- BASE CALC. ICMS e ALIQUOTA iguais a 0 = **sem imposto** (Rateio com Ident Tributo 0, Base 0 e Alíquota 0). As duas diferentes de 0 = **com imposto** (Ident Tributo 1, Base Cálculo = BASE CALC. ICMS e Alíquota = ALIQUOTA). Só uma delas zerada é erro na planilha.
-- ALIQUOTA como número (12), não como porcentagem do Excel (12% chega como 0,12 e é recusado).
+**Verde = concluída.** O robô pinta as linhas da nota de verde no Excel (no app também). Com a planilha aberta no Excel, ao Iniciar ele salva e fecha **só ela**; se ela tinha mudanças nos dados, recarrega e pede para você conferir e iniciar de novo. Se não puder fechar (ex.: célula em edição), pinta na janela do Excel e você salva; se nem isso, avisa nos detalhes e segue. Nota lançada com ponto na Série fica num **verde mais escuro**, com comentário na célula da CHAVE NF. Mensagens da pintura também vão para o log.
+- Ao carregar, notas **já verdes** (por você ou pelo robô, qualquer tom, em todas as células preenchidas) contam como feitas e ele começa pela primeira não verde. Nota com só parte das linhas verdes é digitada inteira, com aviso.
+- **NFs a lançar** (ao lado de "Passo a passo"): com 10, lança as 10 primeiras pendentes e o próximo Iniciar segue com as 10 seguintes. Vazio ou 0 = todas.
+- **Conferir com os logs** (rodapé da aba): compara a planilha com os logs dos últimos 30 dias (guardam só os 6 últimos dígitos da chave) e mostra: integradas e não verdes (oferece pintar), verdes sem confirmação (confira no SRP), verdes ausentes dos logs e as com ponto na Série. No Iniciar, notas já integradas segundo os logs e não verdes: pergunta se pinta e pula (relançar duplicaria o documento).
+- **Tempo previsto** após importar sem erros (e durante a execução, com horário de término): ~40 s por nota + ~25 s por item extra antes da 1ª nota; depois, o ritmo medido. Tempo pausado não conta.
+- Sem planilha: área de arrastar, **Escolher planilha**, **Abrir a última** e as colunas exigidas. O cartão mostra concluídas e pendentes. Detalhes ficam recolhidos (**Detalhes ▸**) e abrem sozinhos com erro ou aviso. Durante o preenchimento: só **Parar** e, na pausa, **Continuar**.
 
-Para usar, deixe o cursor no campo **Chave Acesso NF-e** e clique em Iniciar. O robô:
-1. preenche o cabeçalho e a grade (se o SRP disser "Documento Recebimento … já existe, foi integrado no sistema em …", dá OK, apaga a Chave e põe um ponto no fim da Série, ex.: `1` vira `1.`; se o SRP recusar de novo, pausa);
-2. preenche a linha ICMS TERCEIROS do Rateio e clica em Tributos OK;
-3. integra e trata as janelas do SRP: despesa acessória de até 0,05 (clica em Ajustar; acima disso, pausa para você conferir), frete alterado para CIF, Resumo dos Tributos, Frete LTCC e Integrado com Sucesso;
-4. volta para a Chave da próxima nota.
-
-Cada nota concluída fica **verde no app e na planilha**: o robô pinta de verde as linhas dela no Excel. Com a planilha fechada, ele grava o arquivo. Ao clicar em Iniciar, se a planilha carregada estiver aberta no Excel, o robô salva e fecha **só ela** (as outras planilhas e o Excel continuam abertos). Se ela tinha alterações que mudam os dados, o robô recarrega e pede para você conferir e clicar em Iniciar de novo. Se não der para fechar (ex.: célula em edição), ele avisa e pinta na janela do Excel; aí você salva. Se não conseguir pintar, só avisa nos detalhes e segue.
-
-Nota lançada com ponto na Série (o SRP disse que o documento já existia) fica num **verde mais escuro**, com um comentário na célula da CHAVE NF explicando. As mensagens da pintura também vão para o log da execução.
-
-Sem planilha carregada, as duas abas mostram a área de arrastar, o botão **Escolher planilha**, o atalho **Abrir a última** (a última planilha usada nesta aba) e as colunas que a planilha precisa ter. O cartão da planilha mostra quantas notas estão concluídas e pendentes. Nota lançada com ponto na Série aparece num verde mais escuro (passe o mouse para ver o motivo). Os detalhes ficam recolhidos (**Detalhes ▸** no rodapé) e abrem sozinhos quando há erro ou aviso. Durante o preenchimento só aparecem **Parar** e, na pausa, **Continuar**.
-
-**Conferir com os logs** (link no rodapé da aba): compara a planilha carregada com os logs dos últimos 30 dias e mostra nos detalhes: notas que o robô integrou ("Integrado com Sucesso") e não estão verdes, e oferece pintá-las; notas verdes sem essa confirmação (terminadas à mão ou sem a mensagem: confira no SRP); notas verdes que não aparecem nos logs; e as lançadas com ponto na Série. Os logs guardam só os 6 últimos dígitos da chave. No **Iniciar**, se alguma nota do lote já foi integrada segundo os logs e não está verde, o robô pergunta se pinta e pula essas (lançar de novo duplicaria o documento com ponto na Série).
-
-Ao carregar a planilha, as notas que **já estão verdes** (pintadas pelo robô ou por você, em qualquer tom de verde, em todas as células preenchidas da linha) contam como feitas: aparecem como Concluídas e o robô começa pela primeira nota que não está verde ("Continuar da linha N"). Nota com só parte das linhas em verde é digitada inteira, com um aviso.
-
-Para lançar só algumas notas, preencha **NFs a lançar** (ao lado de "Passo a passo"; só números) antes de clicar em Iniciar: com 10, o robô lança as 10 primeiras notas pendentes e para. No Iniciar seguinte ele continua pelas próximas 10. Em branco (ou 0), lança todas. O tempo previsto mostra quantas serão lançadas ("para 10 de 37 nota(s)").
-
-Depois de importar a planilha (sem erros), abaixo da barra de progresso aparece o **tempo previsto** para as notas pendentes e o horário de término se iniciar agora. Enquanto roda, no mesmo lugar aparece a nota atual, o tempo decorrido e o **tempo previsto para a conclusão** (com o horário de término). Antes da 1ª nota a previsão usa ~40 s por nota e ~25 s por item a mais; depois, o ritmo medido. O tempo pausado não entra na conta. A confirmação do Iniciar também mostra o tempo previsto.
-
-Se algo não confere, ele pausa: termine a nota à mão no SRP, deixe o cursor na Chave Acesso NF-e da próxima nota e clique em **Continuar**.
+Se algo não confere, pausa: termine a nota à mão no SRP, deixe o cursor na Chave da próxima e clique em **Continuar**.
 
 ## Arquivos ao lado do exe
-
 | Arquivo | O que é |
 |---|---|
-| `logs\` | um registro por execução. Depois de 2 dias, os registros vão para um `.zip` por mês (`arquivo-AAAAMM.zip`), que ocupa ~10% do espaço; tudo com mais de 30 dias é apagado sozinho. Os prints de `logs\telas` ficam 7 dias |
+| `logs\` | um registro por execução; após 2 dias vão para `arquivo-AAAAMM.zip`; mais de 30 dias são apagados; prints de `logs\telas` ficam 7 dias |
 | `aprendizado.json` | contas corretas informadas pelo SRP (item + C/Custo) |
 | `progresso.json` | linhas concluídas da última planilha |
-| `posicoes_0236.json` | posições do Rateio da SNAC0236 na tela (para a primeira nota também ser rápida) |
-| `config.json` | preferências (tema claro/escuro) |
+| `posicoes_0236.json` | posições do Rateio da SNAC0236 na tela |
+| `config.json` | preferências (tema) |
 
 ## Para quem mexe no código
-
-Python 3.14 no Windows. Na pasta do projeto:
+Python 3.14 no Windows, na pasta do projeto:
 
 ```powershell
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe src\gui.py                            # abre a janela
-.\.venv\Scripts\python.exe -m unittest discover -s tests         # testes (SRP simulado, sem Citrix)
-.\build.ps1                                                      # gera build\dist\RPA-SRP.exe e release\RPA-SRP-vX.Y.Z.zip
+.\.venv\Scripts\python.exe src\gui.py                       # janela
+.\.venv\Scripts\python.exe -m unittest discover -s tests    # testes (SRP simulado)
+.\build.ps1                                                 # build\dist\RPA-SRP.exe + release\RPA-SRP-vX.Y.Z.zip
 ```
 
-Detalhes de funcionamento e regras estão nos `CLAUDE.md` de cada pasta. O Tesseract em `vendor\tesseract` vem do instalador UB-Mannheim 5.4.0, enxugado (ver `vendor/CLAUDE.md`).
+Regras e funcionamento: `CLAUDE.md` de cada pasta. Tesseract em `vendor\tesseract` (UB-Mannheim 5.4.0, enxugado; ver `vendor/CLAUDE.md`).
