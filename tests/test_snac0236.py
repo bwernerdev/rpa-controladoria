@@ -79,6 +79,10 @@ def acessoria(geral, documento, diferenca):
               ["Botão", "<Ajustar>", "para", "integrar", "este", "valor"], ["Botão", "<Cancelar>", "para", "usuário", "conferi"]]
     palavras = [(p, 300 + 65 * i, 450 + 25 * n, 60, 12) for n, linha in enumerate(linhas) for i, p in enumerate(linha)]
     return palavras + [("Cancelar", 600, 700, 70, 12), ("Ajustar", *BOTAO_AJUSTAR[:2], 60, 12)]
+# janela "Forms" FRM-40815 por cima da grade de tributos ao entrar no Rateio (26/11/2026)
+FRM = [(p, 300 + 130 * i, 520, 120, 12) for i, p in enumerate(
+    ["FRM-40815:", "Variable", "GLOBAL.CD_EMPRESA_1", "does", "not", "exist."])] + [("OK", 1150, 560, 20, 12)]
+BOTAO_OK_FRM = (1150, 560, 1170, 572)
 BARRA = (250, 400, 1300, 430)  # barra de titulo azul das janelas pos-Integrar
 AREA = (230, 395, 1320, 900)  # snac0236.area_dialogo da BARRA na tela 1600x900
 LINHAS_TRIBUTO = {"199": 600, "198": 630, "114": 660}  # y de cada linha da grade de tributos
@@ -143,6 +147,8 @@ class SRP0236:
         # tras; OK (ou Enter) fecha. `lov_desce`: o OK ja leva ao Qtd.Fiscal; `sem_ok_nat`: o OCR nao le o OK
         self.lov_natoper, self.natureza, self.lov_desce, self.sem_ok_nat = False, False, False, False
         self.oks_natureza, self.enters_natureza, self.lov_vista = 0, 0, set()
+        # janela FRM-40815 nas `frm_rateio` primeiras entradas no Rateio (foco ja no Ident); `sem_ok_frm`: OCR nao le o OK
+        self.frm_rateio, self.frm, self.sem_ok_frm, self.oks_frm, self.enters_frm = 0, False, False, 0, 0
         self.rateio_sem_barra = False  # a barra da janela Rateios nao e achada (o robo le a tela mesmo assim, mais tarde)
 
     def campos(self):
@@ -197,18 +203,20 @@ class SRP0236:
         return Image.new("RGB", (1600, 900), ((self.indice * 97 + self.cor_extra) % 256,) * 3)
 
     def tela(self, _janela=None, _fixos=(), _imagem=None):
-        return self.caixa(), self.alerta
+        return self.caixa(), self.alerta or self.frm
 
     def janela_por_cima(self):
         if self.escondida:
             return False
-        return (self.janela_extra or self.natureza or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete or self.resumo
+        return (self.janela_extra or self.frm or self.natureza or self.ja_existe or self.referencia or self.acessoria or self.aviso_frete
+                or self.resumo
                 or self.ltcc or self.sucesso)
 
     def palavras_janelas(self):
         if self.escondida:
             return []
-        return ((self.janela_extra or []) + (JA_EXISTE if self.ja_existe else [])
+        return ((self.janela_extra or []) + ([p for p in FRM if not (self.sem_ok_frm and p[0] == "OK")] if self.frm else [])
+                + (JA_EXISTE if self.ja_existe else [])
                 + ([p for p in NATUREZA if not (self.sem_ok_nat and p[0] == "OK")] if self.natureza else [])
                 + ([p for p in REFERENCIA if not (self.sem_ok_ref and p[0] == "OK")] if self.referencia else [])
                 + (acessoria(*self.acessoria) if self.acessoria else []) + (AVISO if self.aviso_frete else [])
@@ -239,6 +247,9 @@ class SRP0236:
                 self.enters_escondida += 1
             nome = self.onde()[0]
             base = nome.rstrip("0123456789") if nome else None
+            if texto == "{ENTER}" and self.frm:  # Enter = OK da FRM-40815: o foco fica no Ident
+                self.frm, self.enters_frm = False, self.enters_frm + 1
+                return
             if texto == "{ENTER}" and self.natureza:  # Enter na lista = OK na linha selecionada
                 self.natureza, self.enters_natureza = False, self.enters_natureza + 1
                 self.indice += 1 if self.lov_desce else 0
@@ -302,6 +313,8 @@ class SRP0236:
                     return
                 self.indice += 1
                 self.selecionado = True
+                if self.frm_rateio and (self.onde()[0] or "").startswith("t1") and not (base or "").startswith("t1"):
+                    self.frm, self.frm_rateio = True, self.frm_rateio - 1
                 cab = self.campos()[0]
                 if self.ref_no_caminho and self.indice == cab.index("frete") + self.ref_no_caminho:
                     self.referencia = True
@@ -328,6 +341,9 @@ class SRP0236:
             chave = CAIXAS["chave"]
             if chave[0] <= x <= chave[2] and chave[1] <= y <= chave[3]:  # clique no campo Chave Acesso NF-e
                 self.indice, self.cliques_chave = 0, self.cliques_chave + 1
+                return
+            if self.frm and BOTAO_OK_FRM[0] <= x <= BOTAO_OK_FRM[2] and BOTAO_OK_FRM[1] <= y <= BOTAO_OK_FRM[3]:
+                self.frm, self.oks_frm = False, self.oks_frm + 1
                 return
             if self.natureza and BOTAO_OK_NAT[0] <= x <= BOTAO_OK_NAT[2] and BOTAO_OK_NAT[1] <= y <= BOTAO_OK_NAT[3]:
                 self.natureza, self.oks_natureza = False, self.oks_natureza + 1
@@ -858,6 +874,30 @@ class NatOper(unittest.TestCase):
         tributos = {n: v for n, v in srp.integradas[0].items() if n.startswith("t")}
         self.assertFalse([n for n in tributos if n.startswith("t108")], tributos)
         self.assertEqual(tributos["t101ident0"], "1")
+
+    def test_rateio_com_a_janela_frm_40815(self):
+        """26/11/2026: as vezes a janela "FRM-40815: Variable GLOBAL.CD_EMPRESA_1 does not exist." abre por cima da grade
+        de tributos, foco ja no Ident. O robo clica no OK e zera a linha 101 (e a DIF. ALIQUOTAS) como sempre."""
+        for linhas, palavras in (({"101": 600}, PALAVRAS_542), ({"108": 600, "101": 630}, PALAVRAS_DIF)):
+            with self.subTest(linhas=list(linhas)):
+                srp = self.srp_542()
+                srp.linhas_tributo, srp.frm_rateio = linhas, 1
+                srp.iniciais.update({"t108ident": "2", "t108base": "300.00", "t108aliquota": "5.0000"})
+                with ambiente(srp, palavras=palavras) as pasta:
+                    codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+                    log = core.sem_acentos(next(pasta.glob("*snac0236.log")).read_text(encoding="utf-8"))
+                self.assertEqual((codigo, len(srp.integradas), srp.oks_frm, srp.enters_frm), (0, 1, 1, 0), avisos)
+                self.assertEqual({n: v for n, v in srp.integradas[0].items() if n.startswith("t")},
+                                 {f"t{cod}{c}0": "0" for cod in linhas for c in ("ident", "base", "aliquota")})
+                self.assertIn("FRM-40815 no Rateio: fechei (clique", log)
+
+    def test_rateio_com_a_janela_frm_40815_sem_o_ok_lido(self):
+        srp = self.srp_542()
+        srp.frm_rateio, srp.sem_ok_frm = 1, True
+        with ambiente(srp, palavras=PALAVRAS_542):
+            codigo, avisos, _ = rodar(srp, [nota(self.SC, [item("900135", oper="542")])])
+        self.assertEqual((codigo, srp.oks_frm, srp.enters_frm), (0, 0, 1), avisos)
+        self.assertEqual(srp.integradas[0]["t101ident0"], "0")
 
     def test_rateio_sem_a_barra_le_a_tela_mais_tarde(self):
         srp = self.srp_542()

@@ -892,6 +892,13 @@ def natureza_operacao(texto):
     return "natureza" in texto or "outras entradas" in texto or ("find" in texto and "descri" in texto and "cancel" in texto)
 
 
+def frm_empresa(texto):
+    """Janela "Forms" "FRM-40815: Variable GLOBAL.CD_EMPRESA_1 does not exist." (sino vermelho, [OK]) que as vezes abre
+    por cima da grade de tributos ao entrar no Rateio, com o foco ja no Ident Tributo. O robo da OK e segue (usuario,
+    26/11/2026)."""
+    return "40815" in texto or "cd_empresa" in texto or "cd empresa" in texto or ("global" in texto and "exist" in texto)
+
+
 def integrado_com_sucesso(texto):
     """Aviso final "Documento Integrado com Sucesso. [OK]": o robo da Enter."""
     return "integrado com sucesso" in texto
@@ -1478,7 +1485,47 @@ class Execucao0236:
         self.checar_parada()
         antes = core.capturar(self.janela) if foco is not None else None
         core.send_keys("{ENTER}", pause=0.03)
-        return self.depois_do_enter(campo, vez, foco, antes)
+        try:
+            novo = self.depois_do_enter(campo, vez, foco, antes)
+        except Travou:
+            if not self.fechar_frm():
+                raise
+            return ler_estado(self.janela, self.fixos)[0]
+        # a FRM-40815 abre com o foco ja no Ident Tributo (o foco andou, mas o aviso ficou na tela)
+        if ler_estado(self.janela, self.fixos)[1] and self.fechar_frm():
+            return ler_estado(self.janela, self.fixos)[0]
+        return novo
+
+    def fechar_frm(self):
+        """Janela "FRM-40815 ... GLOBAL.CD_EMPRESA_1 does not exist" por cima do Rateio: clica no OK (lido na janela da
+        barra azul mais baixa, para nao pegar o Tributos OK); sem o OK lido, Enter (o foco fica no OK). False = nao e ela."""
+        if not self.tesseract:
+            return False
+        imagem = core.capturar(self.janela)
+        barras = barras_dialogo(imagem)
+        if not barras:
+            return False
+        texto = normalizar(" ".join(p[0] for p in core.palavras_tela(imagem.crop(area_dialogo(imagem, barras)), self.tesseract)))
+        if not frm_empresa(texto):
+            return False
+        area = area_dialogo(imagem, [max(barras, key=lambda b: b[1])])
+        botao = botao_referencia(imagem, area, self.tesseract)
+        for tentativa in ("clique", "enter") if botao else ("enter",):
+            self.checar_parada()
+            if tentativa == "clique":
+                self.devagar("clicar em OK na janela FRM-40815")
+                ret = self.janela.rectangle()
+                clicar(ret.left + area[0] + (botao[0] + botao[2]) / 2, ret.top + area[1] + (botao[1] + botao[3]) / 2)
+            else:
+                self.devagar("Enter na janela FRM-40815 (OK)")
+                core.send_keys("{ENTER}", pause=0.03)
+            prazo = time.time() + self.render
+            while time.time() < prazo:
+                if not ler_estado(self.janela, self.fixos)[1]:
+                    self.registrar(f"  FRM-40815 no Rateio: fechei ({tentativa}; {texto[:60]!r})", mostrar=False)
+                    return True
+                time.sleep(0.05)
+        raise Travou("rateio", "a janela FRM-40815 (GLOBAL.CD_EMPRESA_1) não fechou depois do OK" + self.diagnostico("rateio"))
 
     def achar_botao(self, chave, antes):
         """Rele o botao (`chave` de localizar_rateio) na faixa em volta de onde estava; None se nao estiver a vista."""
