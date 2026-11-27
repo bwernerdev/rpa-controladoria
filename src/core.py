@@ -48,6 +48,7 @@ def ler_planilha(caminho):
     # por cima (06/11/2026: "salvar e fechar" no Iniciar travou o Excel numa janela de erro)
     livro = load_workbook(caminho, read_only=True, data_only=True)
     try:
+        livro.active.reset_dimensions()  # dimensao declarada errada (A1:XFD1048576) travava o app
         linhas = iter(list(livro.active.iter_rows(values_only=True)))
     finally:
         livro.close()
@@ -823,6 +824,7 @@ def formulas_sem_valor(caminho, nome_aba, valores):
     livro = load_workbook(caminho, read_only=True)
     try:
         faltam = []
+        livro[nome_aba].reset_dimensions()
         for n, linha in enumerate(livro[nome_aba].iter_rows(max_row=len(valores), values_only=True), start=1):
             lidos = valores[n - 1]
             faltam += [f"{get_column_letter(c + 1)}{n}" for c, formula in enumerate(linha)

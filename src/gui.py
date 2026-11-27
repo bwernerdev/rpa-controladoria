@@ -1363,12 +1363,18 @@ class App(RaizTk, Pagina):
             self._status("Tudo concluído", "ok")
 
     def _soltou(self, evento):
+        # O Explorer fica preso (e o arquivo travado) ate o app devolver o drop: ler a planilha e abrir dialogos aqui dentro
+        # congelava os dois. Devolve na hora e carrega depois.
         arquivos = self.tk.splitlist(evento.data)
-        if arquivos and self.aba == "snac0236":
-            self.p0236.carregar(arquivos[0])
-            return
         if arquivos:
-            self.carregar(arquivos[0])
+            self.after(150, self._carregar_solta, arquivos[0])
+        return evento.action
+
+    def _carregar_solta(self, caminho):
+        if self.aba == "snac0236":
+            self.p0236.carregar(caminho)
+        else:
+            self.carregar(caminho)
 
     def escolher(self):
         caminho = filedialog.askopenfilename(title="Planilha do SRP", filetypes=[("Excel", "*.xlsx *.xlsm"), ("Todos", "*.*")])
