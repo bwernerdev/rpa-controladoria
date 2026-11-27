@@ -41,6 +41,20 @@ def texto(valor):
     return str(valor).strip()
 
 
+def linhas_com_dados(linhas, vazia, tolerancia=500):
+    """Lista as `linhas` ate `tolerancia` linhas seguidas sem dado (`vazia(linha)` verdadeiro) e tira as vazias do fim.
+    Planilha com a folha toda formatada tem ~1 milhao de linhas so de formato: lida inteira o app congelava por minutos
+    com o arquivo aberto (travado no Explorer e no Excel)."""
+    saida, vazias = [], 0
+    for linha in linhas:
+        saida.append(linha)
+        vazias = vazias + 1 if vazia(linha) else 0
+        if vazias >= tolerancia:
+            break
+    del saida[len(saida) - vazias:]
+    return saida
+
+
 def ler_planilha(caminho):
     from openpyxl import load_workbook  # importado so ao ler a planilha (abre o app mais rapido)
 
@@ -49,7 +63,8 @@ def ler_planilha(caminho):
     livro = load_workbook(caminho, read_only=True, data_only=True)
     try:
         livro.active.reset_dimensions()  # dimensao declarada errada (A1:XFD1048576) travava o app
-        linhas = iter(list(livro.active.iter_rows(values_only=True)))
+        linhas = iter(linhas_com_dados(livro.active.iter_rows(values_only=True),
+                                       lambda linha: all(v is None or str(v).strip() == "" for v in linha)))
     finally:
         livro.close()
     cabecalho = next(linhas, None) or ()

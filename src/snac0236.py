@@ -166,7 +166,8 @@ def ler_planilha(caminho):
         aba = core.aba_de_dados(livro)
         nome_aba = aba.title
         aba.reset_dimensions()  # dimensao declarada errada (A1:XFD1048576) fazia iterar milhoes de celulas e travar o app
-        celulas = list(aba.iter_rows())  # nunca a aba "Lançados" (copia das integradas)
+        celulas = core.linhas_com_dados(aba.iter_rows(), lambda linha: all(
+            c.value is None or str(c.value).strip() == "" for c in linha))  # nunca a aba "Lançados" (copia das integradas)
         tema = core.cores_do_tema(getattr(livro, "loaded_theme", None))
     finally:
         livro.close()
